@@ -7,13 +7,17 @@ export function verifySafety(config: AppConfig): Record<string, unknown> {
     ...getConfigSafetyStatus(config),
     killSwitchActive: isKillSwitchActive(config),
     realTradingLockedByDefault: config.tokenRadarDryRun || config.tradingDisabled || !config.enableRealBuys || !config.enableRealSells,
+    autoPaperEnabled: config.enableAutoPaperTrading,
     enrichmentEnabled: config.enableSolanaSafetyEnrichment,
     quoteCheckEnabled: config.enableQuoteCheck,
+    paperTradingSimulatedOnly: true,
+    walletSigningConfigured: false,
     notes: [
       'Real trading must remain impossible by default.',
+      'Auto-paper trading is simulated only and never executes real buys.',
       'Solana safety enrichment is read-only and does not unlock trading.',
       'UNKNOWN safety-critical fields remain unsafe for autopilot.',
-      'Burner wallet and all caps must be configured before any future live enablement.',
+      'No wallet signing is configured in V1.3.',
       'This command does not unlock trading.'
     ]
   };

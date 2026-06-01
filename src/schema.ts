@@ -88,6 +88,23 @@ CREATE TABLE IF NOT EXISTS positions (
   FOREIGN KEY(token_id) REFERENCES tokens(id)
 );
 
+CREATE TABLE IF NOT EXISTS paper_performance_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  position_id INTEGER NOT NULL,
+  token_id INTEGER NOT NULL,
+  observed_at TEXT NOT NULL,
+  price_usd REAL,
+  unrealized_pnl_usd REAL,
+  unrealized_pnl_pct REAL,
+  liquidity_usd REAL,
+  market_cap_usd REAL,
+  volume_5m_usd REAL,
+  volume_1h_usd REAL,
+  raw_json TEXT NOT NULL,
+  FOREIGN KEY(position_id) REFERENCES positions(id),
+  FOREIGN KEY(token_id) REFERENCES tokens(id)
+);
+
 CREATE TABLE IF NOT EXISTS real_trade_attempts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   token_id INTEGER NOT NULL,

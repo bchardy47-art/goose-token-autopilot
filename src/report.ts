@@ -37,7 +37,7 @@ export function formatReport(report: ReportData, config: AppConfig): string {
   const topLines = report.topRanked.map((token, index) => `${index + 1}. ${token.symbol} ${token.verdict} total=${token.totalScore} price=${token.priceUsd ?? 'n/a'} liq=${token.liquidityUsd ?? 'n/a'}`);
   const openLines = report.openPositions.length === 0
     ? ['none']
-    : report.openPositions.map((position) => `${position.id}. ${position.symbol} qty=${position.quantity.toFixed(6)} entry=${position.entryPriceUsd} latest=${position.latestPriceUsd ?? 'n/a'} unrealized=${position.unrealizedPnlUsd ?? 'n/a'}`);
+    : report.openPositions.map((position) => `${position.id}. ${position.symbol} qty=${position.quantity.toFixed(6)} entry=${position.entryPriceUsd} latest=${position.latestPriceUsd ?? 'n/a'} unrealized=${position.unrealizedPnlUsd ?? 'n/a'} best=${position.bestGainPct ?? 'n/a'}%`);
 
   return [
     'Goose Token Autopilot V1 Report',

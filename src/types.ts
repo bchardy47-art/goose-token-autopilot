@@ -129,8 +129,12 @@ export interface PaperPositionView {
   quantity: number;
   amountUsd: number;
   realizedPnlUsd: number | null;
+  realizedPnlPct: number | null;
   latestPriceUsd: number | null;
   unrealizedPnlUsd: number | null;
+  unrealizedPnlPct: number | null;
+  bestGainPct: number | null;
+  worstDrawdownPct: number | null;
   notes: string | null;
 }
 
@@ -159,16 +163,60 @@ export interface ReportData {
   };
 }
 
+export interface AutoPaperDecision {
+  tokenId: number;
+  symbol: string;
+  mint: string;
+  action: 'BOUGHT' | 'SKIPPED';
+  reason: string;
+  proposalId?: number | null;
+  positionId?: number | null;
+}
+
+export interface PaperReviewDecision {
+  positionId: number;
+  symbol: string;
+  action: 'CLOSED' | 'HELD';
+  reason: string;
+  pnlPct: number;
+}
+
+export interface PaperPerformanceSnapshot {
+  id: number;
+  positionId: number;
+  tokenId: number;
+  observedAt: string;
+  priceUsd: number | null;
+  unrealizedPnlUsd: number | null;
+  unrealizedPnlPct: number | null;
+  liquidityUsd: number | null;
+  marketCapUsd: number | null;
+  volume5mUsd: number | null;
+  volume1hUsd: number | null;
+  rawJson: string;
+}
+
 export interface AppConfig {
   tokenRadarDryRun: boolean;
   tradingDisabled: boolean;
   enableRealBuys: boolean;
   enableRealSells: boolean;
+  enableAutoPaperTrading: boolean;
   maxBankrollUsd: number;
   maxBuyUsd: number;
   maxDailyLossUsd: number;
   maxOpenPositions: number;
   maxDailyBuys: number;
+  maxDailyPaperBuys: number;
+  maxAutoPaperBuyUsd: number;
+  paperMinTotalScore: number;
+  paperMinSafetyScore: number;
+  paperMinMomentumScore: number;
+  paperTakeProfitPct: number;
+  paperStopLossPct: number;
+  paperMaxHoldMinutes: number;
+  paperTrailingStopEnabled: boolean;
+  paperTrailingStopPct: number;
   maxSlippageBps: number;
   minLiquidityUsd: number;
   maxChasePct: number;

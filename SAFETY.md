@@ -1,178 +1,79 @@
 # SAFETY.md
 
-## Non-negotiable V1 rules
+## Non-negotiable rules
 
-- Use a **burner wallet only**.
-- Never use a main wallet.
-- Never store a seed phrase in the repo.
-- Never commit wallet files.
-- Keep dry-run on by default.
-- Keep trading disabled by default.
-- Keep real buys and real sells disabled by default.
-- Keep full safety logs.
-- Redact secrets from logs.
+- No main wallet
+- No private keys in repo
+- No wallet signing
+- No browser automation
+- Dry-run stays on by default
+- Trading stays disabled by default
+- Real buys and sells stay disabled by default
+- Auto-paper is simulated only
 
-## Burner wallet requirement
+## Auto-paper does not trade
 
-Any future live mode must require a dedicated burner wallet with a capped bankroll.
+`token:auto-paper` opens **paper positions only**.
+It does not call live execution.
+It does not sign anything.
+It does not move funds.
 
-V1 blocks live execution when burner wallet config is missing.
+## Real trading remains locked
 
-## No main wallet
-
-`MAIN_WALLET_PRESENT=true` is treated as unsafe and blocks execution.
-
-The intent is explicit: if there is any indication a main wallet is involved, Goose must refuse to trade.
-
-## Dry-run default
-
-Default config:
+These remain the default:
 
 - `TOKEN_RADAR_DRY_RUN=true`
 - `TRADING_DISABLED=true`
 - `ENABLE_REAL_BUYS=false`
 - `ENABLE_REAL_SELLS=false`
-- `TOKEN_SOURCE=fixture`
-- `ENABLE_SOLANA_SAFETY_ENRICHMENT=false`
-- `ENABLE_QUOTE_CHECK=false`
 
-These settings make live trading impossible by default.
+The real execution layer is still guarded and blocked.
 
-## Live read-only scanning is not live trading
+## Read-only live data is not live trading
 
-You may set:
+Using:
 
 - `TOKEN_SOURCE=dexscreener`
-- `ENABLE_SOLANA_SAFETY_ENRICHMENT=true`
-- `SOLANA_RPC_URL=...`
-- `ENABLE_QUOTE_CHECK=true`
+- optional Solana RPC enrichment
+- optional quote checks
 
-This only enables read-only discovery and read-only safety enrichment through public HTTP/RPC APIs.
+still does not enable real trading.
+It only improves research inputs for paper evaluation.
 
-It does **not** enable:
+## Unknown remains unsafe
 
-- wallet signing
-- real buys
-- real sells
-- swap execution
+If a safety-critical field cannot be proven, it must remain `UNKNOWN` and stay unsafe for autopilot.
+That includes authority, holder concentration, and sellability checks.
 
-## Safety enrichment
+## Paper results are not proof
 
-The enrichment layer is allowed to inspect live tokens more honestly using read-only methods.
+Paper performance can help evaluate whether a strategy is worth deeper study.
+It does **not** prove that future live trading would succeed.
 
-Current V1 enrichment can attempt:
+Reasons include:
 
-- mint authority status
-- freeze authority status
-- holder concentration heuristic
-- metadata status placeholder
-- sell quote availability heuristic
-- estimated slippage heuristic
+- live data may be incomplete or wrong
+- slippage may differ in reality
+- quotes may disappear
+- token behavior may change instantly
+- paper fills are not real fills
 
-Enrichment is useful, but it is not a guarantee that a token is safe or sellable.
+## Before any future live trading
 
-## Kill switch
+Still required:
 
-`npm run token:kill` writes a local kill-switch file.
+1. audited quote/build/execute path
+2. burner-wallet-only live signing flow
+3. reliable sellability checks
+4. stronger holder and creator analysis
+5. transaction simulation and failure controls
+6. explicit live safety review
 
-When active, all future real-trade attempts are blocked.
+## Current V1.3 safety status
 
-## Hard caps
-
-V1 enforces or checks these caps:
-
-- bankroll cap
-- per-buy cap
-- daily loss cap
-- open-position cap
-- daily buy cap
-- slippage cap
-
-## Hard red flags
-
-Any hard red flag forces `AVOID`:
-
-- freeze authority active
-- freeze authority unknown
-- mint authority active
-- mint authority unknown
-- low liquidity
-- sell quote unavailable
-- high slippage
-- stale data
-- missing metadata
-- over-chased token
-- suspicious holder concentration placeholder
-- suspicious creator placeholder
-- missing price/liquidity data
-
-## Unknowns are unsafe
-
-In V1, unknown values are not treated as safe enough for autopilot.
-
-That includes:
-
-- unknown authority status
-- unknown sellability
-- unknown holder concentration
-- unknown metadata status when a stronger check is required later
-
-This matters especially for live read-only sources. If live market data or enrichment cannot prove these fields, Goose must keep them as `UNKNOWN`, and autopilot must remain blocked.
-
-## Enrichment failure handling
-
-If RPC or quote checks fail:
-
-- Goose must not guess
-- Goose must not silently trust partial data
-- Goose should log a safety event
-- Goose should keep unresolved fields as `UNKNOWN`
-
-That conservative behavior is intentional.
-
-## Risks
-
-This project deals with highly volatile tokens and incomplete information.
-
-Major risks include:
-
-- rapid price collapse
-- illiquidity
-- honeypots or unsellable tokens
-- stale or incomplete market data
-- authority abuse
-- concentration risk
-- unsafe wallet handling if future live execution is added carelessly
-
-## Before enabling real buys in any future version
-
-You must verify all of the following:
-
-1. burner wallet is isolated
-2. bankroll cap is set and enforced
-3. max buy cap is set and enforced
-4. daily loss cap is set and enforced
-5. daily buy cap is set and enforced
-6. open-position cap is set and enforced
-7. sellability checks are real and reliable
-8. slippage checks are real and reliable
-9. holder concentration checks use real data
-10. creator checks use real data
-11. transaction building is audited
-12. signing path cannot leak private key material
-13. logs do not expose secrets
-14. kill switch works under failure conditions
-15. operator explicitly accepts live-risk review
-
-## Current V1 status
-
-- fixture scanning works
-- live read-only scanning works
-- optional read-only Solana safety enrichment works
-- paper trading works
-- reporting works
-- proposals work
-- guarded real execution interface exists
+- auto-paper works in simulation only
+- read-only live discovery works
+- optional read-only enrichment works
 - real trading remains locked
 
-That final point is intentional.
+That last point is intentional.

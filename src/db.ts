@@ -2,7 +2,32 @@ import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { schemaSql } from './schema';
-import type { AppConfig, PaperPositionView, PositionMode, PositionStatus, ProposalStatus, SafetySeverity, TokenCandidate, TokenScoreResult, TradeSide, Verdict } from './types';
+import type {
+  AppConfig,
+  PaperPerformanceSnapshot,
+  PaperPositionView,
+  PositionMode,
+  PositionStatus,
+  ProposalStatus,
+  SafetySeverity,
+  TokenCandidate,
+  TokenScoreResult,
+  TradeSide,
+  Verdict
+} from './types';
+
+function toToday(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function parseJsonArray(value: string): string[] {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 
 export class AppDb {
   public readonly sqlite: Database.Database;
@@ -42,8 +67,8 @@ export class AppDb {
 
   upsertToken(candidate: TokenCandidate): number {
     const existing = this.sqlite
-      .prepare('SELECT id, first_seen_at FROM tokens WHERE chain = ? AND mint = ?')
-      .get(candidate.chain, candidate.mint) as { id: number; first_seen_at: string } | undefined;
+      .prepare('SELECT id FROM tokens WHERE chain = ? AND mint = ?')
+      .get(candidate.chain, candidate.mint) as { id: number } | undefined;
 
     if (existing) {
       this.sqlite
@@ -155,6 +180,27 @@ export class AppDb {
       .run('CLOSED', new Date().toISOString(), exitPriceUsd, realizedPnlUsd, notes, positionId);
   }
 
+  createPaperPerformanceSnapshot(
+    positionId: number,
+    tokenId: number,
+    observedAt: string,
+    priceUsd: number | null,
+    unrealizedPnlUsd: number | null,
+    unrealizedPnlPct: number | null,
+    liquidityUsd: number | null,
+    marketCapUsd: number | null,
+    volume5mUsd: number | null,
+    volume1hUsd: number | null,
+    raw: Record<string, unknown>
+  ): number {
+    const result = this.sqlite
+      .prepare(
+        'INSERT INTO paper_performance_snapshots (position_id, token_id, observed_at, price_usd, unrealized_pnl_usd, unrealized_pnl_pct, liquidity_usd, market_cap_usd, volume_5m_usd, volume_1h_usd, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      )
+      .run(positionId, tokenId, observedAt, priceUsd, unrealizedPnlUsd, unrealizedPnlPct, liquidityUsd, marketCapUsd, volume5mUsd, volume1hUsd, JSON.stringify(raw));
+    return Number(result.lastInsertRowid);
+  }
+
   recordRealTradeAttempt(tokenId: number, proposalId: number | null, side: TradeSide, amountUsd: number, blocked: boolean, blockReason: string, raw: Record<string, unknown>, txSignature: string | null = null): number {
     const result = this.sqlite
       .prepare(
@@ -184,8 +230,8 @@ export class AppDb {
       socialScore: row.social_score,
       totalScore: row.total_score,
       verdict: row.verdict,
-      reasons: JSON.parse(row.reasons_json),
-      redFlags: JSON.parse(row.red_flags_json),
+      reasons: parseJsonArray(row.reasons_json),
+      redFlags: parseJsonArray(row.red_flags_json),
       autopilotBlocked: row.verdict !== 'AUTOPILOT_ELIGIBLE',
       autopilotBlockers: []
     };
@@ -195,7 +241,7 @@ export class AppDb {
     return (this.sqlite.prepare('SELECT id FROM tokens ORDER BY id').all() as Array<{ id: number }>).map((row) => row.id);
   }
 
-  getTokenRecord(tokenId: number): { id: number; chain: string; mint: string; symbol: string; name: string; source: string; source_url: string | null; first_seen_at: string; last_seen_at: string; created_at: string } | null {
+  getTokenRecord(tokenId: number): any | null {
     return (this.sqlite.prepare('SELECT * FROM tokens WHERE id = ?').get(tokenId) as any) ?? null;
   }
 
@@ -220,8 +266,57 @@ export class AppDb {
       .all(limit);
   }
 
+  listLatestTokenStates(limit = 100): Array<{
+    tokenId: number;
+    symbol: string;
+    mint: string;
+    score: TokenScoreResult | null;
+    snapshot: TokenCandidate | null;
+  }> {
+    const rows = this.sqlite
+      .prepare(
+        `SELECT t.id as token_id, t.symbol, t.mint,
+                s.id as score_id, s.scored_at, s.momentum_score, s.safety_score, s.social_score, s.total_score, s.verdict, s.reasons_json, s.red_flags_json,
+                snap.raw_json as snapshot_raw
+         FROM tokens t
+         LEFT JOIN token_scores s ON s.id = (
+           SELECT id FROM token_scores WHERE token_id = t.id ORDER BY scored_at DESC, id DESC LIMIT 1
+         )
+         LEFT JOIN token_snapshots snap ON snap.id = (
+           SELECT id FROM token_snapshots WHERE token_id = t.id ORDER BY observed_at DESC, id DESC LIMIT 1
+         )
+         ORDER BY COALESCE(s.total_score, 0) DESC, t.last_seen_at DESC
+         LIMIT ?`
+      )
+      .all(limit) as any[];
+
+    return rows.map((row) => ({
+      tokenId: row.token_id,
+      symbol: row.symbol,
+      mint: row.mint,
+      score: row.score_id ? {
+        tokenId: row.token_id,
+        scoredAt: row.scored_at,
+        momentumScore: row.momentum_score,
+        safetyScore: row.safety_score,
+        socialScore: row.social_score,
+        totalScore: row.total_score,
+        verdict: row.verdict,
+        reasons: parseJsonArray(row.reasons_json),
+        redFlags: parseJsonArray(row.red_flags_json),
+        autopilotBlocked: row.verdict !== 'AUTOPILOT_ELIGIBLE',
+        autopilotBlockers: []
+      } : null,
+      snapshot: row.snapshot_raw ? JSON.parse(row.snapshot_raw) as TokenCandidate : null
+    }));
+  }
+
   getProposal(id: number): any | null {
     return (this.sqlite.prepare('SELECT * FROM trade_proposals WHERE id = ?').get(id) as any) ?? null;
+  }
+
+  getPosition(positionId: number): any | null {
+    return (this.sqlite.prepare('SELECT * FROM positions WHERE id = ?').get(positionId) as any) ?? null;
   }
 
   getLatestOpenPositionByToken(tokenId: number, mode: PositionMode = 'PAPER'): any | null {
@@ -237,19 +332,24 @@ export class AppDb {
     return row.count;
   }
 
-  getDailyPaperBuyCount(): number {
-    const today = new Date().toISOString().slice(0, 10);
+  getDailyPaperBuyCount(date = toToday()): number {
     const row = this.sqlite
       .prepare("SELECT COUNT(*) as count FROM paper_trades WHERE side = 'BUY' AND substr(created_at, 1, 10) = ?")
-      .get(today) as { count: number };
+      .get(date) as { count: number };
     return row.count;
   }
 
-  getDailyRealBuyCount(): number {
-    const today = new Date().toISOString().slice(0, 10);
+  getDailyPaperSellCount(date = toToday()): number {
+    const row = this.sqlite
+      .prepare("SELECT COUNT(*) as count FROM paper_trades WHERE side = 'SELL' AND substr(created_at, 1, 10) = ?")
+      .get(date) as { count: number };
+    return row.count;
+  }
+
+  getDailyRealBuyCount(date = toToday()): number {
     const row = this.sqlite
       .prepare("SELECT COUNT(*) as count FROM real_trade_attempts WHERE side = 'BUY' AND blocked = 0 AND substr(attempted_at, 1, 10) = ?")
-      .get(today) as { count: number };
+      .get(date) as { count: number };
     return row.count;
   }
 
@@ -260,12 +360,31 @@ export class AppDb {
     return row.total;
   }
 
-  getClosedRealizedLossToday(mode: PositionMode = 'PAPER'): number {
-    const today = new Date().toISOString().slice(0, 10);
+  getClosedRealizedLossToday(mode: PositionMode = 'PAPER', date = toToday()): number {
     const row = this.sqlite
       .prepare('SELECT COALESCE(SUM(CASE WHEN realized_pnl_usd < 0 THEN ABS(realized_pnl_usd) ELSE 0 END), 0) as total FROM positions WHERE mode = ? AND status = ? AND substr(closed_at, 1, 10) = ?')
-      .get(mode, 'CLOSED', today) as { total: number };
+      .get(mode, 'CLOSED', date) as { total: number };
     return row.total;
+  }
+
+  getPerformanceSnapshots(positionId: number): PaperPerformanceSnapshot[] {
+    return this.sqlite
+      .prepare('SELECT * FROM paper_performance_snapshots WHERE position_id = ? ORDER BY observed_at ASC, id ASC')
+      .all(positionId)
+      .map((row: any) => ({
+        id: row.id,
+        positionId: row.position_id,
+        tokenId: row.token_id,
+        observedAt: row.observed_at,
+        priceUsd: row.price_usd,
+        unrealizedPnlUsd: row.unrealized_pnl_usd,
+        unrealizedPnlPct: row.unrealized_pnl_pct,
+        liquidityUsd: row.liquidity_usd,
+        marketCapUsd: row.market_cap_usd,
+        volume5mUsd: row.volume_5m_usd,
+        volume1hUsd: row.volume_1h_usd,
+        rawJson: row.raw_json
+      }));
   }
 
   listPositions(mode: PositionMode = 'PAPER'): PaperPositionView[] {
@@ -283,9 +402,23 @@ export class AppDb {
       .all(mode) as any[];
 
     return rows.map((row) => {
-      const unrealized = row.status === 'OPEN' && row.latest_price_usd !== null
-        ? row.quantity * (row.latest_price_usd - row.entry_price_usd)
+      const latestPriceUsd = row.latest_price_usd as number | null;
+      const unrealizedPnlUsd = row.status === 'OPEN' && latestPriceUsd !== null
+        ? row.quantity * (latestPriceUsd - row.entry_price_usd)
         : null;
+      const unrealizedPnlPct = unrealizedPnlUsd !== null && row.amount_usd > 0
+        ? (unrealizedPnlUsd / row.amount_usd) * 100
+        : null;
+      const realizedPnlPct = row.realized_pnl_usd !== null && row.amount_usd > 0
+        ? (row.realized_pnl_usd / row.amount_usd) * 100
+        : null;
+      const snapshots = this.getPerformanceSnapshots(row.id);
+      const pctSeries = snapshots
+        .map((snapshot) => snapshot.unrealizedPnlPct)
+        .filter((value): value is number => value !== null);
+      if (unrealizedPnlPct !== null) pctSeries.push(unrealizedPnlPct);
+      if (realizedPnlPct !== null) pctSeries.push(realizedPnlPct);
+
       return {
         id: row.id,
         tokenId: row.token_id,
@@ -300,8 +433,12 @@ export class AppDb {
         quantity: row.quantity,
         amountUsd: row.amount_usd,
         realizedPnlUsd: row.realized_pnl_usd,
-        latestPriceUsd: row.latest_price_usd,
-        unrealizedPnlUsd: unrealized,
+        realizedPnlPct: realizedPnlPct !== null ? Number(realizedPnlPct.toFixed(4)) : null,
+        latestPriceUsd,
+        unrealizedPnlUsd: unrealizedPnlUsd !== null ? Number(unrealizedPnlUsd.toFixed(6)) : null,
+        unrealizedPnlPct: unrealizedPnlPct !== null ? Number(unrealizedPnlPct.toFixed(4)) : null,
+        bestGainPct: pctSeries.length > 0 ? Number(Math.max(...pctSeries).toFixed(4)) : null,
+        worstDrawdownPct: pctSeries.length > 0 ? Number(Math.min(...pctSeries).toFixed(4)) : null,
         notes: row.notes
       } satisfies PaperPositionView;
     });
@@ -336,6 +473,18 @@ export class AppDb {
     };
   }
 
+  getVerdictCountsForDate(date = toToday()): Record<Verdict, number> {
+    const rows = this.sqlite
+      .prepare('SELECT verdict, COUNT(*) as count FROM token_scores WHERE substr(scored_at, 1, 10) = ? GROUP BY verdict')
+      .all(date) as Array<{ verdict: Verdict; count: number }>;
+    return {
+      AVOID: rows.find((row) => row.verdict === 'AVOID')?.count ?? 0,
+      WATCH: rows.find((row) => row.verdict === 'WATCH')?.count ?? 0,
+      PAPER_BUY: rows.find((row) => row.verdict === 'PAPER_BUY')?.count ?? 0,
+      AUTOPILOT_ELIGIBLE: rows.find((row) => row.verdict === 'AUTOPILOT_ELIGIBLE')?.count ?? 0
+    };
+  }
+
   getClosedPaperPnl(): number {
     const row = this.sqlite
       .prepare("SELECT COALESCE(SUM(realized_pnl_usd), 0) as total FROM positions WHERE mode = 'PAPER' AND status = 'CLOSED'")
@@ -351,6 +500,25 @@ export class AppDb {
   getSafetyEventSummary(): Record<string, number> {
     const rows = this.sqlite.prepare('SELECT event_type, COUNT(*) as count FROM safety_events GROUP BY event_type').all() as Array<{ event_type: string; count: number }>;
     return Object.fromEntries(rows.map((row) => [row.event_type, row.count]));
+  }
+
+  listSafetyEvents(date = toToday()): Array<{ eventType: string; message: string; rawJson: string; createdAt: string }> {
+    return this.sqlite
+      .prepare('SELECT event_type, message, raw_json, created_at FROM safety_events WHERE substr(created_at, 1, 10) = ? ORDER BY id DESC')
+      .all(date)
+      .map((row: any) => ({ eventType: row.event_type, message: row.message, rawJson: row.raw_json, createdAt: row.created_at }));
+  }
+
+  listRunLogs(runType?: string, date = toToday()): Array<{ runType: string; summary: Record<string, unknown> }> {
+    const query = runType
+      ? "SELECT run_type, summary_json FROM run_logs WHERE run_type = ? AND substr(started_at, 1, 10) = ? AND status = 'SUCCESS' ORDER BY id DESC"
+      : "SELECT run_type, summary_json FROM run_logs WHERE substr(started_at, 1, 10) = ? AND status = 'SUCCESS' ORDER BY id DESC";
+    const rows = (runType ? this.sqlite.prepare(query).all(runType, date) : this.sqlite.prepare(query).all(date)) as any[];
+    return rows.map((row) => ({ runType: row.run_type, summary: JSON.parse(row.summary_json) }));
+  }
+
+  listClosedPositionsToday(mode: PositionMode = 'PAPER', date = toToday()): PaperPositionView[] {
+    return this.listPositions(mode).filter((position) => position.status === 'CLOSED' && position.closedAt?.startsWith(date));
   }
 
   getCandidateByMint(mint: string): { tokenId: number; snapshot: TokenCandidate | null; score: TokenScoreResult | null } | null {

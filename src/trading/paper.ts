@@ -23,16 +23,34 @@ function resolveTokenId(db: AppDb, input: { proposalId?: number; mint?: string; 
   }
 
   if (input.positionId) {
-    const positions = db.listPositions('PAPER');
-    const position = positions.find((item) => item.id === input.positionId);
+    const position = db.getPosition(input.positionId);
     if (!position) throw new Error(`Position ${input.positionId} not found`);
-    return { tokenId: position.tokenId, proposalId: null, positionId: position.id };
+    return { tokenId: position.token_id, proposalId: null, positionId: position.id };
   }
 
   throw new Error('Must provide proposal id, mint, or position id');
 }
 
-export function paperBuy(db: AppDb, config: AppConfig, input: { proposalId?: number; mint?: string }): { tradeId: number; positionId: number } {
+function recordEntrySnapshot(db: AppDb, positionId: number, tokenId: number): void {
+  const position = db.listPositions('PAPER').find((item) => item.id === positionId);
+  const snapshot = db.getLatestSnapshot(tokenId);
+  if (!position) return;
+  db.createPaperPerformanceSnapshot(
+    positionId,
+    tokenId,
+    new Date().toISOString(),
+    snapshot?.priceUsd ?? null,
+    0,
+    0,
+    snapshot?.liquidityUsd ?? null,
+    snapshot?.marketCapUsd ?? null,
+    snapshot?.volume5mUsd ?? null,
+    snapshot?.volume1hUsd ?? null,
+    { milestone: 'entry' }
+  );
+}
+
+export function paperBuy(db: AppDb, config: AppConfig, input: { proposalId?: number; mint?: string; amountUsd?: number }): { tradeId: number; positionId: number } {
   const { tokenId, proposalId } = resolveTokenId(db, input);
   const score = db.getLatestScore(tokenId);
 
@@ -41,14 +59,25 @@ export function paperBuy(db: AppDb, config: AppConfig, input: { proposalId?: num
     throw new Error('Token is not eligible for paper buy');
   }
 
+  if (db.getLatestOpenPositionByToken(tokenId, 'PAPER')) {
+    db.logSafetyEvent(tokenId, 'WARN', 'paper_buy_blocked', 'Paper buy blocked because token already has an open paper position', { tokenId });
+    throw new Error('Duplicate open paper position blocked');
+  }
+
   const openPositions = db.getOpenPositionCount('PAPER');
   if (openPositions >= config.maxOpenPositions) {
     db.logSafetyEvent(tokenId, 'WARN', 'paper_buy_blocked', 'Paper buy blocked by max open positions cap', { openPositions, maxOpenPositions: config.maxOpenPositions });
     throw new Error('Max open positions cap reached');
   }
 
+  if (db.getDailyPaperBuyCount() >= config.maxDailyPaperBuys) {
+    db.logSafetyEvent(tokenId, 'WARN', 'paper_buy_blocked', 'Paper buy blocked by daily paper buy cap', { maxDailyPaperBuys: config.maxDailyPaperBuys });
+    throw new Error('Daily paper buy cap reached');
+  }
+
   const priceUsd = latestPriceOrThrow(db, tokenId);
-  const amountUsd = Math.min(config.maxBuyUsd, config.maxBankrollUsd - db.getOpenExposureUsd('PAPER'));
+  const requestedAmount = input.amountUsd ?? Math.min(config.maxBuyUsd, config.maxAutoPaperBuyUsd);
+  const amountUsd = Math.min(requestedAmount, config.maxBuyUsd, config.maxBankrollUsd - db.getOpenExposureUsd('PAPER'));
   if (amountUsd <= 0) {
     db.logSafetyEvent(tokenId, 'WARN', 'paper_buy_blocked', 'Paper buy blocked by bankroll cap', { amountUsd });
     throw new Error('No remaining bankroll available');
@@ -56,12 +85,13 @@ export function paperBuy(db: AppDb, config: AppConfig, input: { proposalId?: num
 
   const quantity = amountUsd / priceUsd;
   const tradeId = db.createPaperTrade(tokenId, proposalId, 'BUY', amountUsd, priceUsd, quantity, 'paper buy executed');
-  const positionId = db.createPosition(tokenId, 'PAPER', 'OPEN', priceUsd, quantity, amountUsd, 'opened from paper buy');
+  const positionId = db.createPosition(tokenId, 'PAPER', 'OPEN', priceUsd, quantity, amountUsd, 'entry');
+  recordEntrySnapshot(db, positionId, tokenId);
   if (proposalId) db.updateProposalStatus(proposalId, 'EXECUTED');
   return { tradeId, positionId };
 }
 
-export function paperSell(db: AppDb, input: { positionId?: number; mint?: string }): { tradeId: number; positionId: number; realizedPnlUsd: number } {
+export function paperSell(db: AppDb, input: { positionId?: number; mint?: string; reason?: string }): { tradeId: number; positionId: number; realizedPnlUsd: number; realizedPnlPct: number } {
   const { tokenId, positionId } = resolveTokenId(db, input);
   const position = positionId ? db.listPositions('PAPER').find((item) => item.id === positionId) : db.listPositions('PAPER').find((item) => item.tokenId === tokenId && item.status === 'OPEN');
   if (!position || position.status !== 'OPEN') {
@@ -72,9 +102,23 @@ export function paperSell(db: AppDb, input: { positionId?: number; mint?: string
   const priceUsd = latestPriceOrThrow(db, tokenId);
   const amountUsd = position.quantity * priceUsd;
   const realizedPnlUsd = amountUsd - position.amountUsd;
-  const tradeId = db.createPaperTrade(tokenId, null, 'SELL', amountUsd, priceUsd, position.quantity, 'paper sell executed');
-  db.closePosition(position.id, priceUsd, realizedPnlUsd, 'closed from paper sell');
-  return { tradeId, positionId: position.id, realizedPnlUsd: Number(realizedPnlUsd.toFixed(6)) };
+  const realizedPnlPct = position.amountUsd > 0 ? (realizedPnlUsd / position.amountUsd) * 100 : 0;
+  const tradeId = db.createPaperTrade(tokenId, null, 'SELL', amountUsd, priceUsd, position.quantity, input.reason ?? 'paper sell executed');
+  db.closePosition(position.id, priceUsd, realizedPnlUsd, input.reason ?? 'paper sell executed');
+  db.createPaperPerformanceSnapshot(
+    position.id,
+    tokenId,
+    new Date().toISOString(),
+    priceUsd,
+    0,
+    realizedPnlPct,
+    db.getLatestSnapshot(tokenId)?.liquidityUsd ?? null,
+    db.getLatestSnapshot(tokenId)?.marketCapUsd ?? null,
+    db.getLatestSnapshot(tokenId)?.volume5mUsd ?? null,
+    db.getLatestSnapshot(tokenId)?.volume1hUsd ?? null,
+    { milestone: 'close', exitReason: input.reason ?? 'paper sell executed' }
+  );
+  return { tradeId, positionId: position.id, realizedPnlUsd: Number(realizedPnlUsd.toFixed(6)), realizedPnlPct: Number(realizedPnlPct.toFixed(4)) };
 }
 
 export function getPositionsSummary(db: AppDb): { open: PaperPositionView[]; closed: PaperPositionView[]; realizedPnlUsd: number; unrealizedPnlUsd: number } {

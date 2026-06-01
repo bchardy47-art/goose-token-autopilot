@@ -8,6 +8,10 @@ import { paperBuy, paperSell, getPositionsSummary } from './trading/paper';
 import { verifySafety } from './verifySafety';
 import { activateKillSwitch } from './kill';
 import { runAutopilot } from './autopilot/runAutopilot';
+import { runAutoPaper } from './paper/autoPaper';
+import { runPaperReview } from './paper/review';
+import { buildPaperPerformanceReport } from './paper/performance';
+import { buildDailyReport } from './paper/dailyReport';
 
 function getArgValue(flag: string): string | undefined {
   const index = process.argv.indexOf(flag);
@@ -22,13 +26,11 @@ async function main(): Promise<void> {
   try {
     switch (command) {
       case 'token:scan': {
-        const result = await runScan(db, config);
-        console.log(JSON.stringify(result, null, 2));
+        console.log(JSON.stringify(await runScan(db, config), null, 2));
         break;
       }
       case 'token:score': {
-        const result = scoreAllTokens(db, config);
-        console.log(JSON.stringify(result, null, 2));
+        console.log(JSON.stringify(scoreAllTokens(db, config), null, 2));
         break;
       }
       case 'token:report': {
@@ -36,26 +38,39 @@ async function main(): Promise<void> {
         break;
       }
       case 'token:propose': {
-        const proposal = createTopProposal(db, config);
-        console.log(JSON.stringify(proposal, null, 2));
+        console.log(JSON.stringify(createTopProposal(db, config), null, 2));
         break;
       }
       case 'token:paper-buy': {
         const proposalId = getArgValue('--proposal-id');
         const mint = getArgValue('--mint');
-        const result = paperBuy(db, config, { proposalId: proposalId ? Number(proposalId) : undefined, mint });
-        console.log(JSON.stringify(result, null, 2));
+        console.log(JSON.stringify(paperBuy(db, config, { proposalId: proposalId ? Number(proposalId) : undefined, mint }), null, 2));
         break;
       }
       case 'token:paper-sell': {
         const positionId = getArgValue('--position-id');
         const mint = getArgValue('--mint');
-        const result = paperSell(db, { positionId: positionId ? Number(positionId) : undefined, mint });
-        console.log(JSON.stringify(result, null, 2));
+        console.log(JSON.stringify(paperSell(db, { positionId: positionId ? Number(positionId) : undefined, mint }), null, 2));
         break;
       }
       case 'token:positions': {
         console.log(JSON.stringify(getPositionsSummary(db), null, 2));
+        break;
+      }
+      case 'token:auto-paper': {
+        console.log(JSON.stringify(await runAutoPaper(db, config), null, 2));
+        break;
+      }
+      case 'token:paper-review': {
+        console.log(JSON.stringify(runPaperReview(db, config), null, 2));
+        break;
+      }
+      case 'token:paper-performance': {
+        console.log(JSON.stringify(buildPaperPerformanceReport(db), null, 2));
+        break;
+      }
+      case 'token:daily-report': {
+        console.log(JSON.stringify(buildDailyReport(db, config), null, 2));
         break;
       }
       case 'token:verify-safety': {
