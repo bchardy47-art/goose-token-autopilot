@@ -16,6 +16,7 @@ import { buildWatchOnlyReport, runWatchOnly } from './watchOnly';
 import { runWatchOutcomes } from './watchOutcomes';
 import { runWatchAnalysis } from './watchAnalysis';
 import { runWatchCycle, runWatchLoop } from './watchLoop';
+import { buildSignalAuditReport, renderSignalAudit } from './signalAudit';
 
 function getArgValue(flag: string): string | undefined {
   const index = process.argv.indexOf(flag);
@@ -82,6 +83,9 @@ async function main(): Promise<void> {
         break;
       case 'token:watch-loop':
         console.log(JSON.stringify(await runWatchLoop(db, config), null, 2));
+        break;
+      case 'token:signal-audit':
+        console.log(renderSignalAudit(buildSignalAuditReport(db, config), process.env));
         break;
       case 'token:watch-report':
         console.log(JSON.stringify(buildWatchOnlyReport(db, config), null, 2));
