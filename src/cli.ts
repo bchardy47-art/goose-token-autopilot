@@ -17,6 +17,7 @@ import { runWatchOutcomes } from './watchOutcomes';
 import { runWatchAnalysis } from './watchAnalysis';
 import { runWatchCycle, runWatchLoop } from './watchLoop';
 import { buildSignalAuditReport, renderSignalAudit } from './signalAudit';
+import { buildSignalCompareReport, renderSignalCompare } from './signalCompare';
 
 function getArgValue(flag: string): string | undefined {
   const index = process.argv.indexOf(flag);
@@ -86,6 +87,9 @@ async function main(): Promise<void> {
         break;
       case 'token:signal-audit':
         console.log(renderSignalAudit(buildSignalAuditReport(db, config), process.env));
+        break;
+      case 'token:signal-compare':
+        console.log(renderSignalCompare(buildSignalCompareReport(db, config), process.env));
         break;
       case 'token:watch-report':
         console.log(JSON.stringify(buildWatchOnlyReport(db, config), null, 2));
