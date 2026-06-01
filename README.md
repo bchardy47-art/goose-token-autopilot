@@ -56,6 +56,12 @@ npm run token:auto-paper
 npm run token:paper-review
 npm run token:paper-performance
 npm run token:daily-report
+npm run token:watch-only
+npm run token:watch-outcomes
+npm run token:watch-analysis
+npm run token:watch-cycle
+npm run token:watch-loop
+npm run token:watch-report
 npm run token:verify-safety
 npm run token:kill
 npm run token:autopilot
@@ -179,5 +185,26 @@ Example:
 DATABASE_FILE=./data/watch-only-test.sqlite TOKEN_SOURCE=dexscreener npm run token:watch-only
 DATABASE_FILE=./data/watch-only-test.sqlite TOKEN_SOURCE=dexscreener npm run token:watch-report
 ```
+
+### Watch-only research loop
+
+For live research collection over time without manual babysitting:
+
+```bash
+DATABASE_FILE=./data/live-research.sqlite TOKEN_SOURCE=dexscreener npm run token:watch-loop
+```
+
+Defaults:
+- `WATCH_LOOP_MAX_CYCLES=12`
+- `WATCH_LOOP_INTERVAL_SECONDS=300`
+
+Overrides supported:
+- `WATCH_LOOP_INTERVAL_SECONDS`
+- `WATCH_LOOP_MAX_CYCLES`
+- `DATABASE_FILE`
+- `TOKEN_SOURCE`
+
+`token:watch-cycle` runs one research-only cycle and exits.
+`token:watch-loop` repeats the same safe research-only cycle until max cycles is reached or you stop it with `Ctrl+C`.
 
 Real trading remains locked.
