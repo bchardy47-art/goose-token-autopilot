@@ -181,6 +181,8 @@ export interface PaperReviewDecision {
   pnlPct: number;
 }
 
+export type ResearchStatus = 'IGNORE' | 'WATCH_ONLY' | 'PAPER_TRACKED' | 'CLOSED';
+
 export interface PaperPerformanceSnapshot {
   id: number;
   positionId: number;
@@ -191,6 +193,24 @@ export interface PaperPerformanceSnapshot {
   unrealizedPnlPct: number | null;
   liquidityUsd: number | null;
   marketCapUsd: number | null;
+  volume5mUsd: number | null;
+  volume1hUsd: number | null;
+  rawJson: string;
+}
+
+export interface WatchOnlyCandidate {
+  id: number;
+  tokenId: number;
+  createdAt: string;
+  status: ResearchStatus;
+  reason: string;
+  entryPriceUsd: number | null;
+  latestPriceUsd: number | null;
+  bestPriceUsd: number | null;
+  worstPriceUsd: number | null;
+  bestGainPct: number | null;
+  worstDrawdownPct: number | null;
+  liquidityUsd: number | null;
   volume5mUsd: number | null;
   volume1hUsd: number | null;
   rawJson: string;

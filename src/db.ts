@@ -9,11 +9,13 @@ import type {
   PositionMode,
   PositionStatus,
   ProposalStatus,
+  ResearchStatus,
   SafetySeverity,
   TokenCandidate,
   TokenScoreResult,
   TradeSide,
-  Verdict
+  Verdict,
+  WatchOnlyCandidate
 } from './types';
 
 function toToday(): string {
@@ -208,6 +210,90 @@ export class AppDb {
       )
       .run(tokenId, proposalId, side, amountUsd, new Date().toISOString(), blocked ? 1 : 0, blockReason, txSignature, JSON.stringify(raw));
     return Number(result.lastInsertRowid);
+  }
+
+  upsertWatchOnlyCandidate(
+    tokenId: number,
+    status: ResearchStatus,
+    reason: string,
+    entryPriceUsd: number | null,
+    latestPriceUsd: number | null,
+    liquidityUsd: number | null,
+    volume5mUsd: number | null,
+    volume1hUsd: number | null,
+    raw: Record<string, unknown>
+  ): number {
+    const existing = this.sqlite.prepare('SELECT * FROM watch_only_candidates WHERE token_id = ?').get(tokenId) as any;
+    const bestPriceUsd = existing ? Math.max(existing.best_price_usd ?? entryPriceUsd ?? 0, latestPriceUsd ?? 0) : latestPriceUsd;
+    const worstPriceUsd = existing ? Math.min(existing.worst_price_usd ?? entryPriceUsd ?? latestPriceUsd ?? 0, latestPriceUsd ?? existing.worst_price_usd ?? 0) : latestPriceUsd;
+    const baseEntry = existing?.entry_price_usd ?? entryPriceUsd;
+    const bestGainPct = baseEntry && bestPriceUsd !== null ? ((bestPriceUsd - baseEntry) / baseEntry) * 100 : null;
+    const worstDrawdownPct = baseEntry && worstPriceUsd !== null ? ((worstPriceUsd - baseEntry) / baseEntry) * 100 : null;
+
+    if (existing) {
+      this.sqlite.prepare(
+        'UPDATE watch_only_candidates SET status = ?, reason = ?, latest_price_usd = ?, best_price_usd = ?, worst_price_usd = ?, best_gain_pct = ?, worst_drawdown_pct = ?, liquidity_usd = ?, volume_5m_usd = ?, volume_1h_usd = ?, raw_json = ? WHERE token_id = ?'
+      ).run(
+        status,
+        reason,
+        latestPriceUsd,
+        bestPriceUsd,
+        worstPriceUsd,
+        bestGainPct,
+        worstDrawdownPct,
+        liquidityUsd,
+        volume5mUsd,
+        volume1hUsd,
+        JSON.stringify(raw),
+        tokenId
+      );
+      return existing.id;
+    }
+
+    const result = this.sqlite.prepare(
+      'INSERT INTO watch_only_candidates (token_id, created_at, status, reason, entry_price_usd, latest_price_usd, best_price_usd, worst_price_usd, best_gain_pct, worst_drawdown_pct, liquidity_usd, volume_5m_usd, volume_1h_usd, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      tokenId,
+      new Date().toISOString(),
+      status,
+      reason,
+      entryPriceUsd,
+      latestPriceUsd,
+      bestPriceUsd,
+      worstPriceUsd,
+      bestGainPct,
+      worstDrawdownPct,
+      liquidityUsd,
+      volume5mUsd,
+      volume1hUsd,
+      JSON.stringify(raw)
+    );
+    return Number(result.lastInsertRowid);
+  }
+
+  listWatchOnlyCandidates(): WatchOnlyCandidate[] {
+    return this.sqlite.prepare('SELECT * FROM watch_only_candidates ORDER BY created_at DESC, id DESC').all().map((row: any) => ({
+      id: row.id,
+      tokenId: row.token_id,
+      createdAt: row.created_at,
+      status: row.status,
+      reason: row.reason,
+      entryPriceUsd: row.entry_price_usd,
+      latestPriceUsd: row.latest_price_usd,
+      bestPriceUsd: row.best_price_usd,
+      worstPriceUsd: row.worst_price_usd,
+      bestGainPct: row.best_gain_pct,
+      worstDrawdownPct: row.worst_drawdown_pct,
+      liquidityUsd: row.liquidity_usd,
+      volume5mUsd: row.volume_5m_usd,
+      volume1hUsd: row.volume_1h_usd,
+      rawJson: row.raw_json
+    }));
+  }
+
+  getWatchOnlyCount(date = toToday()): number {
+    const row = this.sqlite.prepare('SELECT COUNT(*) as count FROM watch_only_candidates WHERE substr(created_at, 1, 10) = ?').get(date) as { count: number };
+    return row.count;
   }
 
   getLatestSnapshot(tokenId: number): TokenCandidate | null {

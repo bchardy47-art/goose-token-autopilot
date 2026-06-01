@@ -77,3 +77,18 @@ Still required:
 - real trading remains locked
 
 That last point is intentional.
+
+
+## Watch-only research lane
+
+The watch-only lane is a research feature only.
+
+- it does not paper-buy from the watch-only lane
+- it does not real-buy
+- it does not enable wallet signing
+- it does not weaken UNKNOWN safety handling for trading decisions
+
+A token may be interesting enough to watch while still being unsafe to trade.
+That is the whole point of this lane.
+
+Paper or live returns are not guaranteed, and watch-only performance is not proof of future edge.

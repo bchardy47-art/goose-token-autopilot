@@ -11,6 +11,7 @@ export function verifySafety(config: AppConfig): Record<string, unknown> {
     enrichmentEnabled: config.enableSolanaSafetyEnrichment,
     quoteCheckEnabled: config.enableQuoteCheck,
     paperTradingSimulatedOnly: true,
+    watchOnlyResearchOnly: true,
     walletSigningConfigured: false,
     notes: [
       'Real trading must remain impossible by default.',

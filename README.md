@@ -160,3 +160,24 @@ Unknown safety-critical fields remain unsafe for autopilot.
 ## Important
 
 **Real trading is still locked and impossible by default in V1.3.**
+
+
+## Watch-only research lane
+
+V1.3+ includes a watch-only research lane for live DexScreener tokens.
+
+- `npm run token:watch-only` scans and tracks promising live tokens for observation only
+- `npm run token:watch-report` summarizes watch-only candidate behavior
+- watch-only candidates are **never** real-bought
+- watch-only candidates are **never** paper-bought automatically from this lane
+- UNKNOWN safety data may allow research tracking, but it still blocks paper-buy and autopilot decisions
+- watch-only is for learning, not for trading
+
+Example:
+
+```bash
+DATABASE_FILE=./data/watch-only-test.sqlite TOKEN_SOURCE=dexscreener npm run token:watch-only
+DATABASE_FILE=./data/watch-only-test.sqlite TOKEN_SOURCE=dexscreener npm run token:watch-report
+```
+
+Real trading remains locked.

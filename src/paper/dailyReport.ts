@@ -20,6 +20,7 @@ export function buildDailyReport(db: AppDb, _config: AppConfig): Record<string, 
   const safetyEvents = db.listSafetyEvents(today);
   const closed = db.listClosedPositionsToday('PAPER', today);
   const open = db.listPositions('PAPER').filter((position) => position.status === 'OPEN');
+  const watchOnly = db.listWatchOnlyCandidates();
   const wins = closed.filter((position) => (position.realizedPnlUsd ?? 0) > 0);
   const losses = closed.filter((position) => (position.realizedPnlUsd ?? 0) < 0);
   const realizedPnl = closed.reduce((sum, position) => sum + (position.realizedPnlUsd ?? 0), 0);
@@ -30,6 +31,8 @@ export function buildDailyReport(db: AppDb, _config: AppConfig): Record<string, 
   const positiveReasons = db.listLatestTokenStates(50).flatMap((state) => state.score?.reasons ?? []).filter((reason) => /passes|supportive|liquidity|slippage|strong enough/i.test(reason));
   const redFlags = db.listLatestTokenStates(50).flatMap((state) => state.score?.redFlags ?? []);
   const safetyRejections = safetyEvents.filter((event) => event.eventType.includes('blocked') || event.eventType.includes('skipped'));
+  const bestWatchOnly = [...watchOnly].sort((a, b) => (b.bestGainPct ?? Number.NEGATIVE_INFINITY) - (a.bestGainPct ?? Number.NEGATIVE_INFINITY))[0] ?? null;
+  const worstWatchOnly = [...watchOnly].sort((a, b) => (a.worstDrawdownPct ?? Number.POSITIVE_INFINITY) - (b.worstDrawdownPct ?? Number.POSITIVE_INFINITY))[0] ?? null;
 
   return {
     tokensScannedToday: scanLogs.reduce((sum, log) => sum + Number(log.summary.scanned ?? 0), 0),
@@ -48,6 +51,10 @@ export function buildDailyReport(db: AppDb, _config: AppConfig): Record<string, 
     worstPaperTrade: worstTrade,
     tokensStillOpen: open.length,
     blockedRealTradeAttempts: db.getBlockedRealTradeAttempts(),
+    watchOnlyCandidateCount: watchOnly.length,
+    bestWatchOnlyMover: bestWatchOnly,
+    worstWatchOnlyMover: worstWatchOnly,
+    watchOnlyResearchOnly: true,
     topRedFlags: topItems(redFlags),
     topSkipReasons: topItems(skippedReasons),
     topPositiveReasons: topItems(positiveReasons),

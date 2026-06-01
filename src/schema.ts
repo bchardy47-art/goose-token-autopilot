@@ -105,6 +105,26 @@ CREATE TABLE IF NOT EXISTS paper_performance_snapshots (
   FOREIGN KEY(token_id) REFERENCES tokens(id)
 );
 
+CREATE TABLE IF NOT EXISTS watch_only_candidates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  status TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  entry_price_usd REAL,
+  latest_price_usd REAL,
+  best_price_usd REAL,
+  worst_price_usd REAL,
+  best_gain_pct REAL,
+  worst_drawdown_pct REAL,
+  liquidity_usd REAL,
+  volume_5m_usd REAL,
+  volume_1h_usd REAL,
+  raw_json TEXT NOT NULL,
+  UNIQUE(token_id),
+  FOREIGN KEY(token_id) REFERENCES tokens(id)
+);
+
 CREATE TABLE IF NOT EXISTS real_trade_attempts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   token_id INTEGER NOT NULL,
