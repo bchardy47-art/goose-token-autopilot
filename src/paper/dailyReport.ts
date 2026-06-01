@@ -1,5 +1,6 @@
 import type { AppDb } from '../db';
 import type { AppConfig } from '../types';
+import { summarizeWatchOnlySignalAnalysis } from '../watchAnalysis';
 
 function topItems(items: string[], limit = 5): Array<{ value: string; count: number }> {
   const counts = new Map<string, number>();
@@ -33,6 +34,7 @@ export function buildDailyReport(db: AppDb, _config: AppConfig): Record<string, 
   const safetyRejections = safetyEvents.filter((event) => event.eventType.includes('blocked') || event.eventType.includes('skipped'));
   const bestWatchOnly = [...watchOnly].sort((a, b) => (b.bestGainPct ?? Number.NEGATIVE_INFINITY) - (a.bestGainPct ?? Number.NEGATIVE_INFINITY))[0] ?? null;
   const worstWatchOnly = [...watchOnly].sort((a, b) => (a.worstDrawdownPct ?? Number.POSITIVE_INFINITY) - (b.worstDrawdownPct ?? Number.POSITIVE_INFINITY))[0] ?? null;
+  const watchAnalysisSummary = summarizeWatchOnlySignalAnalysis(db);
 
   return {
     tokensScannedToday: scanLogs.reduce((sum, log) => sum + Number(log.summary.scanned ?? 0), 0),
@@ -55,6 +57,7 @@ export function buildDailyReport(db: AppDb, _config: AppConfig): Record<string, 
     bestWatchOnlyMover: bestWatchOnly,
     worstWatchOnlyMover: worstWatchOnly,
     watchOnlyResearchOnly: true,
+    ...watchAnalysisSummary,
     topRedFlags: topItems(redFlags),
     topSkipReasons: topItems(skippedReasons),
     topPositiveReasons: topItems(positiveReasons),

@@ -4,6 +4,7 @@ import type { AppDb } from './db';
 import type { AppConfig, ResearchStatus, TokenCandidate, TokenScoreResult } from './types';
 import { AppLogger } from './logger';
 import { summarizeWatchOutcomes } from './watchOutcomes';
+import { summarizeWatchOnlySignalAnalysis } from './watchAnalysis';
 
 function tokenAgeHours(candidate: TokenCandidate): number | null {
   const created = new Date(candidate.tokenCreatedAt).getTime();
@@ -107,6 +108,7 @@ export function buildWatchOnlyReport(db: AppDb, config?: AppConfig): Record<stri
     return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([value, count]) => ({ value, count }));
   })();
   const outcomeSummary = config ? summarizeWatchOutcomes(db, config) : {};
+  const signalAnalysisSummary = summarizeWatchOnlySignalAnalysis(db);
 
   return {
     totalWatchOnlyCandidates: candidates.length,
@@ -120,6 +122,7 @@ export function buildWatchOnlyReport(db: AppDb, config?: AppConfig): Record<stri
     topReasonsTheyWereWatchOnly: topReasons,
     topRedFlagsBlockingPaperBuy: topRedFlags,
     ...outcomeSummary,
+    ...signalAnalysisSummary,
     finalSafetyStatus: 'Real trading remains locked.'
   };
 }

@@ -11,6 +11,7 @@ export type ProposalStatus = 'PENDING' | 'EXECUTED' | 'BLOCKED' | 'CANCELLED';
 export type SafetySeverity = 'INFO' | 'WARN' | 'ERROR';
 export type TokenSourceName = 'fixture' | 'dexscreener';
 export type ResearchStatus = 'IGNORE' | 'WATCH_ONLY' | 'PAPER_TRACKED' | 'CLOSED';
+export type WatchOnlySignalClass = 'EARLY_RUNNER' | 'LATE_RUNNER' | 'INSTANT_DUMP' | 'DEAD_NOISE' | 'TOO_DANGEROUS';
 
 export interface TokenCandidate {
   chain: string;
@@ -232,6 +233,24 @@ export interface WatchOnlyOutcome {
   liquidityUsd: number | null;
   volume5mUsd: number | null;
   volume1hUsd: number | null;
+  notes: string | null;
+  rawJson: string;
+}
+
+export interface WatchOnlySignalAnalysis {
+  id: number;
+  watchCandidateId: number;
+  tokenId: number;
+  signalClass: WatchOnlySignalClass;
+  analyzedAt: string;
+  bestGainPct: number | null;
+  worstDrawdownPct: number | null;
+  movedBeforeDiscoveryPct: number | null;
+  liquidityUsd: number | null;
+  sellQuoteAvailable: AvailabilityStatus | null;
+  mintAuthority: AuthorityStatus | null;
+  freezeAuthority: AuthorityStatus | null;
+  reason: string;
   notes: string | null;
   rawJson: string;
 }

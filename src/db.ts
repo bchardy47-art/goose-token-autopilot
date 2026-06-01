@@ -16,7 +16,9 @@ import type {
   TradeSide,
   Verdict,
   WatchOnlyCandidate,
-  WatchOnlyOutcome
+  WatchOnlyOutcome,
+  WatchOnlySignalAnalysis,
+  WatchOnlySignalClass
 } from './types';
 
 function toToday(): string {
@@ -383,6 +385,108 @@ export class AppDb {
       liquidityUsd: row.liquidity_usd,
       volume5mUsd: row.volume_5m_usd,
       volume1hUsd: row.volume_1h_usd,
+      notes: row.notes,
+      rawJson: row.raw_json
+    }));
+  }
+
+  upsertWatchOnlySignalAnalysis(
+    watchCandidateId: number,
+    tokenId: number,
+    signalClass: WatchOnlySignalClass,
+    analyzedAt: string,
+    bestGainPct: number | null,
+    worstDrawdownPct: number | null,
+    movedBeforeDiscoveryPct: number | null,
+    liquidityUsd: number | null,
+    sellQuoteAvailable: string | null,
+    mintAuthority: string | null,
+    freezeAuthority: string | null,
+    reason: string,
+    notes: string | null,
+    raw: Record<string, unknown>
+  ): number {
+    const existing = this.sqlite.prepare('SELECT id FROM watch_only_signal_analysis WHERE watch_candidate_id = ?').get(watchCandidateId) as { id: number } | undefined;
+    if (existing) {
+      this.sqlite.prepare(
+        'UPDATE watch_only_signal_analysis SET token_id = ?, signal_class = ?, analyzed_at = ?, best_gain_pct = ?, worst_drawdown_pct = ?, moved_before_discovery_pct = ?, liquidity_usd = ?, sell_quote_available = ?, mint_authority = ?, freeze_authority = ?, reason = ?, notes = ?, raw_json = ? WHERE watch_candidate_id = ?'
+      ).run(
+        tokenId,
+        signalClass,
+        analyzedAt,
+        bestGainPct,
+        worstDrawdownPct,
+        movedBeforeDiscoveryPct,
+        liquidityUsd,
+        sellQuoteAvailable,
+        mintAuthority,
+        freezeAuthority,
+        reason,
+        notes,
+        JSON.stringify(raw),
+        watchCandidateId
+      );
+      return existing.id;
+    }
+
+    const result = this.sqlite.prepare(
+      'INSERT INTO watch_only_signal_analysis (watch_candidate_id, token_id, signal_class, analyzed_at, best_gain_pct, worst_drawdown_pct, moved_before_discovery_pct, liquidity_usd, sell_quote_available, mint_authority, freeze_authority, reason, notes, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      watchCandidateId,
+      tokenId,
+      signalClass,
+      analyzedAt,
+      bestGainPct,
+      worstDrawdownPct,
+      movedBeforeDiscoveryPct,
+      liquidityUsd,
+      sellQuoteAvailable,
+      mintAuthority,
+      freezeAuthority,
+      reason,
+      notes,
+      JSON.stringify(raw)
+    );
+    return Number(result.lastInsertRowid);
+  }
+
+  getWatchOnlySignalAnalysis(watchCandidateId: number): WatchOnlySignalAnalysis | null {
+    const row = this.sqlite.prepare('SELECT * FROM watch_only_signal_analysis WHERE watch_candidate_id = ?').get(watchCandidateId) as any;
+    if (!row) return null;
+    return {
+      id: row.id,
+      watchCandidateId: row.watch_candidate_id,
+      tokenId: row.token_id,
+      signalClass: row.signal_class,
+      analyzedAt: row.analyzed_at,
+      bestGainPct: row.best_gain_pct,
+      worstDrawdownPct: row.worst_drawdown_pct,
+      movedBeforeDiscoveryPct: row.moved_before_discovery_pct,
+      liquidityUsd: row.liquidity_usd,
+      sellQuoteAvailable: row.sell_quote_available,
+      mintAuthority: row.mint_authority,
+      freezeAuthority: row.freeze_authority,
+      reason: row.reason,
+      notes: row.notes,
+      rawJson: row.raw_json
+    };
+  }
+
+  listWatchOnlySignalAnalyses(): WatchOnlySignalAnalysis[] {
+    return this.sqlite.prepare('SELECT * FROM watch_only_signal_analysis ORDER BY analyzed_at DESC, id DESC').all().map((row: any) => ({
+      id: row.id,
+      watchCandidateId: row.watch_candidate_id,
+      tokenId: row.token_id,
+      signalClass: row.signal_class,
+      analyzedAt: row.analyzed_at,
+      bestGainPct: row.best_gain_pct,
+      worstDrawdownPct: row.worst_drawdown_pct,
+      movedBeforeDiscoveryPct: row.moved_before_discovery_pct,
+      liquidityUsd: row.liquidity_usd,
+      sellQuoteAvailable: row.sell_quote_available,
+      mintAuthority: row.mint_authority,
+      freezeAuthority: row.freeze_authority,
+      reason: row.reason,
       notes: row.notes,
       rawJson: row.raw_json
     }));
