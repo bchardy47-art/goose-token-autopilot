@@ -15,7 +15,8 @@ import type {
   TokenScoreResult,
   TradeSide,
   Verdict,
-  WatchOnlyCandidate
+  WatchOnlyCandidate,
+  WatchOnlyOutcome
 } from './types';
 
 function toToday(): string {
@@ -294,6 +295,97 @@ export class AppDb {
   getWatchOnlyCount(date = toToday()): number {
     const row = this.sqlite.prepare('SELECT COUNT(*) as count FROM watch_only_candidates WHERE substr(created_at, 1, 10) = ?').get(date) as { count: number };
     return row.count;
+  }
+
+  createWatchOnlyOutcome(
+    watchCandidateId: number,
+    tokenId: number,
+    windowLabel: string,
+    targetMinutes: number,
+    observedAt: string,
+    entryPriceUsd: number | null,
+    observedPriceUsd: number | null,
+    returnPct: number | null,
+    bestGainPct: number | null,
+    worstDrawdownPct: number | null,
+    wouldHitTakeProfit: boolean,
+    wouldHitStopLoss: boolean,
+    liquidityUsd: number | null,
+    volume5mUsd: number | null,
+    volume1hUsd: number | null,
+    notes: string | null,
+    raw: Record<string, unknown>
+  ): number {
+    const result = this.sqlite.prepare(
+      'INSERT INTO watch_only_outcomes (watch_candidate_id, token_id, window_label, target_minutes, observed_at, entry_price_usd, observed_price_usd, return_pct, best_gain_pct, worst_drawdown_pct, would_hit_take_profit, would_hit_stop_loss, liquidity_usd, volume_5m_usd, volume_1h_usd, notes, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      watchCandidateId,
+      tokenId,
+      windowLabel,
+      targetMinutes,
+      observedAt,
+      entryPriceUsd,
+      observedPriceUsd,
+      returnPct,
+      bestGainPct,
+      worstDrawdownPct,
+      wouldHitTakeProfit ? 1 : 0,
+      wouldHitStopLoss ? 1 : 0,
+      liquidityUsd,
+      volume5mUsd,
+      volume1hUsd,
+      notes,
+      JSON.stringify(raw)
+    );
+    return Number(result.lastInsertRowid);
+  }
+
+  getWatchOnlyOutcome(watchCandidateId: number, windowLabel: string): WatchOnlyOutcome | null {
+    const row = this.sqlite.prepare('SELECT * FROM watch_only_outcomes WHERE watch_candidate_id = ? AND window_label = ?').get(watchCandidateId, windowLabel) as any;
+    if (!row) return null;
+    return {
+      id: row.id,
+      watchCandidateId: row.watch_candidate_id,
+      tokenId: row.token_id,
+      windowLabel: row.window_label,
+      targetMinutes: row.target_minutes,
+      observedAt: row.observed_at,
+      entryPriceUsd: row.entry_price_usd,
+      observedPriceUsd: row.observed_price_usd,
+      returnPct: row.return_pct,
+      bestGainPct: row.best_gain_pct,
+      worstDrawdownPct: row.worst_drawdown_pct,
+      wouldHitTakeProfit: Boolean(row.would_hit_take_profit),
+      wouldHitStopLoss: Boolean(row.would_hit_stop_loss),
+      liquidityUsd: row.liquidity_usd,
+      volume5mUsd: row.volume_5m_usd,
+      volume1hUsd: row.volume_1h_usd,
+      notes: row.notes,
+      rawJson: row.raw_json
+    };
+  }
+
+  listWatchOnlyOutcomes(): WatchOnlyOutcome[] {
+    return this.sqlite.prepare('SELECT * FROM watch_only_outcomes ORDER BY observed_at DESC, id DESC').all().map((row: any) => ({
+      id: row.id,
+      watchCandidateId: row.watch_candidate_id,
+      tokenId: row.token_id,
+      windowLabel: row.window_label,
+      targetMinutes: row.target_minutes,
+      observedAt: row.observed_at,
+      entryPriceUsd: row.entry_price_usd,
+      observedPriceUsd: row.observed_price_usd,
+      returnPct: row.return_pct,
+      bestGainPct: row.best_gain_pct,
+      worstDrawdownPct: row.worst_drawdown_pct,
+      wouldHitTakeProfit: Boolean(row.would_hit_take_profit),
+      wouldHitStopLoss: Boolean(row.would_hit_stop_loss),
+      liquidityUsd: row.liquidity_usd,
+      volume5mUsd: row.volume_5m_usd,
+      volume1hUsd: row.volume_1h_usd,
+      notes: row.notes,
+      rawJson: row.raw_json
+    }));
   }
 
   getLatestSnapshot(tokenId: number): TokenCandidate | null {

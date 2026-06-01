@@ -13,6 +13,7 @@ import { runPaperReview } from './paper/review';
 import { buildPaperPerformanceReport } from './paper/performance';
 import { buildDailyReport } from './paper/dailyReport';
 import { buildWatchOnlyReport, runWatchOnly } from './watchOnly';
+import { runWatchOutcomes } from './watchOutcomes';
 
 function getArgValue(flag: string): string | undefined {
   const index = process.argv.indexOf(flag);
@@ -68,8 +69,11 @@ async function main(): Promise<void> {
       case 'token:watch-only':
         console.log(JSON.stringify(await runWatchOnly(db, config), null, 2));
         break;
+      case 'token:watch-outcomes':
+        console.log(JSON.stringify(await runWatchOutcomes(db, config), null, 2));
+        break;
       case 'token:watch-report':
-        console.log(JSON.stringify(buildWatchOnlyReport(db), null, 2));
+        console.log(JSON.stringify(buildWatchOnlyReport(db, config), null, 2));
         break;
       case 'token:verify-safety':
         console.log(JSON.stringify(verifySafety(config), null, 2));

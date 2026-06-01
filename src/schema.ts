@@ -125,6 +125,30 @@ CREATE TABLE IF NOT EXISTS watch_only_candidates (
   FOREIGN KEY(token_id) REFERENCES tokens(id)
 );
 
+CREATE TABLE IF NOT EXISTS watch_only_outcomes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  watch_candidate_id INTEGER NOT NULL,
+  token_id INTEGER NOT NULL,
+  window_label TEXT NOT NULL,
+  target_minutes INTEGER NOT NULL,
+  observed_at TEXT NOT NULL,
+  entry_price_usd REAL,
+  observed_price_usd REAL,
+  return_pct REAL,
+  best_gain_pct REAL,
+  worst_drawdown_pct REAL,
+  would_hit_take_profit INTEGER NOT NULL,
+  would_hit_stop_loss INTEGER NOT NULL,
+  liquidity_usd REAL,
+  volume_5m_usd REAL,
+  volume_1h_usd REAL,
+  notes TEXT,
+  raw_json TEXT NOT NULL,
+  UNIQUE(watch_candidate_id, window_label),
+  FOREIGN KEY(watch_candidate_id) REFERENCES watch_only_candidates(id),
+  FOREIGN KEY(token_id) REFERENCES tokens(id)
+);
+
 CREATE TABLE IF NOT EXISTS real_trade_attempts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   token_id INTEGER NOT NULL,

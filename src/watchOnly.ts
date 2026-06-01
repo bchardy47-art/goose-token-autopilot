@@ -3,6 +3,7 @@ import { scoreAllTokens } from './scoring/scoreToken';
 import type { AppDb } from './db';
 import type { AppConfig, ResearchStatus, TokenCandidate, TokenScoreResult } from './types';
 import { AppLogger } from './logger';
+import { summarizeWatchOutcomes } from './watchOutcomes';
 
 function tokenAgeHours(candidate: TokenCandidate): number | null {
   const created = new Date(candidate.tokenCreatedAt).getTime();
@@ -84,7 +85,7 @@ export async function runWatchOnly(db: AppDb, config: AppConfig, logger = new Ap
   }
 }
 
-export function buildWatchOnlyReport(db: AppDb): Record<string, unknown> {
+export function buildWatchOnlyReport(db: AppDb, config?: AppConfig): Record<string, unknown> {
   const candidates = db.listWatchOnlyCandidates();
   const today = new Date().toISOString().slice(0, 10);
   const newToday = candidates.filter((candidate) => candidate.createdAt.startsWith(today));
@@ -105,6 +106,7 @@ export function buildWatchOnlyReport(db: AppDb): Record<string, unknown> {
     for (const flag of flags) counts.set(flag, (counts.get(flag) ?? 0) + 1);
     return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([value, count]) => ({ value, count }));
   })();
+  const outcomeSummary = config ? summarizeWatchOutcomes(db, config) : {};
 
   return {
     totalWatchOnlyCandidates: candidates.length,
@@ -117,6 +119,7 @@ export function buildWatchOnlyReport(db: AppDb): Record<string, unknown> {
     laterBecamePaperBuyCount: paperTracked,
     topReasonsTheyWereWatchOnly: topReasons,
     topRedFlagsBlockingPaperBuy: topRedFlags,
+    ...outcomeSummary,
     finalSafetyStatus: 'Real trading remains locked.'
   };
 }

@@ -10,6 +10,7 @@ export type PositionStatus = 'OPEN' | 'CLOSED';
 export type ProposalStatus = 'PENDING' | 'EXECUTED' | 'BLOCKED' | 'CANCELLED';
 export type SafetySeverity = 'INFO' | 'WARN' | 'ERROR';
 export type TokenSourceName = 'fixture' | 'dexscreener';
+export type ResearchStatus = 'IGNORE' | 'WATCH_ONLY' | 'PAPER_TRACKED' | 'CLOSED';
 
 export interface TokenCandidate {
   chain: string;
@@ -181,8 +182,6 @@ export interface PaperReviewDecision {
   pnlPct: number;
 }
 
-export type ResearchStatus = 'IGNORE' | 'WATCH_ONLY' | 'PAPER_TRACKED' | 'CLOSED';
-
 export interface PaperPerformanceSnapshot {
   id: number;
   positionId: number;
@@ -213,6 +212,27 @@ export interface WatchOnlyCandidate {
   liquidityUsd: number | null;
   volume5mUsd: number | null;
   volume1hUsd: number | null;
+  rawJson: string;
+}
+
+export interface WatchOnlyOutcome {
+  id: number;
+  watchCandidateId: number;
+  tokenId: number;
+  windowLabel: string;
+  targetMinutes: number;
+  observedAt: string;
+  entryPriceUsd: number | null;
+  observedPriceUsd: number | null;
+  returnPct: number | null;
+  bestGainPct: number | null;
+  worstDrawdownPct: number | null;
+  wouldHitTakeProfit: boolean;
+  wouldHitStopLoss: boolean;
+  liquidityUsd: number | null;
+  volume5mUsd: number | null;
+  volume1hUsd: number | null;
+  notes: string | null;
   rawJson: string;
 }
 
