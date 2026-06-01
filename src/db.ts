@@ -1,0 +1,369 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import Database from 'better-sqlite3';
+import { schemaSql } from './schema';
+import type { AppConfig, PaperPositionView, PositionMode, PositionStatus, ProposalStatus, SafetySeverity, TokenCandidate, TokenScoreResult, TradeSide, Verdict } from './types';
+
+export class AppDb {
+  public readonly sqlite: Database.Database;
+
+  constructor(private readonly config: AppConfig) {
+    fs.mkdirSync(path.dirname(config.databaseFile), { recursive: true });
+    this.sqlite = new Database(config.databaseFile);
+    this.sqlite.pragma('journal_mode = WAL');
+    this.sqlite.pragma('foreign_keys = ON');
+    this.sqlite.exec(schemaSql);
+  }
+
+  close(): void {
+    this.sqlite.close();
+  }
+
+  createRunLog(runType: string): number {
+    const now = new Date().toISOString();
+    const result = this.sqlite
+      .prepare('INSERT INTO run_logs (run_type, started_at, finished_at, status, summary_json) VALUES (?, ?, NULL, ?, ?)')
+      .run(runType, now, 'RUNNING', JSON.stringify({}));
+    return Number(result.lastInsertRowid);
+  }
+
+  finishRunLog(id: number, status: string, summary: Record<string, unknown>): void {
+    this.sqlite
+      .prepare('UPDATE run_logs SET finished_at = ?, status = ?, summary_json = ? WHERE id = ?')
+      .run(new Date().toISOString(), status, JSON.stringify(summary), id);
+  }
+
+  logSafetyEvent(tokenId: number | null, severity: SafetySeverity, eventType: string, message: string, raw: Record<string, unknown> = {}): number {
+    const result = this.sqlite
+      .prepare('INSERT INTO safety_events (token_id, created_at, severity, event_type, message, raw_json) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(tokenId, new Date().toISOString(), severity, eventType, message, JSON.stringify(raw));
+    return Number(result.lastInsertRowid);
+  }
+
+  upsertToken(candidate: TokenCandidate): number {
+    const existing = this.sqlite
+      .prepare('SELECT id, first_seen_at FROM tokens WHERE chain = ? AND mint = ?')
+      .get(candidate.chain, candidate.mint) as { id: number; first_seen_at: string } | undefined;
+
+    if (existing) {
+      this.sqlite
+        .prepare('UPDATE tokens SET symbol = ?, name = ?, source = ?, source_url = ?, last_seen_at = ? WHERE id = ?')
+        .run(candidate.symbol, candidate.name, candidate.source, candidate.sourceUrl ?? null, candidate.discoveredAt, existing.id);
+      return existing.id;
+    }
+
+    const result = this.sqlite
+      .prepare(
+        'INSERT INTO tokens (chain, mint, symbol, name, source, source_url, first_seen_at, last_seen_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      )
+      .run(
+        candidate.chain,
+        candidate.mint,
+        candidate.symbol,
+        candidate.name,
+        candidate.source,
+        candidate.sourceUrl ?? null,
+        candidate.discoveredAt,
+        candidate.discoveredAt,
+        candidate.tokenCreatedAt
+      );
+
+    return Number(result.lastInsertRowid);
+  }
+
+  insertSnapshot(tokenId: number, candidate: TokenCandidate): number {
+    const result = this.sqlite
+      .prepare(
+        `INSERT INTO token_snapshots (
+          token_id, observed_at, price_usd, liquidity_usd, market_cap_usd,
+          volume_5m_usd, volume_1h_usd, volume_24h_usd,
+          price_change_5m_pct, price_change_1h_pct, buys_5m, sells_5m, raw_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        tokenId,
+        candidate.dataUpdatedAt,
+        candidate.priceUsd,
+        candidate.liquidityUsd,
+        candidate.marketCapUsd,
+        candidate.volume5mUsd,
+        candidate.volume1hUsd,
+        candidate.volume24hUsd,
+        candidate.priceChange5mPct,
+        candidate.priceChange1hPct,
+        candidate.buys5m,
+        candidate.sells5m,
+        JSON.stringify(candidate)
+      );
+    return Number(result.lastInsertRowid);
+  }
+
+  saveScore(score: TokenScoreResult): number {
+    const result = this.sqlite
+      .prepare(
+        'INSERT INTO token_scores (token_id, scored_at, momentum_score, safety_score, social_score, total_score, verdict, reasons_json, red_flags_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      )
+      .run(
+        score.tokenId,
+        score.scoredAt,
+        score.momentumScore,
+        score.safetyScore,
+        score.socialScore,
+        score.totalScore,
+        score.verdict,
+        JSON.stringify(score.reasons),
+        JSON.stringify(score.redFlags)
+      );
+    return Number(result.lastInsertRowid);
+  }
+
+  createProposal(tokenId: number, side: TradeSide, amountUsd: number, verdict: Verdict, reason: string, status: ProposalStatus, safetySnapshot: Record<string, unknown>): number {
+    const result = this.sqlite
+      .prepare(
+        'INSERT INTO trade_proposals (token_id, created_at, side, amount_usd, verdict, reason, status, safety_snapshot_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+      )
+      .run(tokenId, new Date().toISOString(), side, amountUsd, verdict, reason, status, JSON.stringify(safetySnapshot));
+    return Number(result.lastInsertRowid);
+  }
+
+  updateProposalStatus(id: number, status: ProposalStatus): void {
+    this.sqlite.prepare('UPDATE trade_proposals SET status = ? WHERE id = ?').run(status, id);
+  }
+
+  createPaperTrade(tokenId: number, proposalId: number | null, side: TradeSide, amountUsd: number, priceUsd: number, quantity: number, reason: string): number {
+    const result = this.sqlite
+      .prepare(
+        'INSERT INTO paper_trades (token_id, proposal_id, side, amount_usd, price_usd, quantity, created_at, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+      )
+      .run(tokenId, proposalId, side, amountUsd, priceUsd, quantity, new Date().toISOString(), reason);
+    return Number(result.lastInsertRowid);
+  }
+
+  createPosition(tokenId: number, mode: PositionMode, status: PositionStatus, entryPriceUsd: number, quantity: number, amountUsd: number, notes: string | null): number {
+    const now = new Date().toISOString();
+    const result = this.sqlite
+      .prepare(
+        'INSERT INTO positions (token_id, mode, status, opened_at, closed_at, entry_price_usd, exit_price_usd, quantity, amount_usd, realized_pnl_usd, notes) VALUES (?, ?, ?, ?, NULL, ?, NULL, ?, ?, NULL, ?)'
+      )
+      .run(tokenId, mode, status, now, entryPriceUsd, quantity, amountUsd, notes);
+    return Number(result.lastInsertRowid);
+  }
+
+  closePosition(positionId: number, exitPriceUsd: number, realizedPnlUsd: number, notes: string | null): void {
+    this.sqlite
+      .prepare('UPDATE positions SET status = ?, closed_at = ?, exit_price_usd = ?, realized_pnl_usd = ?, notes = COALESCE(?, notes) WHERE id = ?')
+      .run('CLOSED', new Date().toISOString(), exitPriceUsd, realizedPnlUsd, notes, positionId);
+  }
+
+  recordRealTradeAttempt(tokenId: number, proposalId: number | null, side: TradeSide, amountUsd: number, blocked: boolean, blockReason: string, raw: Record<string, unknown>, txSignature: string | null = null): number {
+    const result = this.sqlite
+      .prepare(
+        'INSERT INTO real_trade_attempts (token_id, proposal_id, side, amount_usd, attempted_at, blocked, block_reason, tx_signature, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      )
+      .run(tokenId, proposalId, side, amountUsd, new Date().toISOString(), blocked ? 1 : 0, blockReason, txSignature, JSON.stringify(raw));
+    return Number(result.lastInsertRowid);
+  }
+
+  getLatestSnapshot(tokenId: number): TokenCandidate | null {
+    const row = this.sqlite
+      .prepare('SELECT raw_json FROM token_snapshots WHERE token_id = ? ORDER BY observed_at DESC, id DESC LIMIT 1')
+      .get(tokenId) as { raw_json: string } | undefined;
+    return row ? (JSON.parse(row.raw_json) as TokenCandidate) : null;
+  }
+
+  getLatestScore(tokenId: number): TokenScoreResult | null {
+    const row = this.sqlite
+      .prepare('SELECT * FROM token_scores WHERE token_id = ? ORDER BY scored_at DESC, id DESC LIMIT 1')
+      .get(tokenId) as any;
+    if (!row) return null;
+    return {
+      tokenId: row.token_id,
+      scoredAt: row.scored_at,
+      momentumScore: row.momentum_score,
+      safetyScore: row.safety_score,
+      socialScore: row.social_score,
+      totalScore: row.total_score,
+      verdict: row.verdict,
+      reasons: JSON.parse(row.reasons_json),
+      redFlags: JSON.parse(row.red_flags_json),
+      autopilotBlocked: row.verdict !== 'AUTOPILOT_ELIGIBLE',
+      autopilotBlockers: []
+    };
+  }
+
+  getAllTokenIds(): number[] {
+    return (this.sqlite.prepare('SELECT id FROM tokens ORDER BY id').all() as Array<{ id: number }>).map((row) => row.id);
+  }
+
+  getTokenRecord(tokenId: number): { id: number; chain: string; mint: string; symbol: string; name: string; source: string; source_url: string | null; first_seen_at: string; last_seen_at: string; created_at: string } | null {
+    return (this.sqlite.prepare('SELECT * FROM tokens WHERE id = ?').get(tokenId) as any) ?? null;
+  }
+
+  findTokenByMint(mint: string): { id: number; symbol: string; mint: string } | null {
+    return (this.sqlite.prepare('SELECT id, symbol, mint FROM tokens WHERE mint = ?').get(mint) as any) ?? null;
+  }
+
+  getRankedTokens(limit = 10): Array<any> {
+    return this.sqlite
+      .prepare(
+        `SELECT t.id, t.symbol, t.mint, s.total_score, s.verdict, snap.price_usd, snap.liquidity_usd
+         FROM tokens t
+         JOIN token_scores s ON s.id = (
+           SELECT id FROM token_scores WHERE token_id = t.id ORDER BY scored_at DESC, id DESC LIMIT 1
+         )
+         LEFT JOIN token_snapshots snap ON snap.id = (
+           SELECT id FROM token_snapshots WHERE token_id = t.id ORDER BY observed_at DESC, id DESC LIMIT 1
+         )
+         ORDER BY s.total_score DESC, t.last_seen_at DESC
+         LIMIT ?`
+      )
+      .all(limit);
+  }
+
+  getProposal(id: number): any | null {
+    return (this.sqlite.prepare('SELECT * FROM trade_proposals WHERE id = ?').get(id) as any) ?? null;
+  }
+
+  getLatestOpenPositionByToken(tokenId: number, mode: PositionMode = 'PAPER'): any | null {
+    return (
+      this.sqlite
+        .prepare('SELECT * FROM positions WHERE token_id = ? AND mode = ? AND status = ? ORDER BY opened_at DESC, id DESC LIMIT 1')
+        .get(tokenId, mode, 'OPEN') as any
+    ) ?? null;
+  }
+
+  getOpenPositionCount(mode: PositionMode = 'PAPER'): number {
+    const row = this.sqlite.prepare('SELECT COUNT(*) as count FROM positions WHERE mode = ? AND status = ?').get(mode, 'OPEN') as { count: number };
+    return row.count;
+  }
+
+  getDailyPaperBuyCount(): number {
+    const today = new Date().toISOString().slice(0, 10);
+    const row = this.sqlite
+      .prepare("SELECT COUNT(*) as count FROM paper_trades WHERE side = 'BUY' AND substr(created_at, 1, 10) = ?")
+      .get(today) as { count: number };
+    return row.count;
+  }
+
+  getDailyRealBuyCount(): number {
+    const today = new Date().toISOString().slice(0, 10);
+    const row = this.sqlite
+      .prepare("SELECT COUNT(*) as count FROM real_trade_attempts WHERE side = 'BUY' AND blocked = 0 AND substr(attempted_at, 1, 10) = ?")
+      .get(today) as { count: number };
+    return row.count;
+  }
+
+  getOpenExposureUsd(mode: PositionMode = 'PAPER'): number {
+    const row = this.sqlite
+      .prepare('SELECT COALESCE(SUM(amount_usd), 0) as total FROM positions WHERE mode = ? AND status = ?')
+      .get(mode, 'OPEN') as { total: number };
+    return row.total;
+  }
+
+  getClosedRealizedLossToday(mode: PositionMode = 'PAPER'): number {
+    const today = new Date().toISOString().slice(0, 10);
+    const row = this.sqlite
+      .prepare('SELECT COALESCE(SUM(CASE WHEN realized_pnl_usd < 0 THEN ABS(realized_pnl_usd) ELSE 0 END), 0) as total FROM positions WHERE mode = ? AND status = ? AND substr(closed_at, 1, 10) = ?')
+      .get(mode, 'CLOSED', today) as { total: number };
+    return row.total;
+  }
+
+  listPositions(mode: PositionMode = 'PAPER'): PaperPositionView[] {
+    const rows = this.sqlite
+      .prepare(
+        `SELECT p.*, t.symbol, t.mint, snap.price_usd as latest_price_usd
+         FROM positions p
+         JOIN tokens t ON t.id = p.token_id
+         LEFT JOIN token_snapshots snap ON snap.id = (
+           SELECT id FROM token_snapshots WHERE token_id = p.token_id ORDER BY observed_at DESC, id DESC LIMIT 1
+         )
+         WHERE p.mode = ?
+         ORDER BY p.status ASC, p.opened_at DESC`
+      )
+      .all(mode) as any[];
+
+    return rows.map((row) => {
+      const unrealized = row.status === 'OPEN' && row.latest_price_usd !== null
+        ? row.quantity * (row.latest_price_usd - row.entry_price_usd)
+        : null;
+      return {
+        id: row.id,
+        tokenId: row.token_id,
+        symbol: row.symbol,
+        mint: row.mint,
+        mode: row.mode,
+        status: row.status,
+        openedAt: row.opened_at,
+        closedAt: row.closed_at,
+        entryPriceUsd: row.entry_price_usd,
+        exitPriceUsd: row.exit_price_usd,
+        quantity: row.quantity,
+        amountUsd: row.amount_usd,
+        realizedPnlUsd: row.realized_pnl_usd,
+        latestPriceUsd: row.latest_price_usd,
+        unrealizedPnlUsd: unrealized,
+        notes: row.notes
+      } satisfies PaperPositionView;
+    });
+  }
+
+  getLatestScanTime(): string | null {
+    const row = this.sqlite
+      .prepare("SELECT finished_at FROM run_logs WHERE run_type = 'token:scan' AND status = 'SUCCESS' ORDER BY id DESC LIMIT 1")
+      .get() as { finished_at: string | null } | undefined;
+    return row?.finished_at ?? null;
+  }
+
+  getTokenCount(): number {
+    const row = this.sqlite.prepare('SELECT COUNT(*) as count FROM tokens').get() as { count: number };
+    return row.count;
+  }
+
+  getVerdictCounts(): Record<Verdict, number> {
+    const rows = this.sqlite
+      .prepare(
+        `SELECT verdict, COUNT(*) as count
+         FROM token_scores
+         WHERE id IN (SELECT MAX(id) FROM token_scores GROUP BY token_id)
+         GROUP BY verdict`
+      )
+      .all() as Array<{ verdict: Verdict; count: number }>;
+    return {
+      AVOID: rows.find((row) => row.verdict === 'AVOID')?.count ?? 0,
+      WATCH: rows.find((row) => row.verdict === 'WATCH')?.count ?? 0,
+      PAPER_BUY: rows.find((row) => row.verdict === 'PAPER_BUY')?.count ?? 0,
+      AUTOPILOT_ELIGIBLE: rows.find((row) => row.verdict === 'AUTOPILOT_ELIGIBLE')?.count ?? 0
+    };
+  }
+
+  getClosedPaperPnl(): number {
+    const row = this.sqlite
+      .prepare("SELECT COALESCE(SUM(realized_pnl_usd), 0) as total FROM positions WHERE mode = 'PAPER' AND status = 'CLOSED'")
+      .get() as { total: number };
+    return row.total;
+  }
+
+  getBlockedRealTradeAttempts(): number {
+    const row = this.sqlite.prepare('SELECT COUNT(*) as count FROM real_trade_attempts WHERE blocked = 1').get() as { count: number };
+    return row.count;
+  }
+
+  getSafetyEventSummary(): Record<string, number> {
+    const rows = this.sqlite.prepare('SELECT event_type, COUNT(*) as count FROM safety_events GROUP BY event_type').all() as Array<{ event_type: string; count: number }>;
+    return Object.fromEntries(rows.map((row) => [row.event_type, row.count]));
+  }
+
+  getCandidateByMint(mint: string): { tokenId: number; snapshot: TokenCandidate | null; score: TokenScoreResult | null } | null {
+    const token = this.findTokenByMint(mint);
+    if (!token) return null;
+    return {
+      tokenId: token.id,
+      snapshot: this.getLatestSnapshot(token.id),
+      score: this.getLatestScore(token.id)
+    };
+  }
+}
+
+export function createDb(config: AppConfig): AppDb {
+  return new AppDb(config);
+}
