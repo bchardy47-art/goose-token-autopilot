@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDb } from '../src/db';
 import { makeTestConfig, seedScoredDb } from './helpers';
 import { applyLatestQuoteResultToSnapshot, buildPaperEligibilityDiagnostics, isPaperQuoteReady, isPaperResearchBlocked, runAutoPaper } from '../src/paper/autoPaper';
@@ -8,9 +8,11 @@ import { runPaperReview } from '../src/paper/review';
 import { buildPaperPerformanceReport } from '../src/paper/performance';
 import { buildDailyReport } from '../src/paper/dailyReport';
 import { verifySafety } from '../src/verifySafety';
+import * as scanner from '../src/scanner';
 
 const cleanup: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const dir of cleanup.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -279,33 +281,53 @@ describe('live paper loop', () => {
     db.close();
   });
 
-  it('token:paper-review closes take-profit', async () => {
+  it('paper-review refreshes an open position price before calculating P/L and closes take profit', async () => {
     const { dir, config, db } = await seedScoredDb();
     cleanup.push(dir);
     const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
     db.createQuoteSellabilityCheck(safe.id, 'SAFE11111111111111111111111111111111111111111', new Date().toISOString(), 'jupiter', 'SAFE11111111111111111111111111111111111111111', 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
     await runAutoPaper(db, config);
     const open = db.listPositions('PAPER').find((position) => position.status === 'OPEN')!;
-    const snapshot = db.getLatestSnapshot(open.tokenId)!;
-    snapshot.priceUsd = open.entryPriceUsd * 1.6;
-    db.insertSnapshot(open.tokenId, snapshot);
-    const review = runPaperReview(db, config);
+    const refreshSpy = vi.spyOn(scanner, 'refreshSnapshotsForTokenAddresses').mockImplementation(async () => {
+      const refreshed = db.getLatestSnapshot(open.tokenId)!;
+      refreshed.priceUsd = open.entryPriceUsd * 1.6;
+      db.insertSnapshot(open.tokenId, refreshed);
+      return { refreshed: 1, tokenIds: [open.tokenId] };
+    });
+    const review = await runPaperReview(db, config);
+    expect(refreshSpy).toHaveBeenCalled();
+    expect(review.refreshedCount).toBeGreaterThanOrEqual(1);
     expect(review.decisions.some((decision) => decision.reason === 'take_profit')).toBe(true);
     db.close();
   });
 
-  it('token:paper-review closes stop-loss', async () => {
+  it('if refreshed price hits stop loss, paper-review closes the position', async () => {
     const { dir, config, db } = await seedScoredDb();
     cleanup.push(dir);
     const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
     db.createQuoteSellabilityCheck(safe.id, 'SAFE11111111111111111111111111111111111111111', new Date().toISOString(), 'jupiter', 'SAFE11111111111111111111111111111111111111111', 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
     await runAutoPaper(db, config);
     const open = db.listPositions('PAPER').find((position) => position.status === 'OPEN')!;
-    const snapshot = db.getLatestSnapshot(open.tokenId)!;
-    snapshot.priceUsd = open.entryPriceUsd * 0.5;
-    db.insertSnapshot(open.tokenId, snapshot);
-    const review = runPaperReview(db, config);
+    vi.spyOn(scanner, 'refreshSnapshotsForTokenAddresses').mockImplementation(async () => {
+      const refreshed = db.getLatestSnapshot(open.tokenId)!;
+      refreshed.priceUsd = open.entryPriceUsd * 0.5;
+      db.insertSnapshot(open.tokenId, refreshed);
+      return { refreshed: 1, tokenIds: [open.tokenId] };
+    });
+    const review = await runPaperReview(db, config);
     expect(review.decisions.some((decision) => decision.reason === 'stop_loss')).toBe(true);
+    db.close();
+  });
+
+  it('if refresh fails, paper-review holds/reviews using existing snapshot and does not crash', async () => {
+    const { dir, config, db } = await seedScoredDb({ PAPER_MAX_HOLD_MINUTES: '60' });
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    db.createQuoteSellabilityCheck(safe.id, 'SAFE11111111111111111111111111111111111111111', new Date().toISOString(), 'jupiter', 'SAFE11111111111111111111111111111111111111111', 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
+    await runAutoPaper(db, config);
+    vi.spyOn(scanner, 'refreshSnapshotsForTokenAddresses').mockRejectedValue(new Error('refresh failed'));
+    const review = await runPaperReview(db, config);
+    expect(review.decisions.every((decision) => ['HELD', 'CLOSED'].includes(decision.action))).toBe(true);
     db.close();
   });
 
@@ -317,8 +339,23 @@ describe('live paper loop', () => {
     await runAutoPaper(db, config);
     const open = db.listPositions('PAPER').find((position) => position.status === 'OPEN')!;
     db.sqlite.prepare("UPDATE positions SET opened_at = ? WHERE id = ?").run(new Date(Date.now() - 2 * 60 * 1000).toISOString(), open.id);
-    const review = runPaperReview(db, config);
+    vi.spyOn(scanner, 'refreshSnapshotsForTokenAddresses').mockResolvedValue({ refreshed: 0, tokenIds: [] });
+    const review = await runPaperReview(db, config);
     expect(review.decisions.some((decision) => decision.reason === 'max_hold_time')).toBe(true);
+    db.close();
+  });
+
+  it('paper-review never opens paper positions and never records real trade attempts', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    db.createQuoteSellabilityCheck(safe.id, 'SAFE11111111111111111111111111111111111111111', new Date().toISOString(), 'jupiter', 'SAFE11111111111111111111111111111111111111111', 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
+    await runAutoPaper(db, config);
+    const beforeOpen = db.getOpenPositionCount('PAPER');
+    vi.spyOn(scanner, 'refreshSnapshotsForTokenAddresses').mockResolvedValue({ refreshed: 0, tokenIds: [] });
+    await runPaperReview(db, config);
+    expect(db.getOpenPositionCount('PAPER')).toBeLessThanOrEqual(beforeOpen);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
     db.close();
   });
 

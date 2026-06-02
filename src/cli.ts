@@ -69,7 +69,7 @@ async function main(): Promise<void> {
         console.log(JSON.stringify(buildPaperEligibilityDiagnostics(db, config), null, 2));
         break;
       case 'token:paper-review':
-        console.log(JSON.stringify(runPaperReview(db, config), null, 2));
+        console.log(JSON.stringify(await runPaperReview(db, config), null, 2));
         break;
       case 'token:paper-performance':
         console.log(JSON.stringify(buildPaperPerformanceReport(db), null, 2));

@@ -243,6 +243,19 @@ export class DexScreenerTokenSource implements TokenSource {
     }
   }
 
+  async fetchCandidatesByTokenAddresses(tokenAddresses: string[], observedAt = new Date().toISOString()): Promise<TokenCandidate[]> {
+    try {
+      const unique = [...new Set(tokenAddresses.filter(Boolean))];
+      if (unique.length === 0) return [];
+      const pairMap = await this.fetchPairsForTokens(unique);
+      return unique
+        .map((tokenAddress) => normalizeDexScreenerCandidate({ chainId: 'solana', tokenAddress, updatedAt: observedAt }, pairMap.get(tokenAddress) ?? [], observedAt))
+        .filter((candidate): candidate is TokenCandidate => candidate !== null);
+    } catch {
+      return [];
+    }
+  }
+
   private async fetchProfiles(): Promise<DexScreenerProfile[]> {
     try {
       const response = await this.fetchImpl(this.profilesUrl, {
