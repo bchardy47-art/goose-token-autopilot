@@ -12,6 +12,7 @@
     "token:paper-sell": "tsx src/cli.ts token:paper-sell",
     "token:positions": "tsx src/cli.ts token:positions",
     "token:auto-paper": "tsx src/cli.ts token:auto-paper",
+    "token:paper-eligibility": "tsx src/cli.ts token:paper-eligibility",
     "token:paper-review": "tsx src/cli.ts token:paper-review",
     "token:paper-performance": "tsx src/cli.ts token:paper-performance",
     "token:daily-report": "tsx src/cli.ts token:daily-report",

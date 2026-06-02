@@ -176,6 +176,24 @@ export interface AutoPaperDecision {
   positionId?: number | null;
 }
 
+export interface PaperEligibilityDiagnosticRow {
+  tokenId: number;
+  symbol: string;
+  mint: string;
+  totalScore: number | null;
+  safetyScore: number | null;
+  momentumScore: number | null;
+  liquidityUsd: number | null;
+  sellQuoteAvailable: AvailabilityStatus | null;
+  estimatedSlippageBps: number | null;
+  mintAuthority: AuthorityStatus | null;
+  freezeAuthority: AuthorityStatus | null;
+  holderConcentration: ConcentrationStatus | null;
+  verdict: Verdict | null;
+  blockers: string[];
+  distanceToPaperScore: number | null;
+}
+
 export interface PaperReviewDecision {
   positionId: number;
   symbol: string;

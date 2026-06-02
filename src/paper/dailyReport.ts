@@ -1,6 +1,7 @@
 import type { AppDb } from '../db';
 import type { AppConfig } from '../types';
 import { summarizeWatchOnlySignalAnalysis } from '../watchAnalysis';
+import { buildPaperEligibilityDiagnostics } from './autoPaper';
 
 function topItems(items: string[], limit = 5): Array<{ value: string; count: number }> {
   const counts = new Map<string, number>();
@@ -39,6 +40,8 @@ export function buildDailyReport(db: AppDb, _config: AppConfig): Record<string, 
   const quoteChecks = db.listQuoteSellabilityChecks();
   const latestStates = db.listLatestTokenStates(100);
 
+  const paperEligibilityDiagnostics = buildPaperEligibilityDiagnostics(db, _config);
+
   return {
     tokensScannedToday: scanLogs.reduce((sum, log) => sum + Number(log.summary.scanned ?? 0), 0),
     tokensScoredToday: scoreLogs.reduce((sum, log) => sum + Number(log.summary.scored ?? 0), 0),
@@ -74,6 +77,12 @@ export function buildDailyReport(db: AppDb, _config: AppConfig): Record<string, 
       routeUnavailableCount: quoteChecks.filter((row) => row.routeAvailable === false).length,
       unknownOrErrorCount: quoteChecks.filter((row) => row.sellQuoteStatus === 'UNKNOWN' || row.errorSummary !== null).length,
       highSlippageCount: quoteChecks.filter((row) => (row.estimatedSlippageBps ?? Number.POSITIVE_INFINITY) > 500).length
+    },
+    paperEligibilitySummary: {
+      totalCandidatesEvaluated: paperEligibilityDiagnostics.totalCandidatesEvaluated,
+      eligibleForPaperCount: paperEligibilityDiagnostics.eligibleForPaperCount,
+      paperBuysWouldOpenCount: paperEligibilityDiagnostics.paperBuysWouldOpenCount,
+      topSkipReasons: paperEligibilityDiagnostics.topSkipReasons
     },
     safetyPenaltySummary: {
       riskyHolderCount: latestStates.filter((state) => state.snapshot?.holderConcentration === 'RISKY').length,

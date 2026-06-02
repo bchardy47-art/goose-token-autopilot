@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createDb } from '../src/db';
 import { makeTestConfig, seedScoredDb } from './helpers';
-import { applyLatestQuoteResultToSnapshot, isPaperQuoteReady, runAutoPaper } from '../src/paper/autoPaper';
+import { applyLatestQuoteResultToSnapshot, buildPaperEligibilityDiagnostics, isPaperQuoteReady, runAutoPaper } from '../src/paper/autoPaper';
 import { runPaperReview } from '../src/paper/review';
 import { buildPaperPerformanceReport } from '../src/paper/performance';
 import { buildDailyReport } from '../src/paper/dailyReport';
@@ -217,6 +217,43 @@ describe('live paper loop', () => {
     db.close();
   });
 
+  it('paper-eligibility report does not open paper positions or record real trade attempts', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const report = buildPaperEligibilityDiagnostics(db, config);
+    expect(report).toHaveProperty('totalCandidatesEvaluated');
+    expect(db.getOpenPositionCount('PAPER')).toBe(0);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
+    db.close();
+  });
+
+  it('paper-eligibility report counts quote-ready vs quote-unknown candidates and returns closest candidates', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const watch = db.findTokenByMint('WATCH111111111111111111111111111111111111111')!;
+    const safeSnapshot = db.getLatestSnapshot(safe.id)!;
+    db.createQuoteSellabilityCheck(safe.id, safeSnapshot.mint, new Date().toISOString(), 'jupiter', safeSnapshot.mint, 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
+    const report = buildPaperEligibilityDiagnostics(db, config) as any;
+    expect(report.quoteReadyCount).toBeGreaterThanOrEqual(1);
+    expect(report.quoteUnknownCount).toBeGreaterThanOrEqual(1);
+    expect(Array.isArray(report.topClosestCandidates)).toBe(true);
+    expect(report.topClosestCandidates.length).toBeGreaterThan(0);
+    expect(watch.id).toBeGreaterThan(0);
+    db.close();
+  });
+
+  it('paper-eligibility report counts score gate failures and quote blockers', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const report = buildPaperEligibilityDiagnostics(db, config) as any;
+    expect(report).toHaveProperty('failedTotalScoreCount');
+    expect(report).toHaveProperty('failedSafetyScoreCount');
+    expect(report).toHaveProperty('failedMomentumScoreCount');
+    expect(JSON.stringify(report.topSkipReasons)).toMatch(/sell quote unknown|sell quote unavailable|slippage/);
+    db.close();
+  });
+
   it('daily-report works', async () => {
     const { dir, config, db } = await seedScoredDb();
     cleanup.push(dir);
@@ -224,6 +261,7 @@ describe('live paper loop', () => {
     const report = buildDailyReport(db, config);
     expect(report).toHaveProperty('tokensScannedToday');
     expect(report).toHaveProperty('topRedFlags');
+    expect(report).toHaveProperty('paperEligibilitySummary');
     expect(report).toHaveProperty('finalSafetyStatus');
     db.close();
   });

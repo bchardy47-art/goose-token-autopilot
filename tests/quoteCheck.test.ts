@@ -205,4 +205,13 @@ describe('read-only quote checks', () => {
     expect(score.autopilotBlocked).toBe(true);
     expect(score.redFlags).toContain('sell quote unknown');
   });
+
+  it('quote UNKNOWN/NO still allowed for watch-only research', () => {
+    const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener' });
+    cleanup.push(dir);
+    const unknownScore = scoreToken(1, makeLiveCandidate({ sellQuoteAvailable: 'UNKNOWN' }), config);
+    const noScore = scoreToken(2, makeLiveCandidate({ sellQuoteAvailable: 'NO' }), config);
+    expect(unknownScore.autopilotBlocked).toBe(true);
+    expect(noScore.autopilotBlocked).toBe(true);
+  });
 });

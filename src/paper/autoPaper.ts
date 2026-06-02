@@ -1,7 +1,7 @@
 import { runScan } from '../scanner';
 import { scoreToken } from '../scoring/scoreToken';
 import type { AppDb } from '../db';
-import type { AppConfig, AutoPaperDecision, QuoteSellabilityCheckRow, TokenCandidate, TokenScoreResult } from '../types';
+import type { AppConfig, AutoPaperDecision, PaperEligibilityDiagnosticRow, QuoteSellabilityCheckRow, TokenCandidate, TokenScoreResult } from '../types';
 import { paperBuy } from '../trading/paper';
 import { AppLogger } from '../logger';
 
@@ -80,6 +80,80 @@ function getSkipReason(db: AppDb, config: AppConfig, tokenId: number, snapshot: 
   if (score.safetyScore < config.paperMinSafetyScore) return 'safety score below paper minimum';
   if (score.momentumScore < config.paperMinMomentumScore) return 'momentum score below paper minimum';
   return null;
+}
+
+export function buildPaperEligibilityDiagnostics(db: AppDb, config: AppConfig): Record<string, unknown> {
+  const rows: PaperEligibilityDiagnosticRow[] = db.listLatestTokenStates(50).map((state) => {
+    const latestQuote = db.getLatestQuoteSellabilityCheck(state.tokenId);
+    const preparedSnapshot = applyLatestQuoteResultToSnapshot(state.snapshot, latestQuote, config);
+    const preparedScore = preparedSnapshot ? scoreToken(state.tokenId, preparedSnapshot, config) : state.score;
+    const blockers = [
+      isPaperQuoteReady(preparedSnapshot, preparedScore, config),
+      preparedScore && !['PAPER_BUY', 'AUTOPILOT_ELIGIBLE'].includes(preparedScore.verdict) ? `verdict ${preparedScore.verdict} not eligible` : null,
+      preparedScore && preparedScore.totalScore < config.paperMinTotalScore ? 'total score below paper minimum' : null,
+      preparedScore && preparedScore.safetyScore < config.paperMinSafetyScore ? 'safety score below paper minimum' : null,
+      preparedScore && preparedScore.momentumScore < config.paperMinMomentumScore ? 'momentum score below paper minimum' : null,
+      preparedSnapshot && (preparedSnapshot.liquidityUsd ?? 0) <= 0 ? 'latest liquidity missing' : null,
+      preparedSnapshot && (tokenAgeMinutes(preparedSnapshot) < config.minTokenAgeMin || tokenAgeMinutes(preparedSnapshot) > config.maxTokenAgeHours * 60) ? 'token age outside configured range' : null,
+      ...(preparedScore?.redFlags ?? [])
+    ].filter((value): value is string => Boolean(value));
+
+    return {
+      tokenId: state.tokenId,
+      symbol: state.symbol,
+      mint: state.mint,
+      totalScore: preparedScore?.totalScore ?? null,
+      safetyScore: preparedScore?.safetyScore ?? null,
+      momentumScore: preparedScore?.momentumScore ?? null,
+      liquidityUsd: preparedSnapshot?.liquidityUsd ?? null,
+      sellQuoteAvailable: preparedSnapshot?.sellQuoteAvailable ?? null,
+      estimatedSlippageBps: preparedSnapshot?.estimatedSlippageBps ?? null,
+      mintAuthority: preparedSnapshot?.mintAuthority ?? null,
+      freezeAuthority: preparedSnapshot?.freezeAuthority ?? null,
+      holderConcentration: preparedSnapshot?.holderConcentration ?? null,
+      verdict: preparedScore?.verdict ?? null,
+      blockers,
+      distanceToPaperScore: preparedScore ? Number(Math.max(0, config.paperMinTotalScore - preparedScore.totalScore).toFixed(2)) : null
+    };
+  });
+
+  const topItems = (items: string[], limit = 10) => {
+    const counts = new Map<string, number>();
+    for (const item of items) counts.set(item, (counts.get(item) ?? 0) + 1);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([value, count]) => ({ value, count }));
+  };
+
+  const eligibleForPaper = rows.filter((row) => row.blockers.length === 0);
+  const closest = [...rows]
+    .filter((row) => row.blockers.length > 0)
+    .sort((a, b) => (a.distanceToPaperScore ?? Number.POSITIVE_INFINITY) - (b.distanceToPaperScore ?? Number.POSITIVE_INFINITY))
+    .slice(0, 10);
+
+  return {
+    totalCandidatesEvaluated: rows.length,
+    quoteReadyCount: rows.filter((row) => row.sellQuoteAvailable === 'YES').length,
+    quoteUnknownCount: rows.filter((row) => row.sellQuoteAvailable === 'UNKNOWN' || row.sellQuoteAvailable === null).length,
+    quoteNoRouteCount: rows.filter((row) => row.sellQuoteAvailable === 'NO').length,
+    slippageMissingCount: rows.filter((row) => row.estimatedSlippageBps === null).length,
+    highSlippageCount: rows.filter((row) => (row.estimatedSlippageBps ?? Number.POSITIVE_INFINITY) > config.maxSlippageBps).length,
+    mintUnsafeCount: rows.filter((row) => row.mintAuthority === 'UNSAFE').length,
+    freezeUnsafeCount: rows.filter((row) => row.freezeAuthority === 'UNSAFE').length,
+    holderRiskyCount: rows.filter((row) => row.holderConcentration === 'RISKY').length,
+    holderUnknownCount: rows.filter((row) => row.holderConcentration === 'UNKNOWN' || row.holderConcentration === null).length,
+    failedTotalScoreCount: rows.filter((row) => row.blockers.includes('total score below paper minimum')).length,
+    failedSafetyScoreCount: rows.filter((row) => row.blockers.includes('safety score below paper minimum')).length,
+    failedMomentumScoreCount: rows.filter((row) => row.blockers.includes('momentum score below paper minimum')).length,
+    failedLiquidityCount: rows.filter((row) => row.blockers.includes('latest liquidity missing')).length,
+    failedAgeWindowCount: rows.filter((row) => row.blockers.includes('token age outside configured range')).length,
+    verdictAvoidCount: rows.filter((row) => row.verdict === 'AVOID').length,
+    verdictWatchCount: rows.filter((row) => row.verdict === 'WATCH').length,
+    verdictPaperBuyCount: rows.filter((row) => row.verdict === 'PAPER_BUY').length,
+    eligibleForPaperCount: eligibleForPaper.length,
+    paperBuysWouldOpenCount: Math.max(0, Math.min(eligibleForPaper.length, config.maxDailyPaperBuys - db.getDailyPaperBuyCount(), config.maxOpenPositions - db.getOpenPositionCount('PAPER'))),
+    topSkipReasons: topItems(rows.flatMap((row) => row.blockers)),
+    topClosestCandidates: closest,
+    finalSafetyStatus: 'Real trading remains locked.'
+  };
 }
 
 export async function runAutoPaper(db: AppDb, config: AppConfig, logger = new AppLogger()): Promise<{ decisions: AutoPaperDecision[]; scanned: number; scored: number }> {

@@ -8,7 +8,7 @@ import { paperBuy, paperSell, getPositionsSummary } from './trading/paper';
 import { verifySafety } from './verifySafety';
 import { activateKillSwitch } from './kill';
 import { runAutopilot } from './autopilot/runAutopilot';
-import { runAutoPaper } from './paper/autoPaper';
+import { buildPaperEligibilityDiagnostics, runAutoPaper } from './paper/autoPaper';
 import { runPaperReview } from './paper/review';
 import { buildPaperPerformanceReport } from './paper/performance';
 import { buildDailyReport } from './paper/dailyReport';
@@ -64,6 +64,9 @@ async function main(): Promise<void> {
         break;
       case 'token:auto-paper':
         console.log(JSON.stringify(await runAutoPaper(db, config), null, 2));
+        break;
+      case 'token:paper-eligibility':
+        console.log(JSON.stringify(buildPaperEligibilityDiagnostics(db, config), null, 2));
         break;
       case 'token:paper-review':
         console.log(JSON.stringify(runPaperReview(db, config), null, 2));
