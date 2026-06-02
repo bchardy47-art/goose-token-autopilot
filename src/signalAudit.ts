@@ -1,5 +1,5 @@
 import type { AppDb } from './db';
-import type { AppConfig, TokenCandidate, TokenScoreResult, WatchOnlyCandidate, WatchOnlyOutcome, WatchOnlySignalAnalysis, WatchOnlySignalClass } from './types';
+import type { AppConfig, TokenCandidate, TokenScoreResult, WatchOnlyCandidate, WatchOnlyOutcome, WatchOnlySignalAnalysis, WatchOnlySignalClass, SolanaSafetyEnrichmentRow } from './types';
 
 const ALL_CLASSES: WatchOnlySignalClass[] = ['EARLY_RUNNER', 'LATE_RUNNER', 'INSTANT_DUMP', 'DEAD_NOISE', 'TOO_DANGEROUS'];
 const ALL_WINDOWS = ['15m', '1h', '6h', '24h'] as const;
@@ -11,6 +11,15 @@ interface ParsedWatchCandidateRaw {
   score?: TokenScoreResult;
   snapshot?: TokenCandidate;
   redFlags?: string[];
+}
+
+interface CandidateRowBuildContext {
+  analysis: WatchOnlySignalAnalysis | null;
+  tokenRecord: any | null;
+  entrySnapshot: TokenCandidate | null;
+  latestSnapshot: TokenCandidate | null;
+  entryScore: TokenScoreResult | null;
+  latestEnrichment: SolanaSafetyEnrichmentRow | null;
 }
 
 export interface SignalAuditCandidateRow {
@@ -149,12 +158,9 @@ function preferKnown<T>(...values: Array<T | null | undefined>): T | null {
 
 function buildCandidateRow(
   candidate: WatchOnlyCandidate,
-  analysis: WatchOnlySignalAnalysis | null,
-  tokenRecord: any | null,
-  entrySnapshot: TokenCandidate | null,
-  latestSnapshot: TokenCandidate | null,
-  entryScore: TokenScoreResult | null
+  context: CandidateRowBuildContext
 ): SignalAuditCandidateRow {
+  const { analysis, tokenRecord, entrySnapshot, latestSnapshot, entryScore, latestEnrichment } = context;
   const positiveReasons = reasonsFromScore(entryScore).filter((reason) => /supportive|liquidity|slippage|passes|strong enough|momentum/i.test(reason)).slice(0, 5);
   const parsedRaw = parseParsedRaw(candidate.rawJson);
 
@@ -186,11 +192,11 @@ function buildCandidateRow(
     websitePresent: entrySnapshot?.websitePresent ?? latestSnapshot?.websitePresent ?? null,
     socialsPresent: entrySnapshot?.socialsPresent ?? latestSnapshot?.socialsPresent ?? null,
     metadataPresent: entrySnapshot?.metadataPresent ?? latestSnapshot?.metadataPresent ?? null,
-    freezeAuthority: preferKnown(analysis?.freezeAuthority, latestSnapshot?.freezeAuthority, entrySnapshot?.freezeAuthority),
-    mintAuthority: preferKnown(analysis?.mintAuthority, latestSnapshot?.mintAuthority, entrySnapshot?.mintAuthority),
+    freezeAuthority: preferKnown(latestEnrichment?.freezeAuthority, analysis?.freezeAuthority, latestSnapshot?.freezeAuthority, entrySnapshot?.freezeAuthority),
+    mintAuthority: preferKnown(latestEnrichment?.mintAuthority, analysis?.mintAuthority, latestSnapshot?.mintAuthority, entrySnapshot?.mintAuthority),
     sellQuoteAvailable: preferKnown(analysis?.sellQuoteAvailable, latestSnapshot?.sellQuoteAvailable, entrySnapshot?.sellQuoteAvailable),
-    holderConcentration: preferKnown(latestSnapshot?.holderConcentration, entrySnapshot?.holderConcentration),
-    creatorStatus: preferKnown(latestSnapshot?.creatorStatus, entrySnapshot?.creatorStatus),
+    holderConcentration: preferKnown(latestEnrichment?.holderConcentrationStatus, latestSnapshot?.holderConcentration, entrySnapshot?.holderConcentration),
+    creatorStatus: preferKnown(latestEnrichment?.creatorStatus, latestSnapshot?.creatorStatus, entrySnapshot?.creatorStatus),
     topRedFlags: redFlagsFromParsedRaw(parsedRaw, entryScore),
     topPositiveReasons: positiveReasons,
     sourceUrl: entrySnapshot?.sourceUrl ?? latestSnapshot?.sourceUrl ?? tokenRecord?.source_url ?? null
@@ -272,6 +278,7 @@ export function buildSignalAuditReport(db: AppDb, config: AppConfig, env: NodeJS
   let rows = candidates.map((candidate) => {
     const tokenRecord = db.getTokenRecord(candidate.tokenId);
     const latestSnapshot = db.getLatestSnapshot(candidate.tokenId);
+    const latestEnrichment = db.getLatestSolanaSafetyEnrichment(candidate.tokenId);
     const entryScore = (() => {
       const parsed = parseParsedRaw(candidate.rawJson);
       return parsed.score ?? db.getLatestScore(candidate.tokenId);
@@ -280,7 +287,14 @@ export function buildSignalAuditReport(db: AppDb, config: AppConfig, env: NodeJS
       const parsed = parseParsedRaw(candidate.rawJson);
       return parsed.snapshot ?? latestSnapshot;
     })();
-    return buildCandidateRow(candidate, analysisByCandidate.get(candidate.id) ?? null, tokenRecord, entrySnapshot, latestSnapshot, entryScore);
+    return buildCandidateRow(candidate, {
+      analysis: analysisByCandidate.get(candidate.id) ?? null,
+      tokenRecord,
+      entrySnapshot,
+      latestSnapshot,
+      entryScore,
+      latestEnrichment
+    });
   });
 
   if (classFilter) {
