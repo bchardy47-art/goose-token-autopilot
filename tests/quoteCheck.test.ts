@@ -4,6 +4,7 @@ import { createDb } from '../src/db';
 import { makeTestConfig } from './helpers';
 import { normalizeDexScreenerCandidate } from '../src/scanner/dexscreenerSource';
 import { runQuoteCheck } from '../src/quoteCheck';
+import { applyLatestQuoteResultToSnapshot } from '../src/paper/autoPaper';
 import { verifySafety } from '../src/verifySafety';
 import { scoreToken } from '../src/scoring/scoreToken';
 
@@ -108,8 +109,10 @@ describe('read-only quote checks', () => {
     db.insertSnapshot(tokenId, makeLiveCandidate({ sellQuoteAvailable: 'UNKNOWN', raw: { safetyEnrichment: { decimals: 6 } } }));
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ outAmount: '1000', priceImpactPct: '0.01', routePlan: [{}] }), { status: 200 })) as any);
     const result = await runQuoteCheck(db, config);
+    const applied = applyLatestQuoteResultToSnapshot(db.getLatestSnapshot(tokenId), db.getLatestQuoteSellabilityCheck(tokenId), config);
     expect((result as any).routeAvailableCount).toBe(1);
-    expect(db.getLatestSnapshot(tokenId)?.sellQuoteAvailable).toBe('YES');
+    expect(applied?.sellQuoteAvailable).toBe('YES');
+    expect(applied?.estimatedSlippageBps).toBe(500);
     expect(String(db.getLatestQuoteSellabilityCheck(tokenId)?.rawJson)).toContain('routePlanLength');
     db.close();
   });

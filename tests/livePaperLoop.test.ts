@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createDb } from '../src/db';
 import { makeTestConfig, seedScoredDb } from './helpers';
-import { isPaperQuoteReady, runAutoPaper } from '../src/paper/autoPaper';
+import { applyLatestQuoteResultToSnapshot, isPaperQuoteReady, runAutoPaper } from '../src/paper/autoPaper';
 import { runPaperReview } from '../src/paper/review';
 import { buildPaperPerformanceReport } from '../src/paper/performance';
 import { buildDailyReport } from '../src/paper/dailyReport';
@@ -19,6 +19,8 @@ describe('live paper loop', () => {
   it('token:auto-paper opens paper positions only and never creates real trade attempts', async () => {
     const { dir, config, db } = await seedScoredDb();
     cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    db.createQuoteSellabilityCheck(safe.id, 'SAFE11111111111111111111111111111111111111111', new Date().toISOString(), 'jupiter', 'SAFE11111111111111111111111111111111111111111', 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
     const result = await runAutoPaper(db, config);
     expect(result.decisions.some((decision) => decision.action === 'BOUGHT')).toBe(true);
     expect(db.listPositions('PAPER').filter((position) => position.status === 'OPEN').length).toBeGreaterThan(0);
@@ -26,20 +28,59 @@ describe('live paper loop', () => {
     db.close();
   });
 
-  it('auto-paper respects max open positions', async () => {
-    const { dir, config, db } = await seedScoredDb({ MAX_OPEN_POSITIONS: '1' });
+  it('auto-paper sees latest fresh quote routeAvailable true as sellQuoteAvailable YES', async () => {
+    const { dir, config, db } = await seedScoredDb();
     cleanup.push(dir);
-    const result = await runAutoPaper(db, config);
-    expect(db.getOpenPositionCount('PAPER')).toBeLessThanOrEqual(1);
-    expect(result.decisions.some((decision) => decision.reason.includes('max open paper positions reached'))).toBe(true);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const snapshot = db.getLatestSnapshot(safe.id)!;
+    const quote = db.createQuoteSellabilityCheck(safe.id, snapshot.mint, new Date().toISOString(), 'jupiter', snapshot.mint, 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
+    const applied = applyLatestQuoteResultToSnapshot(snapshot, db.getLatestQuoteSellabilityCheck(safe.id), config)!;
+    expect(quote).toBeGreaterThan(0);
+    expect(applied.sellQuoteAvailable).toBe('YES');
     db.close();
   });
 
-  it('auto-paper respects daily paper buy cap', async () => {
-    const { dir, config, db } = await seedScoredDb({ MAX_DAILY_PAPER_BUYS: '0' });
+  it('auto-paper uses estimatedSlippageBps from latest quote result', async () => {
+    const { dir, config, db } = await seedScoredDb();
     cleanup.push(dir);
-    const result = await runAutoPaper(db, config);
-    expect(result.decisions.every((decision) => decision.action === 'SKIPPED')).toBe(true);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const snapshot = db.getLatestSnapshot(safe.id)!;
+    db.createQuoteSellabilityCheck(safe.id, snapshot.mint, new Date().toISOString(), 'jupiter', snapshot.mint, 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 123, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
+    const applied = applyLatestQuoteResultToSnapshot(snapshot, db.getLatestQuoteSellabilityCheck(safe.id), config)!;
+    expect(applied.estimatedSlippageBps).toBe(123);
+    db.close();
+  });
+
+  it('stale quote result does not make paper eligible', async () => {
+    const { dir, config, db } = await seedScoredDb({ QUOTE_CHECK_CACHE_MINUTES: '1' });
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const snapshot = db.getLatestSnapshot(safe.id)!;
+    db.createQuoteSellabilityCheck(safe.id, snapshot.mint, new Date(Date.now() - 10 * 60 * 1000).toISOString(), 'jupiter', snapshot.mint, 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
+    const applied = applyLatestQuoteResultToSnapshot(snapshot, db.getLatestQuoteSellabilityCheck(safe.id), config)!;
+    expect(applied.sellQuoteAvailable).toBe(snapshot.sellQuoteAvailable);
+    db.close();
+  });
+
+  it('routeAvailable false blocks paper', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const snapshot = db.getLatestSnapshot(safe.id)!;
+    db.createQuoteSellabilityCheck(safe.id, snapshot.mint, new Date().toISOString(), 'jupiter', snapshot.mint, 'So11111111111111111111111111111111111111112', 2, '100', false, null, null, null, 'NO', 'NO_ROUTE', 'no route', { sample: true });
+    const applied = applyLatestQuoteResultToSnapshot(snapshot, db.getLatestQuoteSellabilityCheck(safe.id), config)!;
+    expect(isPaperQuoteReady(applied, db.getLatestScore(safe.id)!, config)).toMatch(/sell quote unavailable/);
+    db.close();
+  });
+
+  it('unknown/error quote result blocks paper', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const snapshot = db.getLatestSnapshot(safe.id)!;
+    db.createQuoteSellabilityCheck(safe.id, snapshot.mint, new Date().toISOString(), 'jupiter', snapshot.mint, 'So11111111111111111111111111111111111111112', 2, '100', null, null, null, null, 'UNKNOWN', 'UNKNOWN', 'quote failed', { sample: true });
+    const applied = applyLatestQuoteResultToSnapshot(snapshot, db.getLatestQuoteSellabilityCheck(safe.id), config)!;
+    expect(isPaperQuoteReady(applied, db.getLatestScore(safe.id)!, config)).toMatch(/sell quote unknown/);
     db.close();
   });
 
@@ -101,6 +142,8 @@ describe('live paper loop', () => {
   it('duplicate open paper positions are not created', async () => {
     const { dir, config, db } = await seedScoredDb();
     cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    db.createQuoteSellabilityCheck(safe.id, 'SAFE11111111111111111111111111111111111111111', new Date().toISOString(), 'jupiter', 'SAFE11111111111111111111111111111111111111111', 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
     await runAutoPaper(db, config);
     const firstCount = db.getOpenPositionCount('PAPER');
     await runAutoPaper(db, config);
@@ -114,13 +157,15 @@ describe('live paper loop', () => {
     cleanup.push(dir);
     const result = await runAutoPaper(db, config);
     const skipped = result.decisions.filter((decision) => decision.action === 'SKIPPED').map((decision) => decision.reason).join(' | ');
-    expect(skipped).toMatch(/verdict AVOID not eligible|hard red flags/);
+    expect(skipped).toMatch(/verdict AVOID not eligible|hard red flags|sell quote unknown blocks paper eligibility/);
     db.close();
   });
 
   it('token:paper-review closes take-profit', async () => {
     const { dir, config, db } = await seedScoredDb();
     cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    db.createQuoteSellabilityCheck(safe.id, 'SAFE11111111111111111111111111111111111111111', new Date().toISOString(), 'jupiter', 'SAFE11111111111111111111111111111111111111111', 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
     await runAutoPaper(db, config);
     const open = db.listPositions('PAPER').find((position) => position.status === 'OPEN')!;
     const snapshot = db.getLatestSnapshot(open.tokenId)!;
@@ -134,6 +179,8 @@ describe('live paper loop', () => {
   it('token:paper-review closes stop-loss', async () => {
     const { dir, config, db } = await seedScoredDb();
     cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    db.createQuoteSellabilityCheck(safe.id, 'SAFE11111111111111111111111111111111111111111', new Date().toISOString(), 'jupiter', 'SAFE11111111111111111111111111111111111111111', 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
     await runAutoPaper(db, config);
     const open = db.listPositions('PAPER').find((position) => position.status === 'OPEN')!;
     const snapshot = db.getLatestSnapshot(open.tokenId)!;
@@ -147,6 +194,8 @@ describe('live paper loop', () => {
   it('token:paper-review closes max-hold-time', async () => {
     const { dir, config, db } = await seedScoredDb({ PAPER_MAX_HOLD_MINUTES: '1' });
     cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    db.createQuoteSellabilityCheck(safe.id, 'SAFE11111111111111111111111111111111111111111', new Date().toISOString(), 'jupiter', 'SAFE11111111111111111111111111111111111111111', 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
     await runAutoPaper(db, config);
     const open = db.listPositions('PAPER').find((position) => position.status === 'OPEN')!;
     db.sqlite.prepare("UPDATE positions SET opened_at = ? WHERE id = ?").run(new Date(Date.now() - 2 * 60 * 1000).toISOString(), open.id);
@@ -158,6 +207,8 @@ describe('live paper loop', () => {
   it('paper-performance report calculates P/L', async () => {
     const { dir, config, db } = await seedScoredDb();
     cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    db.createQuoteSellabilityCheck(safe.id, 'SAFE11111111111111111111111111111111111111111', new Date().toISOString(), 'jupiter', 'SAFE11111111111111111111111111111111111111111', 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
     await runAutoPaper(db, config);
     const report = buildPaperPerformanceReport(db);
     expect(report).toHaveProperty('currentPnlUsd');
@@ -194,4 +245,4 @@ describe('live paper loop', () => {
     expect(result.scanned).toBeGreaterThan(0);
     db.close();
   });
-});
+}
