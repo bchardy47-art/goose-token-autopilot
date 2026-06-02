@@ -86,6 +86,14 @@ function moreCommon(left: SignalAuditCandidateRow[], right: SignalAuditCandidate
     .slice(0, 5);
 }
 
+function knownPercent(rows: SignalAuditCandidateRow[], selector: (row: SignalAuditCandidateRow) => string | null): number | null {
+  if (rows.length === 0) return null;
+  return Number((((rows.filter((row) => {
+    const value = selector(row);
+    return value !== null && value !== 'UNKNOWN';
+  }).length / rows.length) * 100)).toFixed(2));
+}
+
 function metricBlock(left: SignalAuditCandidateRow[], right: SignalAuditCandidateRow[], selector: (row: SignalAuditCandidateRow) => number | null | undefined) {
   const leftAverage = average(left.map(selector));
   const rightAverage = average(right.map(selector));
@@ -144,7 +152,13 @@ export function buildSignalCompareReport(db: AppDb, config: AppConfig, env: Node
       'Research only',
       'No trade readiness',
       'Need safety enrichment before paper/live trading'
-    ]
+    ],
+    knownSafetyFieldComparison: {
+      freezeAuthorityKnownPct: { left: knownPercent(leftRows, (row) => row.freezeAuthority), right: knownPercent(rightRows, (row) => row.freezeAuthority) },
+      mintAuthorityKnownPct: { left: knownPercent(leftRows, (row) => row.mintAuthority), right: knownPercent(rightRows, (row) => row.mintAuthority) },
+      sellQuoteAvailableKnownPct: { left: knownPercent(leftRows, (row) => row.sellQuoteAvailable), right: knownPercent(rightRows, (row) => row.sellQuoteAvailable) },
+      holderConcentrationKnownPct: { left: knownPercent(leftRows, (row) => row.holderConcentration), right: knownPercent(rightRows, (row) => row.holderConcentration) }
+    }
   };
 
   const metricComparison = {

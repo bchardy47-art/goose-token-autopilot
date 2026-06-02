@@ -46,12 +46,13 @@ export function evaluateSafety(candidate: TokenCandidate, config: AppConfig): Sa
   if (dataAgeMinutes(candidate) > 15) addRedFlag('data stale');
   if (!candidate.metadataPresent) addRedFlag('token metadata missing');
   if ((candidate.movedBeforeDiscoveryPct ?? Number.POSITIVE_INFINITY) > config.maxChasePct) addRedFlag('token moved above MAX_CHASE_PCT before discovery');
-  if (candidate.holderConcentration === 'RISKY') addRedFlag('suspicious holder concentration placeholder');
+  if (candidate.holderConcentration === 'RISKY') addRedFlag('holder concentration high');
   if (candidate.holderConcentration === 'UNKNOWN') {
-    addRedFlag('suspicious holder concentration placeholder');
+    addRedFlag('holder concentration unknown');
     addBlocker('unknown holder concentration blocks autopilot');
   }
-  if (candidate.creatorStatus !== 'SAFE') addRedFlag('suspicious creator placeholder');
+  if (candidate.creatorStatus === 'RISKY') addRedFlag('creator risk flagged');
+  if (candidate.creatorStatus === 'UNKNOWN') addRedFlag('creator status unknown');
 
   const age = ageMinutes(candidate);
   if (age < config.minTokenAgeMin) addBlocker('token is younger than MIN_TOKEN_AGE_MIN');

@@ -176,7 +176,7 @@ describe('DexScreener adapter', () => {
     expect(score.redFlags).toContain('freeze authority unknown');
     expect(score.redFlags).toContain('mint authority unknown');
     expect(score.redFlags).toContain('sell quote unavailable');
-    expect(score.redFlags).toContain('suspicious holder concentration placeholder');
+    expect(score.redFlags).toContain('holder concentration unknown');
     expect(score.autopilotBlocked).toBe(true);
   });
 });

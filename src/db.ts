@@ -18,7 +18,12 @@ import type {
   WatchOnlyCandidate,
   WatchOnlyOutcome,
   WatchOnlySignalAnalysis,
-  WatchOnlySignalClass
+  WatchOnlySignalClass,
+  SolanaSafetyEnrichmentRow,
+  HolderConcentrationLevel,
+  AuthorityStatus,
+  CreatorStatus,
+  ConcentrationStatus
 } from './types';
 
 function toToday(): string {
@@ -487,6 +492,121 @@ export class AppDb {
       mintAuthority: row.mint_authority,
       freezeAuthority: row.freeze_authority,
       reason: row.reason,
+      notes: row.notes,
+      rawJson: row.raw_json
+    }));
+  }
+
+  createSolanaSafetyEnrichment(
+    tokenId: number,
+    mint: string,
+    checkedAt: string,
+    freezeAuthority: AuthorityStatus | null,
+    mintAuthority: AuthorityStatus | null,
+    mintAuthorityRenounced: boolean | null,
+    freezeAuthorityRenounced: boolean | null,
+    tokenProgram: string | null,
+    supply: string | null,
+    decimals: number | null,
+    holderCount: number | null,
+    topHolderPct: number | null,
+    top10HolderPct: number | null,
+    holderConcentrationLevel: HolderConcentrationLevel,
+    holderConcentrationStatus: ConcentrationStatus | null,
+    creatorAddress: string | null,
+    creatorStatus: CreatorStatus | null,
+    lpOrPoolAddress: string | null,
+    poolAgeMinutes: number | null,
+    safetyStatus: string | null,
+    redFlags: string[],
+    notes: string | null,
+    raw: Record<string, unknown>
+  ): number {
+    const result = this.sqlite.prepare(
+      'INSERT INTO solana_safety_enrichments (token_id, mint, checked_at, freeze_authority, mint_authority, mint_authority_renounced, freeze_authority_renounced, token_program, supply, decimals, holder_count, top_holder_pct, top_10_holder_pct, holder_concentration_level, holder_concentration_status, creator_address, creator_status, lp_or_pool_address, pool_age_minutes, safety_status, red_flags_json, notes, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      tokenId,
+      mint,
+      checkedAt,
+      freezeAuthority,
+      mintAuthority,
+      mintAuthorityRenounced === null ? null : (mintAuthorityRenounced ? 1 : 0),
+      freezeAuthorityRenounced === null ? null : (freezeAuthorityRenounced ? 1 : 0),
+      tokenProgram,
+      supply,
+      decimals,
+      holderCount,
+      topHolderPct,
+      top10HolderPct,
+      holderConcentrationLevel,
+      holderConcentrationStatus,
+      creatorAddress,
+      creatorStatus,
+      lpOrPoolAddress,
+      poolAgeMinutes,
+      safetyStatus,
+      JSON.stringify(redFlags),
+      notes,
+      JSON.stringify(raw)
+    );
+    return Number(result.lastInsertRowid);
+  }
+
+  getLatestSolanaSafetyEnrichment(tokenId: number): SolanaSafetyEnrichmentRow | null {
+    const row = this.sqlite.prepare('SELECT * FROM solana_safety_enrichments WHERE token_id = ? ORDER BY checked_at DESC, id DESC LIMIT 1').get(tokenId) as any;
+    if (!row) return null;
+    return {
+      id: row.id,
+      tokenId: row.token_id,
+      mint: row.mint,
+      checkedAt: row.checked_at,
+      freezeAuthority: row.freeze_authority,
+      mintAuthority: row.mint_authority,
+      mintAuthorityRenounced: row.mint_authority_renounced === null ? null : Boolean(row.mint_authority_renounced),
+      freezeAuthorityRenounced: row.freeze_authority_renounced === null ? null : Boolean(row.freeze_authority_renounced),
+      tokenProgram: row.token_program,
+      supply: row.supply,
+      decimals: row.decimals,
+      holderCount: row.holder_count,
+      topHolderPct: row.top_holder_pct,
+      top10HolderPct: row.top_10_holder_pct,
+      holderConcentrationLevel: row.holder_concentration_level,
+      holderConcentrationStatus: row.holder_concentration_status,
+      creatorAddress: row.creator_address,
+      creatorStatus: row.creator_status,
+      lpOrPoolAddress: row.lp_or_pool_address,
+      poolAgeMinutes: row.pool_age_minutes,
+      safetyStatus: row.safety_status,
+      redFlagsJson: row.red_flags_json,
+      notes: row.notes,
+      rawJson: row.raw_json
+    };
+  }
+
+  listSolanaSafetyEnrichments(): SolanaSafetyEnrichmentRow[] {
+    return this.sqlite.prepare('SELECT * FROM solana_safety_enrichments ORDER BY checked_at DESC, id DESC').all().map((row: any) => ({
+      id: row.id,
+      tokenId: row.token_id,
+      mint: row.mint,
+      checkedAt: row.checked_at,
+      freezeAuthority: row.freeze_authority,
+      mintAuthority: row.mint_authority,
+      mintAuthorityRenounced: row.mint_authority_renounced === null ? null : Boolean(row.mint_authority_renounced),
+      freezeAuthorityRenounced: row.freeze_authority_renounced === null ? null : Boolean(row.freeze_authority_renounced),
+      tokenProgram: row.token_program,
+      supply: row.supply,
+      decimals: row.decimals,
+      holderCount: row.holder_count,
+      topHolderPct: row.top_holder_pct,
+      top10HolderPct: row.top_10_holder_pct,
+      holderConcentrationLevel: row.holder_concentration_level,
+      holderConcentrationStatus: row.holder_concentration_status,
+      creatorAddress: row.creator_address,
+      creatorStatus: row.creator_status,
+      lpOrPoolAddress: row.lp_or_pool_address,
+      poolAgeMinutes: row.pool_age_minutes,
+      safetyStatus: row.safety_status,
+      redFlagsJson: row.red_flags_json,
       notes: row.notes,
       rawJson: row.raw_json
     }));

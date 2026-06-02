@@ -146,6 +146,7 @@ describe('signal compare', () => {
     seedCandidate(db, { mint: 'Cmp222', symbol: 'DUMP', signalClass: 'INSTANT_DUMP', bestGainPct: 5, worstDrawdownPct: -40, movedBeforeDiscoveryPct: 20 });
     const report = buildSignalCompareReport(db, config);
     expect(report.booleanProfileComparison).toHaveProperty('websitePresent');
+    expect(report.summary).toHaveProperty('knownSafetyFieldComparison');
     db.close();
   });
 

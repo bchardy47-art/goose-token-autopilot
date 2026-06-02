@@ -80,12 +80,25 @@ function safeEnrichment(): SolanaSafetyEnrichment {
   return {
     mintAuthority: 'SAFE',
     freezeAuthority: 'SAFE',
+    mintAuthorityRenounced: true,
+    freezeAuthorityRenounced: true,
+    tokenProgram: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+    supply: '1000000000',
+    decimals: 6,
     metadataStatus: 'YES',
     metadataPresent: true,
+    holderCount: 20,
+    topHolderPct: 5,
+    top10HolderPct: 20,
+    holderConcentrationLevel: 'LOW',
     holderConcentration: 'SAFE',
+    creatorAddress: null,
     creatorStatus: 'SAFE',
+    lpOrPoolAddress: 'LivePair111',
+    poolAgeMinutes: 60,
     sellQuoteAvailable: 'YES',
     estimatedSlippageBps: 120,
+    redFlags: [],
     notes: ['safe enrichment'],
     raw: { kind: 'safe' }
   };
@@ -127,7 +140,9 @@ describe('Solana safety enrichment', () => {
     });
 
     expect(safeResult.mintAuthority).toBe('SAFE');
+    expect(safeResult.mintAuthorityRenounced).toBe(true);
     expect(unsafeResult.mintAuthority).toBe('UNSAFE');
+    expect(unsafeResult.mintAuthorityRenounced).toBe(false);
   });
 
   it('disabled freeze authority becomes SAFE and active freeze authority becomes UNSAFE', async () => {
@@ -165,7 +180,9 @@ describe('Solana safety enrichment', () => {
     });
 
     expect(safeResult.freezeAuthority).toBe('SAFE');
+    expect(safeResult.freezeAuthorityRenounced).toBe(true);
     expect(unsafeResult.freezeAuthority).toBe('UNSAFE');
+    expect(unsafeResult.freezeAuthorityRenounced).toBe(false);
   });
 
   it('RPC failure returns UNKNOWN and blocks autopilot', async () => {
@@ -207,12 +224,25 @@ describe('Solana safety enrichment', () => {
     const riskyCandidate = applyEnrichment(buildLiveCandidate(), {
       mintAuthority: 'UNSAFE',
       freezeAuthority: 'UNSAFE',
+      mintAuthorityRenounced: false,
+      freezeAuthorityRenounced: false,
+      tokenProgram: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+      supply: '1000000000',
+      decimals: 6,
       metadataStatus: 'NO',
       metadataPresent: false,
+      holderCount: 4,
+      topHolderPct: 60,
+      top10HolderPct: 95,
+      holderConcentrationLevel: 'HIGH',
       holderConcentration: 'RISKY',
+      creatorAddress: null,
       creatorStatus: 'RISKY',
+      lpOrPoolAddress: 'LivePair111',
+      poolAgeMinutes: 60,
       sellQuoteAvailable: 'NO',
       estimatedSlippageBps: 1200,
+      redFlags: ['mint authority active', 'freeze authority active', 'high holder concentration'],
       notes: ['risky enrichment'],
       raw: { kind: 'risky' }
     });
@@ -222,5 +252,31 @@ describe('Solana safety enrichment', () => {
     expect(score.redFlags).toContain('mint authority active');
     expect(score.redFlags).toContain('freeze authority active');
     expect(score.redFlags).toContain('sell quote unavailable');
+    expect(score.redFlags).toContain('holder concentration high');
+  });
+
+  it('holder concentration high is derived as risky', async () => {
+    const { dir, config } = makeTestConfig({ ENABLE_SOLANA_SAFETY_ENRICHMENT: 'true', SOLANA_RPC_URL: 'https://rpc.example.test' });
+    cleanup.push(dir);
+
+    const result = await getSolanaSafetyEnrichment('HighHolderMint', config, {
+      rpcUrl: 'https://rpc.example.test',
+      enableQuoteCheck: false,
+      rpcFetch: async (_url, init) => {
+        const body = JSON.parse(String(init?.body));
+        if (body.method === 'getAccountInfo') {
+          return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { value: { owner: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', data: [createMintAccountBase64({ mintAuthorityActive: false, freezeAuthorityActive: false, supply: 1_000_000_000n, decimals: 6 }), 'base64'] } } }), { status: 200 });
+        }
+        if (body.method === 'getTokenLargestAccounts') {
+          return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { value: [{ uiAmount: 700 }, { uiAmount: 80 }, { uiAmount: 60 }, { uiAmount: 50 }, { uiAmount: 40 }] } }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: [] }), { status: 200 });
+      }
+    });
+
+    expect(result.holderConcentrationLevel).toBe('HIGH');
+    expect(result.holderConcentration).toBe('RISKY');
+    expect(result.topHolderPct).toBeGreaterThan(50);
+    expect(result.top10HolderPct).toBeGreaterThan(80);
   });
 });

@@ -135,6 +135,18 @@ function redFlagsFromParsedRaw(parsedRaw: ParsedWatchCandidateRaw, score: TokenS
   return (parsedRaw.redFlags ?? score?.redFlags ?? []).slice(0, 5);
 }
 
+function preferKnown<T>(...values: Array<T | null | undefined>): T | null {
+  for (const value of values) {
+    if (value === undefined || value === null) continue;
+    if (value === 'UNKNOWN') continue;
+    return value as T;
+  }
+  for (const value of values) {
+    if (value !== undefined && value !== null) return value as T;
+  }
+  return null;
+}
+
 function buildCandidateRow(
   candidate: WatchOnlyCandidate,
   analysis: WatchOnlySignalAnalysis | null,
@@ -174,11 +186,11 @@ function buildCandidateRow(
     websitePresent: entrySnapshot?.websitePresent ?? latestSnapshot?.websitePresent ?? null,
     socialsPresent: entrySnapshot?.socialsPresent ?? latestSnapshot?.socialsPresent ?? null,
     metadataPresent: entrySnapshot?.metadataPresent ?? latestSnapshot?.metadataPresent ?? null,
-    freezeAuthority: analysis?.freezeAuthority ?? entrySnapshot?.freezeAuthority ?? latestSnapshot?.freezeAuthority ?? null,
-    mintAuthority: analysis?.mintAuthority ?? entrySnapshot?.mintAuthority ?? latestSnapshot?.mintAuthority ?? null,
-    sellQuoteAvailable: analysis?.sellQuoteAvailable ?? entrySnapshot?.sellQuoteAvailable ?? latestSnapshot?.sellQuoteAvailable ?? null,
-    holderConcentration: entrySnapshot?.holderConcentration ?? latestSnapshot?.holderConcentration ?? null,
-    creatorStatus: entrySnapshot?.creatorStatus ?? latestSnapshot?.creatorStatus ?? null,
+    freezeAuthority: preferKnown(analysis?.freezeAuthority, latestSnapshot?.freezeAuthority, entrySnapshot?.freezeAuthority),
+    mintAuthority: preferKnown(analysis?.mintAuthority, latestSnapshot?.mintAuthority, entrySnapshot?.mintAuthority),
+    sellQuoteAvailable: preferKnown(analysis?.sellQuoteAvailable, latestSnapshot?.sellQuoteAvailable, entrySnapshot?.sellQuoteAvailable),
+    holderConcentration: preferKnown(latestSnapshot?.holderConcentration, entrySnapshot?.holderConcentration),
+    creatorStatus: preferKnown(latestSnapshot?.creatorStatus, entrySnapshot?.creatorStatus),
     topRedFlags: redFlagsFromParsedRaw(parsedRaw, entryScore),
     topPositiveReasons: positiveReasons,
     sourceUrl: entrySnapshot?.sourceUrl ?? latestSnapshot?.sourceUrl ?? tokenRecord?.source_url ?? null

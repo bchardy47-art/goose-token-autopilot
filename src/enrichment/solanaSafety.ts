@@ -1,4 +1,4 @@
-import type { AppConfig, AuthorityStatus, AvailabilityStatus, ConcentrationStatus, CreatorStatus, MetadataPresence, TokenCandidate } from '../types';
+import type { AppConfig, AuthorityStatus, AvailabilityStatus, ConcentrationStatus, CreatorStatus, HolderConcentrationLevel, MetadataPresence, TokenCandidate } from '../types';
 
 export interface SolanaMintAccountInfo {
   mintAuthorityOption?: number;
@@ -20,12 +20,25 @@ export interface SolanaLargestHolderInfo {
 export interface SolanaSafetyEnrichment {
   mintAuthority: AuthorityStatus;
   freezeAuthority: AuthorityStatus;
+  mintAuthorityRenounced: boolean | null;
+  freezeAuthorityRenounced: boolean | null;
+  tokenProgram: string | null;
+  supply: string | null;
+  decimals: number | null;
   metadataStatus: MetadataPresence;
   metadataPresent: boolean;
+  holderCount: number | null;
+  topHolderPct: number | null;
+  top10HolderPct: number | null;
+  holderConcentrationLevel: HolderConcentrationLevel;
   holderConcentration: ConcentrationStatus;
+  creatorAddress: string | null;
   creatorStatus: CreatorStatus;
+  lpOrPoolAddress: string | null;
+  poolAgeMinutes: number | null;
   sellQuoteAvailable: AvailabilityStatus;
   estimatedSlippageBps: number | null;
+  redFlags: string[];
   notes: string[];
   raw: Record<string, unknown>;
 }
@@ -36,10 +49,27 @@ export interface SolanaSafetyOptions {
   rpcUrl?: string;
   quoteBaseUrl?: string;
   enableQuoteCheck?: boolean;
+  timeoutMs?: number;
 }
 
 const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 const DEFAULT_QUOTE_BASE_URL = 'https://api.dexscreener.com/latest/dex/tokens';
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`timeout after ${timeoutMs}ms`)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
 
 function decodeBase64(base64: string): Uint8Array {
   return Uint8Array.from(Buffer.from(base64, 'base64'));
@@ -82,36 +112,65 @@ export function deriveAuthorityStatus(option: number | undefined, authority: str
   return 'UNSAFE';
 }
 
-export function deriveHolderConcentration(largestHolders: SolanaLargestHolderInfo[] | null, mintInfo: SolanaMintAccountInfo | null): { status: ConcentrationStatus; notes: string[] } {
+export function deriveHolderConcentration(
+  largestHolders: SolanaLargestHolderInfo[] | null,
+  mintInfo: SolanaMintAccountInfo | null
+): { status: ConcentrationStatus; level: HolderConcentrationLevel; holderCount: number | null; topHolderPct: number | null; top10HolderPct: number | null; notes: string[] } {
   if (!largestHolders || largestHolders.length === 0 || !mintInfo?.supply) {
-    return { status: 'UNKNOWN', notes: ['holder concentration data unavailable'] };
+    return { status: 'UNKNOWN', level: 'UNKNOWN', holderCount: null, topHolderPct: null, top10HolderPct: null, notes: ['holder concentration data unavailable'] };
   }
 
   const supplyRaw = Number(mintInfo.supply);
   if (!Number.isFinite(supplyRaw) || supplyRaw <= 0) {
-    return { status: 'UNKNOWN', notes: ['mint supply unavailable for holder concentration'] };
+    return { status: 'UNKNOWN', level: 'UNKNOWN', holderCount: largestHolders.length, topHolderPct: null, top10HolderPct: null, notes: ['mint supply unavailable for holder concentration'] };
   }
 
   const decimals = mintInfo.decimals ?? 0;
   const normalizedSupply = supplyRaw / Math.pow(10, decimals);
   if (!Number.isFinite(normalizedSupply) || normalizedSupply <= 0) {
-    return { status: 'UNKNOWN', notes: ['normalized supply unavailable for holder concentration'] };
+    return { status: 'UNKNOWN', level: 'UNKNOWN', holderCount: largestHolders.length, topHolderPct: null, top10HolderPct: null, notes: ['normalized supply unavailable for holder concentration'] };
   }
 
-  const topHolderAmount = largestHolders
+  const amounts = largestHolders
     .map((holder) => holder.uiAmount ?? (holder.uiAmountString ? Number(holder.uiAmountString) : Number(holder.amount ?? 0)))
-    .find((amount) => Number.isFinite(amount) && amount >= 0);
+    .filter((amount): amount is number => Number.isFinite(amount) && amount >= 0);
 
-  if (topHolderAmount === undefined) {
-    return { status: 'UNKNOWN', notes: ['largest holder amount unavailable'] };
+  if (amounts.length === 0) {
+    return { status: 'UNKNOWN', level: 'UNKNOWN', holderCount: largestHolders.length, topHolderPct: null, top10HolderPct: null, notes: ['largest holder amount unavailable'] };
   }
 
-  const topHolderPct = (topHolderAmount / normalizedSupply) * 100;
-  if (topHolderPct >= 25) {
-    return { status: 'RISKY', notes: [`top holder concentration high at ${topHolderPct.toFixed(2)}%`] };
+  const topHolderPct = Number(((amounts[0] / normalizedSupply) * 100).toFixed(4));
+  const top10HolderPct = Number(((amounts.slice(0, 10).reduce((sum, value) => sum + value, 0) / normalizedSupply) * 100).toFixed(4));
+
+  if (top10HolderPct >= 80 || topHolderPct >= 50) {
+    return {
+      status: 'RISKY',
+      level: 'HIGH',
+      holderCount: largestHolders.length,
+      topHolderPct,
+      top10HolderPct,
+      notes: [`holder concentration high: top holder ${topHolderPct.toFixed(2)}%, top 10 ${top10HolderPct.toFixed(2)}%`]
+    };
+  }
+  if (top10HolderPct >= 50 || topHolderPct >= 20) {
+    return {
+      status: 'RISKY',
+      level: 'MEDIUM',
+      holderCount: largestHolders.length,
+      topHolderPct,
+      top10HolderPct,
+      notes: [`holder concentration medium: top holder ${topHolderPct.toFixed(2)}%, top 10 ${top10HolderPct.toFixed(2)}%`]
+    };
   }
 
-  return { status: 'SAFE', notes: [`top holder concentration acceptable at ${topHolderPct.toFixed(2)}%`] };
+  return {
+    status: 'SAFE',
+    level: 'LOW',
+    holderCount: largestHolders.length,
+    topHolderPct,
+    top10HolderPct,
+    notes: [`holder concentration low: top holder ${topHolderPct.toFixed(2)}%, top 10 ${top10HolderPct.toFixed(2)}%`]
+  };
 }
 
 async function rpcRequest(fetchImpl: typeof fetch, rpcUrl: string, method: string, params: unknown[]): Promise<any> {
@@ -196,17 +255,32 @@ export async function getSolanaSafetyEnrichment(mint: string, config: AppConfig,
   const rpcUrl = options.rpcUrl ?? config.solanaRpcUrl;
   const quoteBaseUrl = options.quoteBaseUrl ?? DEFAULT_QUOTE_BASE_URL;
   const enableQuoteCheck = options.enableQuoteCheck ?? config.enableQuoteCheck;
+  const timeoutMs = options.timeoutMs ?? config.safetyEnrichmentTimeoutMs;
+  raw.timeoutMs = timeoutMs;
 
   if (!rpcUrl) {
     return {
       mintAuthority: 'UNKNOWN',
       freezeAuthority: 'UNKNOWN',
+      mintAuthorityRenounced: null,
+      freezeAuthorityRenounced: null,
+      tokenProgram: null,
+      supply: null,
+      decimals: null,
       metadataStatus: 'UNKNOWN',
       metadataPresent: false,
+      holderCount: null,
+      topHolderPct: null,
+      top10HolderPct: null,
+      holderConcentrationLevel: 'UNKNOWN',
       holderConcentration: 'UNKNOWN',
+      creatorAddress: null,
       creatorStatus: 'UNKNOWN',
+      lpOrPoolAddress: null,
+      poolAgeMinutes: null,
       sellQuoteAvailable: 'UNKNOWN',
       estimatedSlippageBps: null,
+      redFlags: ['rpc url missing'],
       notes: ['SOLANA_RPC_URL not configured'],
       raw: { reason: 'missing_rpc_url' }
     };
@@ -215,59 +289,102 @@ export async function getSolanaSafetyEnrichment(mint: string, config: AppConfig,
   let mintInfo: SolanaMintAccountInfo | null = null;
   let metadataStatus: MetadataPresence = 'UNKNOWN';
   let holderConcentration: ConcentrationStatus = 'UNKNOWN';
+  let holderConcentrationLevel: HolderConcentrationLevel = 'UNKNOWN';
+  let holderCount: number | null = null;
+  let topHolderPct: number | null = null;
+  let top10HolderPct: number | null = null;
+  let creatorAddress: string | null = null;
   let creatorStatus: CreatorStatus = 'UNKNOWN';
+  let lpOrPoolAddress: string | null = null;
+  let poolAgeMinutes: number | null = null;
+  notes.push('creator/deployer not determined reliably from current read-only data');
   let sellQuoteAvailable: AvailabilityStatus = 'UNKNOWN';
   let estimatedSlippageBps: number | null = null;
+  const redFlags: string[] = [];
 
   try {
-    mintInfo = await fetchMintInfo(rpcFetch, rpcUrl, mint);
+    mintInfo = await withTimeout(fetchMintInfo(rpcFetch, rpcUrl, mint), timeoutMs);
     raw.mintInfo = mintInfo;
     if (!mintInfo) {
       notes.push('mint account missing or unavailable');
+      redFlags.push('mint account missing or unavailable');
     }
   } catch (error) {
-    notes.push(error instanceof Error ? error.message : 'mint info lookup failed');
+    const message = error instanceof Error ? error.message : 'mint info lookup failed';
+    notes.push(message);
+    redFlags.push('mint info lookup failed');
   }
 
   try {
-    metadataStatus = await fetchMetadataPresence(rpcFetch, rpcUrl, mint);
+    metadataStatus = await withTimeout(fetchMetadataPresence(rpcFetch, rpcUrl, mint), timeoutMs);
     raw.metadataStatus = metadataStatus;
   } catch (error) {
     notes.push(error instanceof Error ? error.message : 'metadata lookup failed');
   }
 
   try {
-    const largestHolders = await fetchLargestHolders(rpcFetch, rpcUrl, mint);
+    const largestHolders = await withTimeout(fetchLargestHolders(rpcFetch, rpcUrl, mint), timeoutMs);
     raw.largestHolders = largestHolders;
     const concentration = deriveHolderConcentration(largestHolders, mintInfo);
     holderConcentration = concentration.status;
+    holderConcentrationLevel = concentration.level;
+    holderCount = concentration.holderCount;
+    topHolderPct = concentration.topHolderPct;
+    top10HolderPct = concentration.top10HolderPct;
     notes.push(...concentration.notes);
+    if (concentration.level === 'HIGH') redFlags.push('high holder concentration');
   } catch (error) {
-    notes.push(error instanceof Error ? error.message : 'largest holders lookup failed');
+    const message = error instanceof Error ? error.message : 'largest holders lookup failed';
+    notes.push(message);
+    redFlags.push('holder concentration lookup failed');
   }
 
   if (enableQuoteCheck) {
     try {
-      const quoteResult = await fetchQuoteAvailability(quoteFetch, quoteBaseUrl, mint);
+      const quoteResult = await withTimeout(fetchQuoteAvailability(quoteFetch, quoteBaseUrl, mint), timeoutMs);
       sellQuoteAvailable = quoteResult.availability;
       estimatedSlippageBps = quoteResult.slippageBps;
       raw.quote = quoteResult;
     } catch (error) {
-      notes.push(error instanceof Error ? error.message : 'quote check failed');
+      const message = error instanceof Error ? error.message : 'quote check failed';
+      notes.push(message);
+      redFlags.push('quote check failed');
     }
   } else {
     notes.push('quote check disabled');
   }
 
+  const mintAuthority = deriveAuthorityStatus(mintInfo?.mintAuthorityOption, mintInfo?.mintAuthority);
+  const freezeAuthority = deriveAuthorityStatus(mintInfo?.freezeAuthorityOption, mintInfo?.freezeAuthority);
+  if (mintAuthority === 'UNSAFE') redFlags.push('mint authority active');
+  if (freezeAuthority === 'UNSAFE') redFlags.push('freeze authority active');
+  if (mintAuthority === 'UNKNOWN') redFlags.push('mint authority unknown');
+  if (freezeAuthority === 'UNKNOWN') redFlags.push('freeze authority unknown');
+  if (holderConcentration === 'UNKNOWN') redFlags.push('holder concentration unknown');
+  if (sellQuoteAvailable === 'UNKNOWN') redFlags.push('sellability unknown');
+
   return {
-    mintAuthority: deriveAuthorityStatus(mintInfo?.mintAuthorityOption, mintInfo?.mintAuthority),
-    freezeAuthority: deriveAuthorityStatus(mintInfo?.freezeAuthorityOption, mintInfo?.freezeAuthority),
+    mintAuthority,
+    freezeAuthority,
+    mintAuthorityRenounced: mintInfo?.mintAuthorityOption === undefined ? null : mintInfo.mintAuthorityOption === 0,
+    freezeAuthorityRenounced: mintInfo?.freezeAuthorityOption === undefined ? null : mintInfo.freezeAuthorityOption === 0,
+    tokenProgram: TOKEN_PROGRAM,
+    supply: mintInfo?.supply ?? null,
+    decimals: mintInfo?.decimals ?? null,
     metadataStatus,
     metadataPresent: metadataStatus === 'YES',
+    holderCount,
+    topHolderPct,
+    top10HolderPct,
+    holderConcentrationLevel,
     holderConcentration,
+    creatorAddress,
     creatorStatus,
+    lpOrPoolAddress,
+    poolAgeMinutes,
     sellQuoteAvailable,
     estimatedSlippageBps,
+    redFlags,
     notes,
     raw
   };
@@ -287,7 +404,22 @@ export function applyEnrichment(candidate: TokenCandidate, enrichment: SolanaSaf
     raw: {
       ...candidate.raw,
       enrichment: enrichment.raw,
-      enrichmentNotes: enrichment.notes
+      enrichmentNotes: enrichment.notes,
+      safetyEnrichment: {
+        mintAuthorityRenounced: enrichment.mintAuthorityRenounced,
+        freezeAuthorityRenounced: enrichment.freezeAuthorityRenounced,
+        tokenProgram: enrichment.tokenProgram,
+        supply: enrichment.supply,
+        decimals: enrichment.decimals,
+        holderCount: enrichment.holderCount,
+        topHolderPct: enrichment.topHolderPct,
+        top10HolderPct: enrichment.top10HolderPct,
+        holderConcentrationLevel: enrichment.holderConcentrationLevel,
+        creatorAddress: enrichment.creatorAddress,
+        lpOrPoolAddress: enrichment.lpOrPoolAddress,
+        poolAgeMinutes: enrichment.poolAgeMinutes,
+        redFlags: enrichment.redFlags
+      }
     }
   };
 }

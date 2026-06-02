@@ -35,6 +35,7 @@ export function buildDailyReport(db: AppDb, _config: AppConfig): Record<string, 
   const bestWatchOnly = [...watchOnly].sort((a, b) => (b.bestGainPct ?? Number.NEGATIVE_INFINITY) - (a.bestGainPct ?? Number.NEGATIVE_INFINITY))[0] ?? null;
   const worstWatchOnly = [...watchOnly].sort((a, b) => (a.worstDrawdownPct ?? Number.POSITIVE_INFINITY) - (b.worstDrawdownPct ?? Number.POSITIVE_INFINITY))[0] ?? null;
   const watchAnalysisSummary = summarizeWatchOnlySignalAnalysis(db);
+  const enrichments = db.listSolanaSafetyEnrichments();
 
   return {
     tokensScannedToday: scanLogs.reduce((sum, log) => sum + Number(log.summary.scanned ?? 0), 0),
@@ -58,6 +59,13 @@ export function buildDailyReport(db: AppDb, _config: AppConfig): Record<string, 
     worstWatchOnlyMover: worstWatchOnly,
     watchOnlyResearchOnly: true,
     ...watchAnalysisSummary,
+    safetyEnrichmentSummary: {
+      totalRows: enrichments.length,
+      mintAuthorityRenouncedCount: enrichments.filter((row) => row.mintAuthorityRenounced === true).length,
+      freezeAuthorityRenouncedCount: enrichments.filter((row) => row.freezeAuthorityRenounced === true).length,
+      highHolderConcentrationCount: enrichments.filter((row) => row.holderConcentrationLevel === 'HIGH').length,
+      unknownAuthorityCount: enrichments.filter((row) => row.mintAuthority === 'UNKNOWN' || row.freezeAuthority === 'UNKNOWN').length
+    },
     topRedFlags: topItems(redFlags),
     topSkipReasons: topItems(skippedReasons),
     topPositiveReasons: topItems(positiveReasons),

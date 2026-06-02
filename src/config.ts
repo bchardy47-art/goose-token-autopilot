@@ -38,6 +38,9 @@ const DEFAULTS = {
   TOKEN_SOURCE: 'fixture' as TokenSourceName,
   KILL_SWITCH_FILE: './data/.kill-switch',
   ENABLE_SOLANA_SAFETY_ENRICHMENT: false,
+  SAFETY_ENRICHMENT_TIMEOUT_MS: 8000,
+  SAFETY_ENRICHMENT_MAX_TOKENS_PER_RUN: 25,
+  SAFETY_ENRICHMENT_CACHE_MINUTES: 60,
   ENABLE_QUOTE_CHECK: false
 };
 
@@ -104,6 +107,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     killSwitchFile: path.resolve(env.KILL_SWITCH_FILE ?? DEFAULTS.KILL_SWITCH_FILE),
     enableSolanaSafetyEnrichment: parseBoolean('ENABLE_SOLANA_SAFETY_ENRICHMENT', env.ENABLE_SOLANA_SAFETY_ENRICHMENT, DEFAULTS.ENABLE_SOLANA_SAFETY_ENRICHMENT),
     solanaRpcUrl: env.SOLANA_RPC_URL || undefined,
+    safetyEnrichmentTimeoutMs: parseNumber('SAFETY_ENRICHMENT_TIMEOUT_MS', env.SAFETY_ENRICHMENT_TIMEOUT_MS, DEFAULTS.SAFETY_ENRICHMENT_TIMEOUT_MS, { integer: true, min: 1 }),
+    safetyEnrichmentMaxTokensPerRun: parseNumber('SAFETY_ENRICHMENT_MAX_TOKENS_PER_RUN', env.SAFETY_ENRICHMENT_MAX_TOKENS_PER_RUN, DEFAULTS.SAFETY_ENRICHMENT_MAX_TOKENS_PER_RUN, { integer: true, min: 1 }),
+    safetyEnrichmentCacheMinutes: parseNumber('SAFETY_ENRICHMENT_CACHE_MINUTES', env.SAFETY_ENRICHMENT_CACHE_MINUTES, DEFAULTS.SAFETY_ENRICHMENT_CACHE_MINUTES, { integer: true, min: 1 }),
     enableQuoteCheck: parseBoolean('ENABLE_QUOTE_CHECK', env.ENABLE_QUOTE_CHECK, DEFAULTS.ENABLE_QUOTE_CHECK),
     burnerWalletPublicKey: env.BURNER_WALLET_PUBLIC_KEY || undefined,
     burnerWalletPrivateKey: env.BURNER_WALLET_PRIVATE_KEY || undefined,
@@ -152,6 +158,9 @@ export function getConfigSafetyStatus(config: AppConfig): Record<string, unknown
     killSwitchFile: config.killSwitchFile,
     enableSolanaSafetyEnrichment: config.enableSolanaSafetyEnrichment,
     solanaRpcUrl: config.solanaRpcUrl,
+    safetyEnrichmentTimeoutMs: config.safetyEnrichmentTimeoutMs,
+    safetyEnrichmentMaxTokensPerRun: config.safetyEnrichmentMaxTokensPerRun,
+    safetyEnrichmentCacheMinutes: config.safetyEnrichmentCacheMinutes,
     enableQuoteCheck: config.enableQuoteCheck,
     burnerWalletPublicKey: config.burnerWalletPublicKey,
     burnerWalletPrivateKey: config.burnerWalletPrivateKey,

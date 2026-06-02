@@ -12,6 +12,7 @@ export type SafetySeverity = 'INFO' | 'WARN' | 'ERROR';
 export type TokenSourceName = 'fixture' | 'dexscreener';
 export type ResearchStatus = 'IGNORE' | 'WATCH_ONLY' | 'PAPER_TRACKED' | 'CLOSED';
 export type WatchOnlySignalClass = 'EARLY_RUNNER' | 'LATE_RUNNER' | 'INSTANT_DUMP' | 'DEAD_NOISE' | 'TOO_DANGEROUS';
+export type HolderConcentrationLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'UNKNOWN';
 
 export interface TokenCandidate {
   chain: string;
@@ -255,6 +256,33 @@ export interface WatchOnlySignalAnalysis {
   rawJson: string;
 }
 
+export interface SolanaSafetyEnrichmentRow {
+  id: number;
+  tokenId: number;
+  mint: string;
+  checkedAt: string;
+  freezeAuthority: AuthorityStatus | null;
+  mintAuthority: AuthorityStatus | null;
+  mintAuthorityRenounced: boolean | null;
+  freezeAuthorityRenounced: boolean | null;
+  tokenProgram: string | null;
+  supply: string | null;
+  decimals: number | null;
+  holderCount: number | null;
+  topHolderPct: number | null;
+  top10HolderPct: number | null;
+  holderConcentrationLevel: HolderConcentrationLevel;
+  holderConcentrationStatus: ConcentrationStatus | null;
+  creatorAddress: string | null;
+  creatorStatus: CreatorStatus | null;
+  lpOrPoolAddress: string | null;
+  poolAgeMinutes: number | null;
+  safetyStatus: string | null;
+  redFlagsJson: string;
+  notes: string | null;
+  rawJson: string;
+}
+
 export interface AppConfig {
   tokenRadarDryRun: boolean;
   tradingDisabled: boolean;
@@ -289,6 +317,9 @@ export interface AppConfig {
   killSwitchFile: string;
   enableSolanaSafetyEnrichment: boolean;
   solanaRpcUrl?: string;
+  safetyEnrichmentTimeoutMs: number;
+  safetyEnrichmentMaxTokensPerRun: number;
+  safetyEnrichmentCacheMinutes: number;
   enableQuoteCheck: boolean;
   burnerWalletPublicKey?: string;
   burnerWalletPrivateKey?: string;

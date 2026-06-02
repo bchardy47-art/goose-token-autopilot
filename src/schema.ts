@@ -170,6 +170,34 @@ CREATE TABLE IF NOT EXISTS watch_only_signal_analysis (
   FOREIGN KEY(token_id) REFERENCES tokens(id)
 );
 
+CREATE TABLE IF NOT EXISTS solana_safety_enrichments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token_id INTEGER NOT NULL,
+  mint TEXT NOT NULL,
+  checked_at TEXT NOT NULL,
+  freeze_authority TEXT,
+  mint_authority TEXT,
+  mint_authority_renounced INTEGER,
+  freeze_authority_renounced INTEGER,
+  token_program TEXT,
+  supply TEXT,
+  decimals INTEGER,
+  holder_count INTEGER,
+  top_holder_pct REAL,
+  top_10_holder_pct REAL,
+  holder_concentration_level TEXT NOT NULL,
+  holder_concentration_status TEXT,
+  creator_address TEXT,
+  creator_status TEXT,
+  lp_or_pool_address TEXT,
+  pool_age_minutes REAL,
+  safety_status TEXT,
+  red_flags_json TEXT NOT NULL,
+  notes TEXT,
+  raw_json TEXT NOT NULL,
+  FOREIGN KEY(token_id) REFERENCES tokens(id)
+);
+
 CREATE TABLE IF NOT EXISTS real_trade_attempts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   token_id INTEGER NOT NULL,
