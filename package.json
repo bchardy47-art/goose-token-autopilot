@@ -15,6 +15,7 @@
     "token:paper-eligibility": "tsx src/cli.ts token:paper-eligibility",
     "token:paper-review": "tsx src/cli.ts token:paper-review",
     "token:paper-performance": "tsx src/cli.ts token:paper-performance",
+    "token:paper-dashboard": "tsx src/cli.ts token:paper-dashboard",
     "token:daily-report": "tsx src/cli.ts token:daily-report",
     "token:watch-only": "tsx src/cli.ts token:watch-only",
     "token:watch-report": "tsx src/cli.ts token:watch-report",

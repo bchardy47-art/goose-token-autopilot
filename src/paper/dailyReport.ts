@@ -1,7 +1,8 @@
 import type { AppDb } from '../db';
-import type { AppConfig } from '../types';
+import type { AppConfig, PaperPositionView } from '../types';
 import { summarizeWatchOnlySignalAnalysis } from '../watchAnalysis';
 import { buildPaperEligibilityDiagnostics } from './autoPaper';
+import { buildPaperPerformanceReport } from './performance';
 
 function topItems(items: string[], limit = 5): Array<{ value: string; count: number }> {
   const counts = new Map<string, number>();
@@ -12,6 +13,56 @@ function topItems(items: string[], limit = 5): Array<{ value: string; count: num
     .sort((a, b) => b[1] - a[1])
     .slice(0, limit)
     .map(([value, count]) => ({ value, count }));
+}
+
+function fmtMoney(value: number | null | undefined): string {
+  return value === null || value === undefined ? '-' : `$${value.toFixed(2)}`;
+}
+
+function fmtPct(value: number | null | undefined): string {
+  return value === null || value === undefined ? '-' : `${value.toFixed(2)}%`;
+}
+
+function renderOpenPosition(position: PaperPositionView): string {
+  return `${position.symbol.padEnd(10)} ${position.status.padEnd(6)} entry=${fmtMoney(position.entryPriceUsd)} latest=${fmtMoney(position.latestPriceUsd)} pnl=${fmtPct(position.unrealizedPnlPct)} best=${fmtPct(position.bestGainPct)} worst=${fmtPct(position.worstDrawdownPct)}`;
+}
+
+function renderClosedPosition(position: PaperPositionView): string {
+  return `${position.symbol.padEnd(10)} pnl=${fmtPct(position.realizedPnlPct)} usd=${fmtMoney(position.realizedPnlUsd)} best=${fmtPct(position.bestGainPct)} worst=${fmtPct(position.worstDrawdownPct)}`;
+}
+
+export function renderPaperDashboard(db: AppDb, _config: AppConfig): string {
+  const report = buildPaperPerformanceReport(db) as any;
+  const openPositions = report.openPositions as PaperPositionView[];
+  const closedPositions = report.closedPositions as PaperPositionView[];
+  const wins = closedPositions.filter((position) => (position.realizedPnlUsd ?? 0) > 0);
+  const winRate = closedPositions.length > 0 ? (wins.length / closedPositions.length) * 100 : 0;
+  const bestTrade = [...closedPositions].sort((a, b) => (b.realizedPnlUsd ?? 0) - (a.realizedPnlUsd ?? 0))[0] ?? null;
+  const worstTrade = [...closedPositions].sort((a, b) => (a.realizedPnlUsd ?? 0) - (b.realizedPnlUsd ?? 0))[0] ?? null;
+  const lines: string[] = [];
+  lines.push('Paper Trading Dashboard');
+  lines.push('');
+  lines.push(`Open Positions (${openPositions.length})`);
+  for (const position of openPositions) lines.push(`- ${renderOpenPosition(position)}`);
+  if (openPositions.length === 0) lines.push('- none');
+  lines.push('');
+  lines.push(`Closed Positions (${closedPositions.length})`);
+  for (const position of closedPositions) lines.push(`- ${renderClosedPosition(position)}`);
+  if (closedPositions.length === 0) lines.push('- none');
+  lines.push('');
+  lines.push('Summary');
+  lines.push(`- open count: ${openPositions.length}`);
+  lines.push(`- closed count: ${closedPositions.length}`);
+  lines.push(`- win rate: ${fmtPct(winRate)}`);
+  lines.push(`- current P/L $: ${fmtMoney(report.currentPnlUsd)}`);
+  lines.push(`- realized P/L $: ${fmtMoney(report.realizedPnlUsd)}`);
+  lines.push(`- unrealized P/L $: ${fmtMoney(report.unrealizedPnlUsd)}`);
+  lines.push(`- best trade: ${bestTrade ? `${bestTrade.symbol} ${fmtPct(bestTrade.realizedPnlPct)} ${fmtMoney(bestTrade.realizedPnlUsd)}` : 'none'}`);
+  lines.push(`- worst trade: ${worstTrade ? `${worstTrade.symbol} ${fmtPct(worstTrade.realizedPnlPct)} ${fmtMoney(worstTrade.realizedPnlUsd)}` : 'none'}`);
+  lines.push('');
+  lines.push('Real trading remains locked.');
+  lines.push('Paper only.');
+  return lines.join('\n');
 }
 
 export function buildDailyReport(db: AppDb, _config: AppConfig): Record<string, unknown> {

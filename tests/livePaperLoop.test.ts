@@ -6,7 +6,7 @@ import { applyLatestQuoteResultToSnapshot, buildPaperEligibilityDiagnostics, isP
 import { paperBuy } from '../src/trading/paper';
 import { runPaperReview } from '../src/paper/review';
 import { buildPaperPerformanceReport } from '../src/paper/performance';
-import { buildDailyReport } from '../src/paper/dailyReport';
+import { buildDailyReport, renderPaperDashboard } from '../src/paper/dailyReport';
 import { verifySafety } from '../src/verifySafety';
 import * as scanner from '../src/scanner';
 
@@ -407,16 +407,41 @@ describe('live paper loop', () => {
     expect(status).toHaveProperty('paperTrailingStopPct');
   });
 
+  it('paper-dashboard renders open positions, closed positions, summary totals, and safety footer', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    db.createQuoteSellabilityCheck(safe.id, 'SAFE11111111111111111111111111111111111111111', new Date().toISOString(), 'jupiter', 'SAFE11111111111111111111111111111111111111111', 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
+    await runAutoPaper(db, config);
+    const open = db.listPositions('PAPER').find((position) => position.status === 'OPEN')!;
+    const snap = db.getLatestSnapshot(open.tokenId)!;
+    snap.priceUsd = open.entryPriceUsd * 1.6;
+    db.insertSnapshot(open.tokenId, snap);
+    await runPaperReview(db, config);
+    const dashboard = renderPaperDashboard(db, config);
+    expect(dashboard).toContain('Paper Trading Dashboard');
+    expect(dashboard).toContain('Open Positions');
+    expect(dashboard).toContain('Closed Positions');
+    expect(dashboard).toContain('Summary');
+    expect(dashboard).toContain('Real trading remains locked.');
+    expect(dashboard).toContain('Paper only.');
+    expect(db.getOpenPositionCount('PAPER')).toBeGreaterThanOrEqual(0);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
+    db.close();
+  });
+
   it('paper-performance report calculates P/L', async () => {
     const { dir, config, db } = await seedScoredDb();
     cleanup.push(dir);
     const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
     db.createQuoteSellabilityCheck(safe.id, 'SAFE11111111111111111111111111111111111111111', new Date().toISOString(), 'jupiter', 'SAFE11111111111111111111111111111111111111111', 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
     await runAutoPaper(db, config);
-    const report = buildPaperPerformanceReport(db);
+    const report = buildPaperPerformanceReport(db) as any;
     expect(report).toHaveProperty('currentPnlUsd');
     expect(report).toHaveProperty('realizedPnlUsd');
     expect(report).toHaveProperty('unrealizedPnlUsd');
+    expect(report).toHaveProperty('openPositions');
+    expect(report).toHaveProperty('closedPositions');
     db.close();
   });
 
