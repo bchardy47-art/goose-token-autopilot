@@ -50,16 +50,25 @@ export async function runPaperReview(db: AppDb, config: AppConfig): Promise<{ de
       const newSnapshot = db.getLatestSnapshot(position.tokenId);
       const pnlPct = latest.unrealizedPnlPct ?? 0;
       const minutesHeld = heldMinutes(latest.openedAt);
+      const bestGainPct = Math.max(position.bestGainPct ?? Number.NEGATIVE_INFINITY, latest.bestGainPct ?? Number.NEGATIVE_INFINITY, 0);
+      const pullbackFromPeakPct = Number((bestGainPct - pnlPct).toFixed(4));
       let reason: string | null = null;
 
       if (pnlPct >= config.paperTakeProfitPct) reason = 'take_profit';
       else if (pnlPct <= config.paperStopLossPct) reason = 'stop_loss';
       else if (minutesHeld >= config.paperMaxHoldMinutes) reason = 'max_hold_time';
+      else if (
+        config.paperTrailingStopEnabled &&
+        bestGainPct >= config.paperTrailingActivationPct &&
+        pullbackFromPeakPct >= config.paperTrailingStopPct
+      ) reason = 'trailing_stop';
 
       const refreshMeta = {
         priceRefreshed: (oldSnapshot?.priceUsd ?? null) !== (newSnapshot?.priceUsd ?? null),
         oldPriceUsd: oldSnapshot?.priceUsd ?? null,
         newPriceUsd: newSnapshot?.priceUsd ?? null,
+        pullbackFromPeakPct,
+        bestGainPct,
         refreshError: newSnapshot ? null : 'refresh_failed_or_missing_snapshot'
       };
 

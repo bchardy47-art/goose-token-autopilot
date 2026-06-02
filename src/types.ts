@@ -341,6 +341,7 @@ export interface AppConfig {
   paperStopLossPct: number;
   paperMaxHoldMinutes: number;
   paperTrailingStopEnabled: boolean;
+  paperTrailingActivationPct: number;
   paperTrailingStopPct: number;
   maxSlippageBps: number;
   minLiquidityUsd: number;

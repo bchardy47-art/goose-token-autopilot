@@ -319,6 +319,45 @@ describe('live paper loop', () => {
     db.close();
   });
 
+  it('trailing stop does not trigger before activation threshold', async () => {
+    const { dir, config, db } = await seedScoredDb({ PAPER_TRAILING_STOP_ENABLED: 'true', PAPER_TRAILING_ACTIVATION_PCT: '30', PAPER_TRAILING_STOP_PCT: '15' } as any);
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    db.createQuoteSellabilityCheck(safe.id, 'SAFE11111111111111111111111111111111111111111', new Date().toISOString(), 'jupiter', 'SAFE11111111111111111111111111111111111111111', 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
+    await runAutoPaper(db, config);
+    const open = db.listPositions('PAPER').find((position) => position.status === 'OPEN')!;
+    vi.spyOn(scanner, 'refreshSnapshotsForTokenAddresses').mockImplementation(async () => {
+      const refreshed = db.getLatestSnapshot(open.tokenId)!;
+      refreshed.priceUsd = open.entryPriceUsd * 1.2;
+      db.insertSnapshot(open.tokenId, refreshed);
+      return { refreshed: 1, tokenIds: [open.tokenId] };
+    });
+    const review = await runPaperReview(db, config);
+    expect(review.decisions.some((decision) => decision.reason === 'trailing_stop')).toBe(false);
+    db.close();
+  });
+
+  it('trailing stop closes after activation when pullback >= trailing stop pct', async () => {
+    const { dir, config, db } = await seedScoredDb({ PAPER_TRAILING_STOP_ENABLED: 'true', PAPER_TRAILING_ACTIVATION_PCT: '30', PAPER_TRAILING_STOP_PCT: '15' } as any);
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    db.createQuoteSellabilityCheck(safe.id, 'SAFE11111111111111111111111111111111111111111', new Date().toISOString(), 'jupiter', 'SAFE11111111111111111111111111111111111111111', 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
+    await runAutoPaper(db, config);
+    const open = db.listPositions('PAPER').find((position) => position.status === 'OPEN')!;
+    const rise = db.getLatestSnapshot(open.tokenId)!;
+    rise.priceUsd = open.entryPriceUsd * 1.5;
+    db.insertSnapshot(open.tokenId, rise);
+    vi.spyOn(scanner, 'refreshSnapshotsForTokenAddresses').mockImplementation(async () => {
+      const refreshed = db.getLatestSnapshot(open.tokenId)!;
+      refreshed.priceUsd = open.entryPriceUsd * 1.3;
+      db.insertSnapshot(open.tokenId, refreshed);
+      return { refreshed: 1, tokenIds: [open.tokenId] };
+    });
+    const review = await runPaperReview(db, config);
+    expect(review.decisions.some((decision) => decision.reason === 'trailing_stop')).toBe(true);
+    db.close();
+  });
+
   it('if refresh fails, paper-review holds/reviews using existing snapshot and does not crash', async () => {
     const { dir, config, db } = await seedScoredDb({ PAPER_MAX_HOLD_MINUTES: '60' });
     cleanup.push(dir);
@@ -357,6 +396,15 @@ describe('live paper loop', () => {
     expect(db.getOpenPositionCount('PAPER')).toBeLessThanOrEqual(beforeOpen);
     expect(db.getBlockedRealTradeAttempts()).toBe(0);
     db.close();
+  });
+
+  it('verify-safety includes trailing stop config', () => {
+    const { dir, config } = makeTestConfig();
+    cleanup.push(dir);
+    const status = verifySafety(config) as any;
+    expect(status).toHaveProperty('paperTrailingStopEnabled');
+    expect(status).toHaveProperty('paperTrailingActivationPct');
+    expect(status).toHaveProperty('paperTrailingStopPct');
   });
 
   it('paper-performance report calculates P/L', async () => {
