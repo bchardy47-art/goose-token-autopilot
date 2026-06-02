@@ -99,14 +99,15 @@ describe('read-only quote checks', () => {
     db.close();
   });
 
-  it('route available sets sellQuoteAvailable YES only in read-only candidate enrichment/update', async () => {
+  it('valid route response becomes route available', async () => {
     const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener', ENABLE_QUOTE_CHECK: 'true' });
     cleanup.push(dir);
     const db = createDb(config);
-    const tokenId = db.upsertToken(makeLiveCandidate({ sellQuoteAvailable: 'UNKNOWN' }));
-    db.insertSnapshot(tokenId, makeLiveCandidate({ sellQuoteAvailable: 'UNKNOWN' }));
+    const tokenId = db.upsertToken(makeLiveCandidate({ sellQuoteAvailable: 'UNKNOWN', raw: { safetyEnrichment: { decimals: 6 } } }));
+    db.insertSnapshot(tokenId, makeLiveCandidate({ sellQuoteAvailable: 'UNKNOWN', raw: { safetyEnrichment: { decimals: 6 } } }));
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ outAmount: '1000', priceImpactPct: '0.01', routePlan: [{}] }), { status: 200 })) as any);
-    await runQuoteCheck(db, config);
+    const result = await runQuoteCheck(db, config);
+    expect((result as any).routeAvailableCount).toBe(1);
     expect(db.getLatestSnapshot(tokenId)?.sellQuoteAvailable).toBe('YES');
     db.close();
   });
@@ -115,8 +116,8 @@ describe('read-only quote checks', () => {
     const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener', ENABLE_QUOTE_CHECK: 'true' });
     cleanup.push(dir);
     const db = createDb(config);
-    const tokenId = db.upsertToken(makeLiveCandidate({ sellQuoteAvailable: 'UNKNOWN' }));
-    db.insertSnapshot(tokenId, makeLiveCandidate({ sellQuoteAvailable: 'UNKNOWN' }));
+    const tokenId = db.upsertToken(makeLiveCandidate({ sellQuoteAvailable: 'UNKNOWN', raw: { safetyEnrichment: { decimals: 6 } } }));
+    db.insertSnapshot(tokenId, makeLiveCandidate({ sellQuoteAvailable: 'UNKNOWN', raw: { safetyEnrichment: { decimals: 6 } } }));
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ routePlan: [] }), { status: 200 })) as any);
     await runQuoteCheck(db, config);
     expect(['NO', 'UNKNOWN']).toContain(String(db.getLatestSnapshot(tokenId)?.sellQuoteAvailable));
@@ -127,8 +128,8 @@ describe('read-only quote checks', () => {
     const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener', ENABLE_QUOTE_CHECK: 'true', QUOTE_CHECK_SLIPPAGE_BPS: '900' });
     cleanup.push(dir);
     const db = createDb(config);
-    const tokenId = db.upsertToken(makeLiveCandidate({ sellQuoteAvailable: 'UNKNOWN' }));
-    db.insertSnapshot(tokenId, makeLiveCandidate({ sellQuoteAvailable: 'UNKNOWN' }));
+    const tokenId = db.upsertToken(makeLiveCandidate({ sellQuoteAvailable: 'UNKNOWN', raw: { safetyEnrichment: { decimals: 6 } } }));
+    db.insertSnapshot(tokenId, makeLiveCandidate({ sellQuoteAvailable: 'UNKNOWN', raw: { safetyEnrichment: { decimals: 6 } } }));
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ outAmount: '1000', priceImpactPct: '0.50', routePlan: [{}] }), { status: 200 })) as any);
     await runQuoteCheck(db, config);
     expect(db.getLatestQuoteSellabilityCheck(tokenId)?.safetyStatus).toBe('SELLABLE_HIGH_SLIPPAGE');
@@ -136,15 +137,30 @@ describe('read-only quote checks', () => {
     db.close();
   });
 
-  it('quote failure is handled as UNKNOWN/error, not safe', async () => {
+  it('quote failure is handled as UNKNOWN/error, not high slippage unless slippage is known and high', async () => {
+    const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener', ENABLE_QUOTE_CHECK: 'true', QUOTE_CHECK_DEBUG: 'true' } as any);
+    cleanup.push(dir);
+    const db = createDb(config);
+    const tokenId = db.upsertToken(makeLiveCandidate({ sellQuoteAvailable: 'UNKNOWN', raw: { safetyEnrichment: { decimals: 6 } } }));
+    db.insertSnapshot(tokenId, makeLiveCandidate({ sellQuoteAvailable: 'UNKNOWN', raw: { safetyEnrichment: { decimals: 6 } } }));
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('quote down'); }) as any);
+    const result = await runQuoteCheck(db, config);
+    expect(db.getLatestQuoteSellabilityCheck(tokenId)?.sellQuoteStatus).toBe('UNKNOWN');
+    expect((result as any).highSlippageCount).toBe(0);
+    db.close();
+  });
+
+  it('missing decimals stays UNKNOWN safely', async () => {
     const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener', ENABLE_QUOTE_CHECK: 'true' });
     cleanup.push(dir);
     const db = createDb(config);
-    const tokenId = db.upsertToken(makeLiveCandidate({ sellQuoteAvailable: 'UNKNOWN' }));
-    db.insertSnapshot(tokenId, makeLiveCandidate({ sellQuoteAvailable: 'UNKNOWN' }));
-    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('quote down'); }) as any);
+    const tokenId = db.upsertToken(makeLiveCandidate({ sellQuoteAvailable: 'UNKNOWN', raw: {} }));
+    db.insertSnapshot(tokenId, makeLiveCandidate({ sellQuoteAvailable: 'UNKNOWN', raw: {} }));
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ outAmount: '1000', routePlan: [{}] }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock as any);
     await runQuoteCheck(db, config);
     expect(db.getLatestQuoteSellabilityCheck(tokenId)?.sellQuoteStatus).toBe('UNKNOWN');
+    expect(fetchMock).not.toHaveBeenCalled();
     db.close();
   });
 

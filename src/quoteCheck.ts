@@ -1,6 +1,7 @@
 import type { AppDb } from './db';
 import type { AppConfig, AvailabilityStatus, TokenCandidate } from './types';
 import { AppLogger } from './logger';
+import { redactString } from './redact';
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const JUPITER_QUOTE_URL = 'https://quote-api.jup.ag/v6/quote';
@@ -15,15 +16,21 @@ function buildPriorityTokenIds(db: AppDb, maxTokens: number): number[] {
   return [...new Set([...watchIds, ...recentStateIds])].slice(0, maxTokens);
 }
 
+function getDecimals(snapshot: TokenCandidate): number | null {
+  const decimals = Number((snapshot.raw as any)?.safetyEnrichment?.decimals);
+  return Number.isFinite(decimals) && decimals >= 0 ? decimals : null;
+}
+
 function usdToRawAmount(snapshot: TokenCandidate, amountUsd: number): string | null {
   if ((snapshot.priceUsd ?? 0) <= 0) return null;
-  const decimals = Number((snapshot.raw as any)?.safetyEnrichment?.decimals ?? 6);
+  const decimals = getDecimals(snapshot);
+  if (decimals === null) return null;
   const tokenAmount = amountUsd / Math.max(snapshot.priceUsd ?? 0, Number.EPSILON);
-  const raw = Math.round(tokenAmount * Math.pow(10, Number.isFinite(decimals) ? decimals : 6));
+  const raw = Math.round(tokenAmount * Math.pow(10, decimals));
   return raw > 0 ? String(raw) : null;
 }
 
-async function fetchJupiterQuote(snapshot: TokenCandidate, config: AppConfig): Promise<{
+async function fetchJupiterQuote(snapshot: TokenCandidate, config: AppConfig, debug = false): Promise<{
   routeAvailable: boolean | null;
   expectedOutputAmount: string | null;
   estimatedSlippageBps: number | null;
@@ -31,8 +38,10 @@ async function fetchJupiterQuote(snapshot: TokenCandidate, config: AppConfig): P
   sellQuoteStatus: AvailabilityStatus;
   safetyStatus: string;
   errorSummary: string | null;
+  debugInfo: Record<string, unknown>;
   raw: Record<string, unknown>;
 }> {
+  const decimals = getDecimals(snapshot);
   const sellAmountRaw = usdToRawAmount(snapshot, config.quoteCheckSellAmountUsd);
   if (!sellAmountRaw) {
     return {
@@ -43,6 +52,13 @@ async function fetchJupiterQuote(snapshot: TokenCandidate, config: AppConfig): P
       sellQuoteStatus: 'UNKNOWN',
       safetyStatus: 'UNKNOWN',
       errorSummary: 'unable to derive sell amount raw',
+      debugInfo: {
+        sellAmountUsd: config.quoteCheckSellAmountUsd,
+        sellAmountRaw,
+        decimalsSource: decimals === null ? 'missing' : 'safetyEnrichment.decimals',
+        decimals,
+        whyHighSlippageCounted: 'not-counted-no-slippage-known'
+      },
       raw: { reason: 'missing_price_or_amount' }
     };
   }
@@ -57,6 +73,7 @@ async function fetchJupiterQuote(snapshot: TokenCandidate, config: AppConfig): P
     url.searchParams.set('slippageBps', String(config.quoteCheckSlippageBps));
     url.searchParams.set('onlyDirectRoutes', 'false');
 
+    const sanitizedUrl = new URL(url.toString());
     const response = await fetch(url.toString(), {
       method: 'GET',
       headers: { accept: 'application/json', 'user-agent': 'goose-token-autopilot/1.0' },
@@ -72,6 +89,20 @@ async function fetchJupiterQuote(snapshot: TokenCandidate, config: AppConfig): P
         sellQuoteStatus: response.status >= 500 ? 'UNKNOWN' : 'NO',
         safetyStatus: response.status >= 500 ? 'UNKNOWN' : 'NO_ROUTE',
         errorSummary: `quote http ${response.status}`,
+        debugInfo: {
+          inputMint: snapshot.mint,
+          outputMint: SOL_MINT,
+          sellAmountUsd: config.quoteCheckSellAmountUsd,
+          sellAmountRaw,
+          decimalsSource: decimals === null ? 'missing' : 'safetyEnrichment.decimals',
+          decimals,
+          quoteUrl: redactString(sanitizedUrl.toString()),
+          httpStatus: response.status,
+          responseHasRoute: false,
+          normalizedSellQuoteStatus: response.status >= 500 ? 'UNKNOWN' : 'NO',
+          estimatedSlippageBps: null,
+          whyHighSlippageCounted: 'not-counted-no-slippage-known'
+        },
         raw: { status: response.status }
       };
     }
@@ -93,6 +124,20 @@ async function fetchJupiterQuote(snapshot: TokenCandidate, config: AppConfig): P
       sellQuoteStatus,
       safetyStatus,
       errorSummary: routeAvailable ? null : 'no sell route available',
+      debugInfo: {
+        inputMint: snapshot.mint,
+        outputMint: SOL_MINT,
+        sellAmountUsd: config.quoteCheckSellAmountUsd,
+        sellAmountRaw,
+        decimalsSource: decimals === null ? 'missing' : 'safetyEnrichment.decimals',
+        decimals,
+        quoteUrl: redactString(sanitizedUrl.toString()),
+        httpStatus: response.status,
+        responseHasRoute: routeAvailable,
+        normalizedSellQuoteStatus: sellQuoteStatus,
+        estimatedSlippageBps,
+        whyHighSlippageCounted: estimatedSlippageBps !== null && estimatedSlippageBps > config.maxSlippageBps ? 'known-slippage-above-max' : 'not-counted-slippage-within-max'
+      },
       raw: {
         outAmount,
         priceImpactPct,
@@ -108,6 +153,21 @@ async function fetchJupiterQuote(snapshot: TokenCandidate, config: AppConfig): P
       sellQuoteStatus: 'UNKNOWN',
       safetyStatus: 'UNKNOWN',
       errorSummary: error instanceof Error ? error.message : 'quote fetch failed',
+      debugInfo: {
+        inputMint: snapshot.mint,
+        outputMint: SOL_MINT,
+        sellAmountUsd: config.quoteCheckSellAmountUsd,
+        sellAmountRaw,
+        decimalsSource: decimals === null ? 'missing' : 'safetyEnrichment.decimals',
+        decimals,
+        quoteUrl: redactString(`${JUPITER_QUOTE_URL}?inputMint=${snapshot.mint}&outputMint=${SOL_MINT}&amount=${sellAmountRaw ?? 'null'}`),
+        httpStatus: null,
+        responseHasRoute: false,
+        errorCodeOrMessage: error instanceof Error ? error.message : 'quote fetch failed',
+        normalizedSellQuoteStatus: 'UNKNOWN',
+        estimatedSlippageBps: null,
+        whyHighSlippageCounted: 'not-counted-no-slippage-known'
+      },
       raw: { error: error instanceof Error ? error.message : 'quote fetch failed' }
     };
   } finally {
@@ -151,7 +211,7 @@ export async function runQuoteCheck(db: AppDb, config: AppConfig, logger = new A
         continue;
       }
 
-      const quote = await fetchJupiterQuote(snapshot, config);
+      const quote = await fetchJupiterQuote(snapshot, config, process.env.QUOTE_CHECK_DEBUG === 'true' && checkedCount === 0);
       const sellAmountRaw = usdToRawAmount(snapshot, config.quoteCheckSellAmountUsd);
       db.createQuoteSellabilityCheck(
         tokenId,
@@ -169,7 +229,7 @@ export async function runQuoteCheck(db: AppDb, config: AppConfig, logger = new A
         quote.sellQuoteStatus,
         quote.safetyStatus,
         quote.errorSummary,
-        quote.raw
+        { ...quote.raw, debugInfo: quote.debugInfo }
       );
 
       const sellQuoteAvailable: AvailabilityStatus = quote.routeAvailable === true
@@ -199,7 +259,26 @@ export async function runQuoteCheck(db: AppDb, config: AppConfig, logger = new A
       if (quote.routeAvailable === true) routeAvailableCount += 1;
       if (quote.routeAvailable === false) routeUnavailableCount += 1;
       if (quote.sellQuoteStatus === 'UNKNOWN' || quote.errorSummary) unknownOrErrorCount += 1;
-      if ((quote.estimatedSlippageBps ?? Number.POSITIVE_INFINITY) > config.maxSlippageBps) highSlippageCount += 1;
+      if (quote.estimatedSlippageBps !== null && quote.estimatedSlippageBps > config.maxSlippageBps) highSlippageCount += 1;
+
+      if (process.env.QUOTE_CHECK_DEBUG === 'true' && checkedCount === 1) {
+        logger.info('Quote check debug proof', {
+          tokenId,
+          mint: snapshot.mint,
+          inputMint: snapshot.mint,
+          outputMint: SOL_MINT,
+          sellAmountUsd: config.quoteCheckSellAmountUsd,
+          sellAmountRaw,
+          decimalsSource: (quote.debugInfo as any)?.decimalsSource ?? 'unknown',
+          quoteUrl: (quote.debugInfo as any)?.quoteUrl ?? '[UNAVAILABLE]',
+          httpStatus: (quote.debugInfo as any)?.httpStatus ?? null,
+          responseHasRoute: (quote.debugInfo as any)?.responseHasRoute ?? false,
+          errorCodeOrMessage: (quote.debugInfo as any)?.errorCodeOrMessage ?? quote.errorSummary,
+          normalizedSellQuoteStatus: quote.sellQuoteStatus,
+          estimatedSlippageBps: quote.estimatedSlippageBps,
+          whyHighSlippageCounted: (quote.debugInfo as any)?.whyHighSlippageCounted ?? 'not-counted-no-slippage-known'
+        });
+      }
     }
 
     const summary = {
