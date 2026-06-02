@@ -124,6 +124,11 @@ function compactExample(row: SignalAuditCandidateRow) {
     volume1hUsdAtEntry: row.volume1hUsdAtEntry,
     buySellRatioAtEntry: row.buySellRatioAtEntry,
     tokenAgeMinutesAtEntry: row.tokenAgeMinutesAtEntry,
+    mintAuth: row.mintAuthority,
+    freezeAuth: row.freezeAuthority,
+    holder: row.holderConcentration,
+    top10Pct: row.top10HolderPct,
+    safetyStatus: row.safetyStatus,
     topRedFlags: row.topRedFlags,
     topPositiveReasons: row.topPositiveReasons,
     sourceUrl: row.sourceUrl
@@ -158,6 +163,19 @@ export function buildSignalCompareReport(db: AppDb, config: AppConfig, env: Node
       mintAuthorityKnownPct: { left: knownPercent(leftRows, (row) => row.mintAuthority), right: knownPercent(rightRows, (row) => row.mintAuthority) },
       sellQuoteAvailableKnownPct: { left: knownPercent(leftRows, (row) => row.sellQuoteAvailable), right: knownPercent(rightRows, (row) => row.sellQuoteAvailable) },
       holderConcentrationKnownPct: { left: knownPercent(leftRows, (row) => row.holderConcentration), right: knownPercent(rightRows, (row) => row.holderConcentration) }
+    },
+    safetyComparison: {
+      holderSafePct: { left: booleanPercent(leftRows, (row) => row.holderConcentration === 'SAFE'), right: booleanPercent(rightRows, (row) => row.holderConcentration === 'SAFE') },
+      holderRiskyPct: { left: booleanPercent(leftRows, (row) => row.holderConcentration === 'RISKY'), right: booleanPercent(rightRows, (row) => row.holderConcentration === 'RISKY') },
+      holderUnknownPct: { left: booleanPercent(leftRows, (row) => row.holderConcentration === 'UNKNOWN' || row.holderConcentration === null), right: booleanPercent(rightRows, (row) => row.holderConcentration === 'UNKNOWN' || row.holderConcentration === null) },
+      freezeAuthorityUnsafePct: { left: booleanPercent(leftRows, (row) => row.freezeAuthority === 'UNSAFE'), right: booleanPercent(rightRows, (row) => row.freezeAuthority === 'UNSAFE') },
+      mintAuthorityUnsafePct: { left: booleanPercent(leftRows, (row) => row.mintAuthority === 'UNSAFE'), right: booleanPercent(rightRows, (row) => row.mintAuthority === 'UNSAFE') },
+      averageTopHolderPct: { left: average(leftRows.map((row) => row.topHolderPct)), right: average(rightRows.map((row) => row.topHolderPct)) },
+      averageTop10HolderPct: { left: average(leftRows.map((row) => row.top10HolderPct)), right: average(rightRows.map((row) => row.top10HolderPct)) },
+      averageBestGainForRiskyHolder: { left: average(leftRows.filter((row) => row.holderConcentration === 'RISKY').map((row) => row.bestGainPct)), right: average(rightRows.filter((row) => row.holderConcentration === 'RISKY').map((row) => row.bestGainPct)) },
+      averageWorstDrawdownForRiskyHolder: { left: average(leftRows.filter((row) => row.holderConcentration === 'RISKY').map((row) => row.worstDrawdownPct)), right: average(rightRows.filter((row) => row.holderConcentration === 'RISKY').map((row) => row.worstDrawdownPct)) },
+      averageBestGainForSafeHolder: { left: average(leftRows.filter((row) => row.holderConcentration === 'SAFE').map((row) => row.bestGainPct)), right: average(rightRows.filter((row) => row.holderConcentration === 'SAFE').map((row) => row.bestGainPct)) },
+      averageWorstDrawdownForSafeHolder: { left: average(leftRows.filter((row) => row.holderConcentration === 'SAFE').map((row) => row.worstDrawdownPct)), right: average(rightRows.filter((row) => row.holderConcentration === 'SAFE').map((row) => row.worstDrawdownPct)) }
     }
   };
 
@@ -214,6 +232,18 @@ export function buildSignalCompareReport(db: AppDb, config: AppConfig, env: Node
   if (rows.length < 50) operatorRecommendation.push('Need more samples; continue collecting watch loop data.');
   const unknownDominates = rows.length > 0 && rows.filter((row) => row.freezeAuthority === 'UNKNOWN' || row.mintAuthority === 'UNKNOWN' || row.sellQuoteAvailable === 'UNKNOWN' || row.holderConcentration === 'UNKNOWN').length / rows.length >= 0.5;
   if (unknownDominates) operatorRecommendation.push('Safety enrichment is required before paper/live trading.');
+  if (leftRows.some((row) => row.holderConcentration === 'RISKY') && rightRows.some((row) => row.holderConcentration === 'RISKY')) {
+    operatorRecommendation.push('Holder concentration is a risk penalty, not a clean filter.');
+  }
+  if (rows.some((row) => row.freezeAuthority === 'UNSAFE')) {
+    operatorRecommendation.push('Freeze authority unsafe should remain a hard red flag.');
+  }
+  if (rows.some((row) => row.mintAuthority === 'UNSAFE')) {
+    operatorRecommendation.push('Mint authority unsafe should remain a hard red flag.');
+  }
+  if (rows.some((row) => row.sellQuoteAvailable === 'UNKNOWN' || row.sellQuoteAvailable === 'NO' || row.sellQuoteAvailable === null)) {
+    operatorRecommendation.push('Quote/sellability checks are still required before paper/live trading.');
+  }
 
   const candidateSignals = Object.entries(metricComparison)
     .filter(([, value]) => (value as any).roughDirection !== 'SIMILAR' && (value as any).roughDirection !== 'INSUFFICIENT_DATA')
@@ -241,7 +271,7 @@ export function formatSignalCompareTable(report: SignalCompareReport): string {
 
   const formatRows = (title: string, rows: Array<Record<string, unknown>>) => [
     title,
-    ...rows.map((row) => `${row.id} | ${row.symbol} | best=${row.bestGainPct} | dd=${row.worstDrawdownPct} | moveBefore=${row.movedBeforeDiscoveryPct} | liq=${row.liquidityUsdAtEntry}`)
+    ...rows.map((row) => `${row.id} | ${row.symbol} | best=${row.bestGainPct} | dd=${row.worstDrawdownPct} | moveBefore=${row.movedBeforeDiscoveryPct} | liq=${row.liquidityUsdAtEntry} | mintAuth=${row.mintAuth ?? '-'} | freezeAuth=${row.freezeAuth ?? '-'} | holder=${row.holder ?? '-'} | top10Pct=${row.top10Pct ?? '-'} | safetyStatus=${row.safetyStatus ?? '-'}`)
   ].join('\n');
 
   return [

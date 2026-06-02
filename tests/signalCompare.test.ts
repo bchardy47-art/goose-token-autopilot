@@ -52,6 +52,13 @@ function seedCandidate(db: ReturnType<typeof createDb>, options: {
   bestGainPct: number;
   worstDrawdownPct: number;
   movedBeforeDiscoveryPct: number;
+  mintAuthority?: 'SAFE' | 'UNSAFE' | 'UNKNOWN';
+  freezeAuthority?: 'SAFE' | 'UNSAFE' | 'UNKNOWN';
+  holderConcentrationStatus?: 'SAFE' | 'RISKY' | 'UNKNOWN';
+  topHolderPct?: number;
+  top10HolderPct?: number;
+  safetyStatus?: string;
+  sellQuoteAvailable?: 'YES' | 'NO' | 'UNKNOWN';
 }) {
   const snapshot = makeLiveCandidate({
     mint: options.mint,
@@ -64,7 +71,8 @@ function seedCandidate(db: ReturnType<typeof createDb>, options: {
     volume1hUsd: 25000,
     buys5m: 25,
     sells5m: 10,
-    sourceUrl: `https://dexscreener.com/solana/${options.symbol.toLowerCase()}`
+    sourceUrl: `https://dexscreener.com/solana/${options.symbol.toLowerCase()}`,
+    sellQuoteAvailable: options.sellQuoteAvailable ?? 'UNKNOWN'
   });
   const tokenId = db.upsertToken(snapshot);
   db.insertSnapshot(tokenId, snapshot);
@@ -95,11 +103,36 @@ function seedCandidate(db: ReturnType<typeof createDb>, options: {
     options.worstDrawdownPct,
     options.movedBeforeDiscoveryPct,
     12000,
-    'UNKNOWN',
+    options.sellQuoteAvailable ?? 'UNKNOWN',
     'UNKNOWN',
     'UNKNOWN',
     'seeded analysis',
     'Watch-only analysis is research only.',
+    { seeded: true }
+  );
+  db.createSolanaSafetyEnrichment(
+    tokenId,
+    options.mint,
+    new Date().toISOString(),
+    options.freezeAuthority ?? 'SAFE',
+    options.mintAuthority ?? 'SAFE',
+    options.mintAuthority !== 'UNSAFE',
+    options.freezeAuthority !== 'UNSAFE',
+    'Tokenkeg',
+    '1000000',
+    6,
+    20,
+    options.topHolderPct ?? 8,
+    options.top10HolderPct ?? 32,
+    (options.holderConcentrationStatus ?? 'SAFE') === 'RISKY' ? 'HIGH' : 'LOW',
+    options.holderConcentrationStatus ?? 'SAFE',
+    null,
+    'UNKNOWN',
+    'Pool111',
+    10,
+    options.safetyStatus ?? 'ok',
+    [],
+    'seeded enrichment',
     { seeded: true }
   );
 }
@@ -135,6 +168,19 @@ describe('signal compare', () => {
     seedCandidate(db, { mint: 'Cmp222', symbol: 'DUMP', signalClass: 'INSTANT_DUMP', bestGainPct: 5, worstDrawdownPct: -40, movedBeforeDiscoveryPct: 20 });
     const report = buildSignalCompareReport(db, config);
     expect(report.metricComparison).toHaveProperty('bestGainPct');
+    db.close();
+  });
+
+  it('signal compare includes holder risk/safe comparison', () => {
+    const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener' });
+    cleanup.push(dir);
+    const db = createDb(config);
+    seedCandidate(db, { mint: 'Cmp111', symbol: 'EARLY', signalClass: 'EARLY_RUNNER', bestGainPct: 40, worstDrawdownPct: -10, movedBeforeDiscoveryPct: 50, holderConcentrationStatus: 'SAFE', topHolderPct: 8, top10HolderPct: 32 });
+    seedCandidate(db, { mint: 'Cmp222', symbol: 'DUMP', signalClass: 'INSTANT_DUMP', bestGainPct: 5, worstDrawdownPct: -40, movedBeforeDiscoveryPct: 20, holderConcentrationStatus: 'RISKY', topHolderPct: 28, top10HolderPct: 78 });
+    const report = buildSignalCompareReport(db, config);
+    expect((report.summary as any).safetyComparison).toHaveProperty('holderSafePct');
+    expect((report.summary as any).safetyComparison).toHaveProperty('holderRiskyPct');
+    expect((report.summary as any).safetyComparison).toHaveProperty('averageTop10HolderPct');
     db.close();
   });
 
@@ -182,14 +228,44 @@ describe('signal compare', () => {
     db.close();
   });
 
-  it('signal compare includes conservative operator recommendation', () => {
+  it('holder RISKY in both early/dump produces risk-penalty-not-filter recommendation', () => {
     const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener' });
     cleanup.push(dir);
     const db = createDb(config);
-    seedCandidate(db, { mint: 'Cmp111', symbol: 'EARLY', signalClass: 'EARLY_RUNNER', bestGainPct: 40, worstDrawdownPct: -10, movedBeforeDiscoveryPct: 50 });
-    seedCandidate(db, { mint: 'Cmp222', symbol: 'DUMP', signalClass: 'INSTANT_DUMP', bestGainPct: 5, worstDrawdownPct: -40, movedBeforeDiscoveryPct: 20 });
+    seedCandidate(db, { mint: 'Cmp111', symbol: 'EARLY', signalClass: 'EARLY_RUNNER', bestGainPct: 40, worstDrawdownPct: -10, movedBeforeDiscoveryPct: 50, holderConcentrationStatus: 'RISKY', topHolderPct: 24, top10HolderPct: 70 });
+    seedCandidate(db, { mint: 'Cmp222', symbol: 'DUMP', signalClass: 'INSTANT_DUMP', bestGainPct: 5, worstDrawdownPct: -40, movedBeforeDiscoveryPct: 20, holderConcentrationStatus: 'RISKY', topHolderPct: 30, top10HolderPct: 82 });
     const report = buildSignalCompareReport(db, config);
-    expect(report.operatorRecommendation.join(' ')).toMatch(/Need more samples|Safety enrichment|Recommended next action/i);
+    expect(report.operatorRecommendation.join(' ')).toContain('Holder concentration is a risk penalty, not a clean filter.');
+    db.close();
+  });
+
+  it('freeze UNSAFE remains hard red flag in recommendation', () => {
+    const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener' });
+    cleanup.push(dir);
+    const db = createDb(config);
+    seedCandidate(db, { mint: 'Cmp111', symbol: 'EARLY', signalClass: 'EARLY_RUNNER', bestGainPct: 40, worstDrawdownPct: -10, movedBeforeDiscoveryPct: 50, freezeAuthority: 'UNSAFE' });
+    const report = buildSignalCompareReport(db, config);
+    expect(report.operatorRecommendation.join(' ')).toContain('Freeze authority unsafe should remain a hard red flag.');
+    db.close();
+  });
+
+  it('mint UNSAFE remains hard red flag in recommendation', () => {
+    const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener' });
+    cleanup.push(dir);
+    const db = createDb(config);
+    seedCandidate(db, { mint: 'Cmp111', symbol: 'EARLY', signalClass: 'EARLY_RUNNER', bestGainPct: 40, worstDrawdownPct: -10, movedBeforeDiscoveryPct: 50, mintAuthority: 'UNSAFE' });
+    const report = buildSignalCompareReport(db, config);
+    expect(report.operatorRecommendation.join(' ')).toContain('Mint authority unsafe should remain a hard red flag.');
+    db.close();
+  });
+
+  it('quote disabled/unknown still recommends quote/sellability checks', () => {
+    const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener' });
+    cleanup.push(dir);
+    const db = createDb(config);
+    seedCandidate(db, { mint: 'Cmp111', symbol: 'EARLY', signalClass: 'EARLY_RUNNER', bestGainPct: 40, worstDrawdownPct: -10, movedBeforeDiscoveryPct: 50, sellQuoteAvailable: 'UNKNOWN' });
+    const report = buildSignalCompareReport(db, config);
+    expect(report.operatorRecommendation.join(' ')).toContain('Quote/sellability checks are still required before paper/live trading.');
     db.close();
   });
 
@@ -230,6 +306,22 @@ describe('signal compare', () => {
     const report = buildSignalCompareReport(db, config, { SIGNAL_COMPARE_LEFT_CLASS: 'EARLY_RUNNER', SIGNAL_COMPARE_RIGHT_CLASS: 'EARLY_RUNNER' } as NodeJS.ProcessEnv);
     expect(report.summary).toHaveProperty('leftClass', 'EARLY_RUNNER');
     expect(report.summary).toHaveProperty('rightClass', 'EARLY_RUNNER');
+    db.close();
+  });
+
+  it('signal-compare table rows include safety columns', () => {
+    const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener' });
+    cleanup.push(dir);
+    const db = createDb(config);
+    seedCandidate(db, { mint: 'Cmp111', symbol: 'EARLY', signalClass: 'EARLY_RUNNER', bestGainPct: 40, worstDrawdownPct: -10, movedBeforeDiscoveryPct: 50, mintAuthority: 'SAFE', freezeAuthority: 'SAFE', holderConcentrationStatus: 'SAFE', top10HolderPct: 32, safetyStatus: 'ok' });
+    seedCandidate(db, { mint: 'Cmp222', symbol: 'DUMP', signalClass: 'INSTANT_DUMP', bestGainPct: 5, worstDrawdownPct: -40, movedBeforeDiscoveryPct: 20, mintAuthority: 'UNSAFE', freezeAuthority: 'UNSAFE', holderConcentrationStatus: 'RISKY', top10HolderPct: 82, safetyStatus: 'risky' });
+    const report = buildSignalCompareReport(db, config);
+    const table = formatSignalCompareTable(report);
+    expect(table).toContain('mintAuth=');
+    expect(table).toContain('freezeAuth=');
+    expect(table).toContain('holder=');
+    expect(table).toContain('top10Pct=');
+    expect(table).toContain('safetyStatus=');
     db.close();
   });
 

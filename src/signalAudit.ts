@@ -55,6 +55,9 @@ export interface SignalAuditCandidateRow {
   sellQuoteAvailable: string | null;
   holderConcentration: string | null;
   creatorStatus: string | null;
+  topHolderPct: number | null;
+  top10HolderPct: number | null;
+  safetyStatus: string | null;
   topRedFlags: string[];
   topPositiveReasons: string[];
   sourceUrl: string | null;
@@ -197,6 +200,9 @@ function buildCandidateRow(
     sellQuoteAvailable: preferKnown(analysis?.sellQuoteAvailable, latestSnapshot?.sellQuoteAvailable, entrySnapshot?.sellQuoteAvailable),
     holderConcentration: preferKnown(latestEnrichment?.holderConcentrationStatus, latestSnapshot?.holderConcentration, entrySnapshot?.holderConcentration),
     creatorStatus: preferKnown(latestEnrichment?.creatorStatus, latestSnapshot?.creatorStatus, entrySnapshot?.creatorStatus),
+    topHolderPct: latestEnrichment?.topHolderPct ?? null,
+    top10HolderPct: latestEnrichment?.top10HolderPct ?? null,
+    safetyStatus: latestEnrichment?.safetyStatus ?? null,
     topRedFlags: redFlagsFromParsedRaw(parsedRaw, entryScore),
     topPositiveReasons: positiveReasons,
     sourceUrl: entrySnapshot?.sourceUrl ?? latestSnapshot?.sourceUrl ?? tokenRecord?.source_url ?? null
@@ -220,6 +226,28 @@ function buildClassSection(rows: SignalAuditCandidateRow[]): Record<string, unkn
       .sort((a, b) => (a.worstDrawdownPct ?? Number.POSITIVE_INFINITY) - (b.worstDrawdownPct ?? Number.POSITIVE_INFINITY))
       .slice(0, 5)
   };
+}
+
+function buildSafetyByClass(rows: SignalAuditCandidateRow[]): Record<string, unknown> {
+  return Object.fromEntries(ALL_CLASSES.map((label) => {
+    const items = rows.filter((row) => row.signalClass === label);
+    return [label, {
+      count: items.length,
+      mintAuthoritySafeCount: items.filter((row) => row.mintAuthority === 'SAFE').length,
+      mintAuthorityUnsafeCount: items.filter((row) => row.mintAuthority === 'UNSAFE').length,
+      mintAuthorityUnknownCount: items.filter((row) => row.mintAuthority === 'UNKNOWN' || row.mintAuthority === null).length,
+      freezeAuthoritySafeCount: items.filter((row) => row.freezeAuthority === 'SAFE').length,
+      freezeAuthorityUnsafeCount: items.filter((row) => row.freezeAuthority === 'UNSAFE').length,
+      freezeAuthorityUnknownCount: items.filter((row) => row.freezeAuthority === 'UNKNOWN' || row.freezeAuthority === null).length,
+      holderSafeCount: items.filter((row) => row.holderConcentration === 'SAFE').length,
+      holderRiskyCount: items.filter((row) => row.holderConcentration === 'RISKY').length,
+      holderUnknownCount: items.filter((row) => row.holderConcentration === 'UNKNOWN' || row.holderConcentration === null).length,
+      averageTopHolderPct: safeAverage(items.map((row) => row.topHolderPct)),
+      averageTop10HolderPct: safeAverage(items.map((row) => row.top10HolderPct)),
+      averageBestGainPct: safeAverage(items.map((row) => row.bestGainPct)),
+      averageWorstDrawdownPct: safeAverage(items.map((row) => row.worstDrawdownPct))
+    }];
+  }));
 }
 
 function buildComparisonSection(rows: SignalAuditCandidateRow[]): Record<string, unknown> {
@@ -322,6 +350,7 @@ export function buildSignalAuditReport(db: AppDb, config: AppConfig, env: NodeJS
     averageBestGainByClass: Object.fromEntries(ALL_CLASSES.map((label) => [label, safeAverage(rows.filter((row) => row.signalClass === label).map((row) => row.bestGainPct))])),
     averageWorstDrawdownByClass: Object.fromEntries(ALL_CLASSES.map((label) => [label, safeAverage(rows.filter((row) => row.signalClass === label).map((row) => row.worstDrawdownPct))])),
     averageMovedBeforeDiscoveryByClass: Object.fromEntries(ALL_CLASSES.map((label) => [label, safeAverage(rows.filter((row) => row.signalClass === label).map((row) => row.movedBeforeDiscoveryPct))])),
+    safetyByClass: buildSafetyByClass(rows),
     paperBuysOpened: db.getOpenPositionCount('PAPER'),
     realTradeAttempts: db.getBlockedRealTradeAttempts(),
     paperTakeProfitPct: config.paperTakeProfitPct,
@@ -352,6 +381,12 @@ export function formatSignalAuditTable(report: SignalAuditReport): string {
     pad('worstDD', 10),
     pad('moveBefore', 11),
     pad('liqEntry', 10),
+    pad('mintAuth', 9),
+    pad('freezeAuth', 10),
+    pad('holder', 8),
+    pad('topHolderPct', 12),
+    pad('top10Pct', 10),
+    pad('safetyStatus', 12),
     pad('source', 24)
   ].join(' | ');
 
@@ -363,6 +398,12 @@ export function formatSignalAuditTable(report: SignalAuditReport): string {
     pad(row.worstDrawdownPct === null ? '-' : String(row.worstDrawdownPct), 10),
     pad(row.movedBeforeDiscoveryPct === null ? '-' : String(row.movedBeforeDiscoveryPct), 11),
     pad(row.liquidityUsdAtEntry === null ? '-' : String(row.liquidityUsdAtEntry), 10),
+    pad(String(row.mintAuthority ?? '-'), 9),
+    pad(String(row.freezeAuthority ?? '-'), 10),
+    pad(String(row.holderConcentration ?? '-'), 8),
+    pad(row.topHolderPct === null ? '-' : String(row.topHolderPct), 12),
+    pad(row.top10HolderPct === null ? '-' : String(row.top10HolderPct), 10),
+    pad(String(row.safetyStatus ?? '-'), 12),
     pad(String(row.sourceUrl ?? '-'), 24)
   ].join(' | '));
 
