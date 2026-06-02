@@ -4,7 +4,7 @@ import { AppLogger } from './logger';
 import { redactString } from './redact';
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
-const JUPITER_QUOTE_URL = 'https://quote-api.jup.ag/v6/quote';
+const JUPITER_QUOTE_URL = 'https://lite-api.jup.ag/swap/v1/quote';
 
 function minutesSince(timestamp: string): number {
   return (Date.now() - new Date(timestamp).getTime()) / 60_000;

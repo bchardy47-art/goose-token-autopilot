@@ -109,6 +109,7 @@ describe('read-only quote checks', () => {
     const result = await runQuoteCheck(db, config);
     expect((result as any).routeAvailableCount).toBe(1);
     expect(db.getLatestSnapshot(tokenId)?.sellQuoteAvailable).toBe('YES');
+    expect(String(db.getLatestQuoteSellabilityCheck(tokenId)?.rawJson)).toContain('routePlanLength');
     db.close();
   });
 
@@ -138,7 +139,7 @@ describe('read-only quote checks', () => {
   });
 
   it('quote failure is handled as UNKNOWN/error, not high slippage unless slippage is known and high', async () => {
-    const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener', ENABLE_QUOTE_CHECK: 'true', QUOTE_CHECK_DEBUG: 'true' } as any);
+    const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener', ENABLE_QUOTE_CHECK: 'true' });
     cleanup.push(dir);
     const db = createDb(config);
     const tokenId = db.upsertToken(makeLiveCandidate({ sellQuoteAvailable: 'UNKNOWN', raw: { safetyEnrichment: { decimals: 6 } } }));
