@@ -20,6 +20,7 @@ import { buildSignalAuditReport, renderSignalAudit } from './signalAudit';
 import { buildSignalCompareReport, renderSignalCompare } from './signalCompare';
 import { runSafetyEnrich } from './safetyEnrich';
 import { buildSafetyEnrichDebugReport, renderSafetyEnrichDebug } from './safetyEnrichDebug';
+import { buildSafetyRpcProofReport, renderSafetyRpcProof } from './safetyRpcProof';
 
 function getArgValue(flag: string): string | undefined {
   const index = process.argv.indexOf(flag);
@@ -98,6 +99,9 @@ async function main(): Promise<void> {
         break;
       case 'token:safety-enrich-debug':
         console.log(renderSafetyEnrichDebug(await buildSafetyEnrichDebugReport(db, config, process.env), process.env));
+        break;
+      case 'token:safety-rpc-proof':
+        console.log(renderSafetyRpcProof(await buildSafetyRpcProofReport(db, config, process.env), process.env));
         break;
       case 'token:watch-report':
         console.log(JSON.stringify(buildWatchOnlyReport(db, config), null, 2));
