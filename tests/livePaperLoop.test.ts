@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createDb } from '../src/db';
 import { makeTestConfig, seedScoredDb } from './helpers';
-import { applyLatestQuoteResultToSnapshot, buildPaperEligibilityDiagnostics, isPaperQuoteReady, runAutoPaper } from '../src/paper/autoPaper';
+import { applyLatestQuoteResultToSnapshot, buildPaperEligibilityDiagnostics, isPaperQuoteReady, isPaperResearchBlocked, runAutoPaper } from '../src/paper/autoPaper';
 import { runPaperReview } from '../src/paper/review';
 import { buildPaperPerformanceReport } from '../src/paper/performance';
 import { buildDailyReport } from '../src/paper/dailyReport';
@@ -135,7 +135,82 @@ describe('live paper loop', () => {
     const snapshot = db.getLatestSnapshot(safe.id)!;
     snapshot.sellQuoteAvailable = 'YES';
     snapshot.estimatedSlippageBps = Math.max(1, config.maxSlippageBps - 1);
-    expect(isPaperQuoteReady(snapshot, db.getLatestScore(safe.id)!, config)).toBeNull();
+    snapshot.creatorStatus = 'UNKNOWN';
+    snapshot.holderConcentration = 'RISKY';
+    snapshot.movedBeforeDiscoveryPct = config.maxChasePct + 10;
+    const score = db.getLatestScore(safe.id)!;
+    expect(isPaperQuoteReady(snapshot, score, config)).toBeNull();
+    expect(isPaperResearchBlocked(snapshot, score, config)).toBeNull();
+    db.close();
+  });
+
+  it('creator UNKNOWN alone does not block simulated paper if all paper gates pass', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const snapshot = db.getLatestSnapshot(safe.id)!;
+    snapshot.sellQuoteAvailable = 'YES';
+    snapshot.estimatedSlippageBps = 100;
+    snapshot.creatorStatus = 'UNKNOWN';
+    expect(isPaperResearchBlocked(snapshot, db.getLatestScore(safe.id)!, config)).toBeNull();
+    db.close();
+  });
+
+  it('holder RISKY alone does not block simulated paper if score/quote gates pass', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const snapshot = db.getLatestSnapshot(safe.id)!;
+    snapshot.sellQuoteAvailable = 'YES';
+    snapshot.estimatedSlippageBps = 100;
+    snapshot.holderConcentration = 'RISKY';
+    expect(isPaperResearchBlocked(snapshot, db.getLatestScore(safe.id)!, config)).toBeNull();
+    db.close();
+  });
+
+  it('MAX_CHASE alone does not block simulated paper if score/quote gates pass', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const snapshot = db.getLatestSnapshot(safe.id)!;
+    snapshot.sellQuoteAvailable = 'YES';
+    snapshot.estimatedSlippageBps = 100;
+    snapshot.movedBeforeDiscoveryPct = config.maxChasePct + 50;
+    expect(isPaperResearchBlocked(snapshot, db.getLatestScore(safe.id)!, config)).toBeNull();
+    db.close();
+  });
+
+  it('mint/freeze UNSAFE still block paper', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const mintUnsafe = db.getLatestSnapshot(safe.id)!;
+    mintUnsafe.sellQuoteAvailable = 'YES';
+    mintUnsafe.estimatedSlippageBps = 100;
+    mintUnsafe.mintAuthority = 'UNSAFE';
+    expect(isPaperResearchBlocked(mintUnsafe, db.getLatestScore(safe.id)!, config)).toMatch(/mint authority active/);
+    const freezeUnsafe = db.getLatestSnapshot(safe.id)!;
+    freezeUnsafe.sellQuoteAvailable = 'YES';
+    freezeUnsafe.estimatedSlippageBps = 100;
+    freezeUnsafe.freezeAuthority = 'UNSAFE';
+    expect(isPaperResearchBlocked(freezeUnsafe, db.getLatestScore(safe.id)!, config)).toMatch(/freeze authority active/);
+    db.close();
+  });
+
+  it('score minimum failures still block paper', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const watch = db.findTokenByMint('WATCH111111111111111111111111111111111111111')!;
+    const snapshot = db.getLatestSnapshot(watch.id)!;
+    snapshot.sellQuoteAvailable = 'YES';
+    snapshot.estimatedSlippageBps = 100;
+    const lowScore = {
+      ...db.getLatestScore(watch.id)!,
+      totalScore: 10,
+      safetyScore: 10,
+      momentumScore: 10,
+    };
+    expect(JSON.stringify(isPaperResearchBlocked(snapshot, lowScore, config))).toMatch(/score below paper minimum|momentum score below paper minimum|safety score below paper minimum|total score below paper minimum/);
     db.close();
   });
 
@@ -283,4 +358,4 @@ describe('live paper loop', () => {
     expect(result.scanned).toBeGreaterThan(0);
     db.close();
   });
-}
+});

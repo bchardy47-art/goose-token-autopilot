@@ -62,23 +62,28 @@ export function isPaperQuoteReady(snapshot: TokenCandidate | null, score: TokenS
   return null;
 }
 
-function getSkipReason(db: AppDb, config: AppConfig, tokenId: number, snapshot: TokenCandidate | null, score: TokenScoreResult | null): string | null {
+export function isPaperResearchBlocked(snapshot: TokenCandidate | null, score: TokenScoreResult | null, config: AppConfig): string | null {
   if (!config.enableAutoPaperTrading) return 'auto paper trading disabled';
   if (!snapshot || !score) return 'missing score or snapshot';
   const quoteReadiness = isPaperQuoteReady(snapshot, score, config);
   if (quoteReadiness) return quoteReadiness;
-  if (!['PAPER_BUY', 'AUTOPILOT_ELIGIBLE'].includes(score.verdict)) return `verdict ${score.verdict} not eligible`;
-  if (score.redFlags.length > 0) return `hard red flags: ${score.redFlags.join(', ')}`;
   if ((snapshot.priceUsd ?? 0) <= 0) return 'latest price missing';
   if ((snapshot.liquidityUsd ?? 0) <= 0) return 'latest liquidity missing';
   const age = tokenAgeMinutes(snapshot);
   if (age < config.minTokenAgeMin || age > config.maxTokenAgeHours * 60) return 'token age outside configured range';
-  if (db.getLatestOpenPositionByToken(tokenId, 'PAPER')) return 'duplicate open paper position exists';
-  if (db.getOpenPositionCount('PAPER') >= config.maxOpenPositions) return 'max open paper positions reached';
-  if (db.getDailyPaperBuyCount() >= config.maxDailyPaperBuys) return 'daily paper buy cap reached';
   if (score.totalScore < config.paperMinTotalScore) return 'total score below paper minimum';
   if (score.safetyScore < config.paperMinSafetyScore) return 'safety score below paper minimum';
   if (score.momentumScore < config.paperMinMomentumScore) return 'momentum score below paper minimum';
+  return null;
+}
+
+function getSkipReason(db: AppDb, config: AppConfig, tokenId: number, snapshot: TokenCandidate | null, score: TokenScoreResult | null): string | null {
+  const paperBlocker = isPaperResearchBlocked(snapshot, score, config);
+  if (paperBlocker) return paperBlocker;
+  if (!['PAPER_BUY', 'AUTOPILOT_ELIGIBLE'].includes(score!.verdict)) return `verdict ${score!.verdict} not eligible`;
+  if (db.getLatestOpenPositionByToken(tokenId, 'PAPER')) return 'duplicate open paper position exists';
+  if (db.getOpenPositionCount('PAPER') >= config.maxOpenPositions) return 'max open paper positions reached';
+  if (db.getDailyPaperBuyCount() >= config.maxDailyPaperBuys) return 'daily paper buy cap reached';
   return null;
 }
 

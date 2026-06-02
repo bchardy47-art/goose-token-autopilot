@@ -5,6 +5,7 @@ import { makeTestConfig } from './helpers';
 import { qualifiesForWatchOnly } from '../src/watchOnly';
 import { createDb } from '../src/db';
 import { buildDailyReport } from '../src/paper/dailyReport';
+import { isPaperResearchBlocked } from '../src/paper/autoPaper';
 import { verifySafety } from '../src/verifySafety';
 
 const cleanup: string[] = [];
@@ -63,6 +64,7 @@ describe('safety scoring penalties', () => {
     expect(riskyScore.safetyScore).toBeLessThan(safeScore.safetyScore);
     expect(riskyScore.reasons).toContain('holder concentration risky');
     expect(qualifiesForWatchOnly(riskyCandidate, riskyScore).ok).toBe(true);
+    expect(isPaperResearchBlocked({ ...riskyCandidate, sellQuoteAvailable: 'YES', estimatedSlippageBps: 120 }, riskyScore, config)).toBeNull();
   });
 
   it('verify-safety still says real trading locked', () => {
