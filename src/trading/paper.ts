@@ -50,11 +50,11 @@ function recordEntrySnapshot(db: AppDb, positionId: number, tokenId: number): vo
   );
 }
 
-export function paperBuy(db: AppDb, config: AppConfig, input: { proposalId?: number; mint?: string; amountUsd?: number }): { tradeId: number; positionId: number } {
+export function paperBuy(db: AppDb, config: AppConfig, input: { proposalId?: number; mint?: string; amountUsd?: number; paperApproved?: boolean }): { tradeId: number; positionId: number } {
   const { tokenId, proposalId } = resolveTokenId(db, input);
   const score = db.getLatestScore(tokenId);
 
-  if (!score || (score.verdict !== 'PAPER_BUY' && score.verdict !== 'AUTOPILOT_ELIGIBLE')) {
+  if (!input.paperApproved && (!score || (score.verdict !== 'PAPER_BUY' && score.verdict !== 'AUTOPILOT_ELIGIBLE'))) {
     db.logSafetyEvent(tokenId, 'WARN', 'paper_buy_blocked', 'Paper buy blocked because token is not eligible for paper buy', { tokenId, verdict: score?.verdict ?? null });
     throw new Error('Token is not eligible for paper buy');
   }

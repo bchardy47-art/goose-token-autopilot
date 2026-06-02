@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createDb } from '../src/db';
 import { makeTestConfig, seedScoredDb } from './helpers';
 import { applyLatestQuoteResultToSnapshot, buildPaperEligibilityDiagnostics, isPaperQuoteReady, isPaperResearchBlocked, runAutoPaper } from '../src/paper/autoPaper';
+import { paperBuy } from '../src/trading/paper';
 import { runPaperReview } from '../src/paper/review';
 import { buildPaperPerformanceReport } from '../src/paper/performance';
 import { buildDailyReport } from '../src/paper/dailyReport';
@@ -214,6 +215,14 @@ describe('live paper loop', () => {
     db.close();
   });
 
+  it('manual paperBuy without paperApproved still blocks AVOID verdict', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const watch = db.findTokenByMint('WATCH111111111111111111111111111111111111111')!;
+    expect(() => paperBuy(db, config, { mint: watch.mint })).toThrow(/not eligible for paper buy/);
+    db.close();
+  });
+
   it('a candidate with score verdict AVOID caused only by strict score logic can open simulated paper if all paper gates pass', async () => {
     const { dir, config, db } = await seedScoredDb();
     cleanup.push(dir);
@@ -228,6 +237,32 @@ describe('live paper loop', () => {
     expect(result.decisions.some((decision) => decision.action === 'BOUGHT' && decision.tokenId === safe.id)).toBe(true);
     expect(db.getBlockedRealTradeAttempts()).toBe(0);
     db.close();
+  });
+
+  it('paperApproved still cannot bypass duplicate open position, max open positions, or missing latest price', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const proposalId = db.createProposal(safe.id, 'BUY', 1, 'AVOID', 'test', 'PENDING', {});
+    const first = paperBuy(db, config, { proposalId, paperApproved: true });
+    expect(first.positionId).toBeGreaterThan(0);
+    expect(() => paperBuy(db, config, { proposalId, paperApproved: true })).toThrow(/Duplicate open paper position blocked/);
+    db.close();
+
+    const seeded = await seedScoredDb({ MAX_OPEN_POSITIONS: '0' });
+    cleanup.push(seeded.dir);
+    const safe2 = seeded.db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const proposalId2 = seeded.db.createProposal(safe2.id, 'BUY', 1, 'AVOID', 'test', 'PENDING', {});
+    expect(() => paperBuy(seeded.db, seeded.config, { proposalId: proposalId2, paperApproved: true })).toThrow(/Max open positions cap reached/);
+    seeded.db.close();
+
+    const seeded2 = await seedScoredDb();
+    cleanup.push(seeded2.dir);
+    const safe3 = seeded2.db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    seeded2.db.sqlite.prepare('DELETE FROM token_snapshots WHERE token_id = ?').run(safe3.id);
+    const proposalId3 = seeded2.db.createProposal(safe3.id, 'BUY', 1, 'AVOID', 'test', 'PENDING', {});
+    expect(() => paperBuy(seeded2.db, seeded2.config, { proposalId: proposalId3, paperApproved: true })).toThrow(/Latest token snapshot price is unavailable/);
+    seeded2.db.close();
   });
 
   it('duplicate open paper positions are not created', async () => {

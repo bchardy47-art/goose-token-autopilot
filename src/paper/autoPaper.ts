@@ -200,7 +200,7 @@ export async function runAutoPaper(db: AppDb, config: AppConfig, logger = new Ap
         }
       );
 
-      const result = paperBuy(db, config, { proposalId });
+      const result = paperBuy(db, config, { proposalId, paperApproved: true });
       db.logSafetyEvent(state.tokenId, 'INFO', 'auto_paper_bought', 'Auto paper buy executed', { proposalId, positionId: result.positionId, tokenId: state.tokenId });
       decisions.push({ tokenId: state.tokenId, symbol: state.symbol, mint: state.mint, action: 'BOUGHT', reason: 'eligible for auto paper buy', proposalId, positionId: result.positionId });
     }
