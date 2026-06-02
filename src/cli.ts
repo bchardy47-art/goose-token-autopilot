@@ -21,6 +21,7 @@ import { buildSignalCompareReport, renderSignalCompare } from './signalCompare';
 import { runSafetyEnrich } from './safetyEnrich';
 import { buildSafetyEnrichDebugReport, renderSafetyEnrichDebug } from './safetyEnrichDebug';
 import { buildSafetyRpcProofReport, renderSafetyRpcProof } from './safetyRpcProof';
+import { runQuoteCheck } from './quoteCheck';
 
 function getArgValue(flag: string): string | undefined {
   const index = process.argv.indexOf(flag);
@@ -102,6 +103,9 @@ async function main(): Promise<void> {
         break;
       case 'token:safety-rpc-proof':
         console.log(renderSafetyRpcProof(await buildSafetyRpcProofReport(db, config, process.env), process.env));
+        break;
+      case 'token:quote-check':
+        console.log(JSON.stringify(await runQuoteCheck(db, config), null, 2));
         break;
       case 'token:watch-report':
         console.log(JSON.stringify(buildWatchOnlyReport(db, config), null, 2));

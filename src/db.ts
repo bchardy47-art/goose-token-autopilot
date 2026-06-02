@@ -20,10 +20,12 @@ import type {
   WatchOnlySignalAnalysis,
   WatchOnlySignalClass,
   SolanaSafetyEnrichmentRow,
+  QuoteSellabilityCheckRow,
   HolderConcentrationLevel,
   AuthorityStatus,
   CreatorStatus,
-  ConcentrationStatus
+  ConcentrationStatus,
+  AvailabilityStatus
 } from './types';
 
 function toToday(): string {
@@ -608,6 +610,93 @@ export class AppDb {
       safetyStatus: row.safety_status,
       redFlagsJson: row.red_flags_json,
       notes: row.notes,
+      rawJson: row.raw_json
+    }));
+  }
+
+  createQuoteSellabilityCheck(
+    tokenId: number,
+    mint: string,
+    checkedAt: string,
+    quoteProvider: string,
+    inputMint: string | null,
+    outputMint: string | null,
+    sellAmountUsd: number,
+    sellAmountRaw: string | null,
+    routeAvailable: boolean | null,
+    expectedOutputAmount: string | null,
+    estimatedSlippageBps: number | null,
+    priceImpactPct: number | null,
+    sellQuoteStatus: AvailabilityStatus | null,
+    safetyStatus: string | null,
+    errorSummary: string | null,
+    raw: Record<string, unknown>
+  ): number {
+    const result = this.sqlite.prepare(
+      'INSERT INTO quote_sellability_checks (token_id, mint, checked_at, quote_provider, input_mint, output_mint, sell_amount_usd, sell_amount_raw, route_available, expected_output_amount, estimated_slippage_bps, price_impact_pct, sell_quote_status, safety_status, error_summary, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      tokenId,
+      mint,
+      checkedAt,
+      quoteProvider,
+      inputMint,
+      outputMint,
+      sellAmountUsd,
+      sellAmountRaw,
+      routeAvailable === null ? null : (routeAvailable ? 1 : 0),
+      expectedOutputAmount,
+      estimatedSlippageBps,
+      priceImpactPct,
+      sellQuoteStatus,
+      safetyStatus,
+      errorSummary,
+      JSON.stringify(raw)
+    );
+    return Number(result.lastInsertRowid);
+  }
+
+  getLatestQuoteSellabilityCheck(tokenId: number): QuoteSellabilityCheckRow | null {
+    const row = this.sqlite.prepare('SELECT * FROM quote_sellability_checks WHERE token_id = ? ORDER BY checked_at DESC, id DESC LIMIT 1').get(tokenId) as any;
+    if (!row) return null;
+    return {
+      id: row.id,
+      tokenId: row.token_id,
+      mint: row.mint,
+      checkedAt: row.checked_at,
+      quoteProvider: row.quote_provider,
+      inputMint: row.input_mint,
+      outputMint: row.output_mint,
+      sellAmountUsd: row.sell_amount_usd,
+      sellAmountRaw: row.sell_amount_raw,
+      routeAvailable: row.route_available === null ? null : Boolean(row.route_available),
+      expectedOutputAmount: row.expected_output_amount,
+      estimatedSlippageBps: row.estimated_slippage_bps,
+      priceImpactPct: row.price_impact_pct,
+      sellQuoteStatus: row.sell_quote_status,
+      safetyStatus: row.safety_status,
+      errorSummary: row.error_summary,
+      rawJson: row.raw_json
+    };
+  }
+
+  listQuoteSellabilityChecks(): QuoteSellabilityCheckRow[] {
+    return this.sqlite.prepare('SELECT * FROM quote_sellability_checks ORDER BY checked_at DESC, id DESC').all().map((row: any) => ({
+      id: row.id,
+      tokenId: row.token_id,
+      mint: row.mint,
+      checkedAt: row.checked_at,
+      quoteProvider: row.quote_provider,
+      inputMint: row.input_mint,
+      outputMint: row.output_mint,
+      sellAmountUsd: row.sell_amount_usd,
+      sellAmountRaw: row.sell_amount_raw,
+      routeAvailable: row.route_available === null ? null : Boolean(row.route_available),
+      expectedOutputAmount: row.expected_output_amount,
+      estimatedSlippageBps: row.estimated_slippage_bps,
+      priceImpactPct: row.price_impact_pct,
+      sellQuoteStatus: row.sell_quote_status,
+      safetyStatus: row.safety_status,
+      errorSummary: row.error_summary,
       rawJson: row.raw_json
     }));
   }

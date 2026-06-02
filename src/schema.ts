@@ -198,6 +198,27 @@ CREATE TABLE IF NOT EXISTS solana_safety_enrichments (
   FOREIGN KEY(token_id) REFERENCES tokens(id)
 );
 
+CREATE TABLE IF NOT EXISTS quote_sellability_checks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token_id INTEGER NOT NULL,
+  mint TEXT NOT NULL,
+  checked_at TEXT NOT NULL,
+  quote_provider TEXT NOT NULL,
+  input_mint TEXT,
+  output_mint TEXT,
+  sell_amount_usd REAL NOT NULL,
+  sell_amount_raw TEXT,
+  route_available INTEGER,
+  expected_output_amount TEXT,
+  estimated_slippage_bps REAL,
+  price_impact_pct REAL,
+  sell_quote_status TEXT,
+  safety_status TEXT,
+  error_summary TEXT,
+  raw_json TEXT NOT NULL,
+  FOREIGN KEY(token_id) REFERENCES tokens(id)
+);
+
 CREATE TABLE IF NOT EXISTS real_trade_attempts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   token_id INTEGER NOT NULL,

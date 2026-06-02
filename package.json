@@ -26,6 +26,7 @@
     "token:safety-enrich": "tsx src/cli.ts token:safety-enrich",
     "token:safety-enrich-debug": "tsx src/cli.ts token:safety-enrich-debug",
     "token:safety-rpc-proof": "tsx src/cli.ts token:safety-rpc-proof",
+    "token:quote-check": "tsx src/cli.ts token:quote-check",
     "token:verify-safety": "tsx src/cli.ts token:verify-safety",
     "token:kill": "tsx src/cli.ts token:kill",
     "token:autopilot": "tsx src/cli.ts token:autopilot",

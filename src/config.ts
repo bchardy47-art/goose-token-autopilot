@@ -41,7 +41,11 @@ const DEFAULTS = {
   SAFETY_ENRICHMENT_TIMEOUT_MS: 8000,
   SAFETY_ENRICHMENT_MAX_TOKENS_PER_RUN: 25,
   SAFETY_ENRICHMENT_CACHE_MINUTES: 60,
-  ENABLE_QUOTE_CHECK: false
+  ENABLE_QUOTE_CHECK: false,
+  QUOTE_CHECK_TIMEOUT_MS: 8000,
+  QUOTE_CHECK_MAX_TOKENS_PER_RUN: 25,
+  QUOTE_CHECK_CACHE_MINUTES: 30,
+  QUOTE_CHECK_SELL_AMOUNT_USD: 2
 };
 
 function parseBoolean(name: string, raw: string | undefined, fallback: boolean): boolean {
@@ -111,6 +115,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     safetyEnrichmentMaxTokensPerRun: parseNumber('SAFETY_ENRICHMENT_MAX_TOKENS_PER_RUN', env.SAFETY_ENRICHMENT_MAX_TOKENS_PER_RUN, DEFAULTS.SAFETY_ENRICHMENT_MAX_TOKENS_PER_RUN, { integer: true, min: 1 }),
     safetyEnrichmentCacheMinutes: parseNumber('SAFETY_ENRICHMENT_CACHE_MINUTES', env.SAFETY_ENRICHMENT_CACHE_MINUTES, DEFAULTS.SAFETY_ENRICHMENT_CACHE_MINUTES, { integer: true, min: 1 }),
     enableQuoteCheck: parseBoolean('ENABLE_QUOTE_CHECK', env.ENABLE_QUOTE_CHECK, DEFAULTS.ENABLE_QUOTE_CHECK),
+    quoteCheckTimeoutMs: parseNumber('QUOTE_CHECK_TIMEOUT_MS', env.QUOTE_CHECK_TIMEOUT_MS, DEFAULTS.QUOTE_CHECK_TIMEOUT_MS, { integer: true, min: 1 }),
+    quoteCheckMaxTokensPerRun: parseNumber('QUOTE_CHECK_MAX_TOKENS_PER_RUN', env.QUOTE_CHECK_MAX_TOKENS_PER_RUN, DEFAULTS.QUOTE_CHECK_MAX_TOKENS_PER_RUN, { integer: true, min: 1 }),
+    quoteCheckCacheMinutes: parseNumber('QUOTE_CHECK_CACHE_MINUTES', env.QUOTE_CHECK_CACHE_MINUTES, DEFAULTS.QUOTE_CHECK_CACHE_MINUTES, { integer: true, min: 1 }),
+    quoteCheckSellAmountUsd: parseNumber('QUOTE_CHECK_SELL_AMOUNT_USD', env.QUOTE_CHECK_SELL_AMOUNT_USD, DEFAULTS.QUOTE_CHECK_SELL_AMOUNT_USD, { min: 0.000001 }),
+    quoteCheckSlippageBps: parseNumber('QUOTE_CHECK_SLIPPAGE_BPS', env.QUOTE_CHECK_SLIPPAGE_BPS, parseNumber('MAX_SLIPPAGE_BPS', env.MAX_SLIPPAGE_BPS, DEFAULTS.MAX_SLIPPAGE_BPS, { min: 0 }), { min: 0 }),
     burnerWalletPublicKey: env.BURNER_WALLET_PUBLIC_KEY || undefined,
     burnerWalletPrivateKey: env.BURNER_WALLET_PRIVATE_KEY || undefined,
     mainWalletPresent: parseBoolean('MAIN_WALLET_PRESENT', env.MAIN_WALLET_PRESENT, false)
@@ -163,6 +172,11 @@ export function getConfigSafetyStatus(config: AppConfig): Record<string, unknown
     safetyEnrichmentMaxTokensPerRun: config.safetyEnrichmentMaxTokensPerRun,
     safetyEnrichmentCacheMinutes: config.safetyEnrichmentCacheMinutes,
     enableQuoteCheck: config.enableQuoteCheck,
+    quoteCheckTimeoutMs: config.quoteCheckTimeoutMs,
+    quoteCheckMaxTokensPerRun: config.quoteCheckMaxTokensPerRun,
+    quoteCheckCacheMinutes: config.quoteCheckCacheMinutes,
+    quoteCheckSellAmountUsd: config.quoteCheckSellAmountUsd,
+    quoteCheckSlippageBps: config.quoteCheckSlippageBps,
     burnerWalletPublicKey: config.burnerWalletPublicKey,
     burnerWalletPrivateKey: config.burnerWalletPrivateKey,
     mainWalletPresent: config.mainWalletPresent

@@ -283,6 +283,26 @@ export interface SolanaSafetyEnrichmentRow {
   rawJson: string;
 }
 
+export interface QuoteSellabilityCheckRow {
+  id: number;
+  tokenId: number;
+  mint: string;
+  checkedAt: string;
+  quoteProvider: string;
+  inputMint: string | null;
+  outputMint: string | null;
+  sellAmountUsd: number;
+  sellAmountRaw: string | null;
+  routeAvailable: boolean | null;
+  expectedOutputAmount: string | null;
+  estimatedSlippageBps: number | null;
+  priceImpactPct: number | null;
+  sellQuoteStatus: AvailabilityStatus | null;
+  safetyStatus: string | null;
+  errorSummary: string | null;
+  rawJson: string;
+}
+
 export interface AppConfig {
   tokenRadarDryRun: boolean;
   tradingDisabled: boolean;
@@ -321,6 +341,11 @@ export interface AppConfig {
   safetyEnrichmentMaxTokensPerRun: number;
   safetyEnrichmentCacheMinutes: number;
   enableQuoteCheck: boolean;
+  quoteCheckTimeoutMs: number;
+  quoteCheckMaxTokensPerRun: number;
+  quoteCheckCacheMinutes: number;
+  quoteCheckSellAmountUsd: number;
+  quoteCheckSlippageBps: number;
   burnerWalletPublicKey?: string;
   burnerWalletPrivateKey?: string;
   mainWalletPresent: boolean;
