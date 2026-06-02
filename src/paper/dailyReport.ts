@@ -82,7 +82,8 @@ export function buildDailyReport(db: AppDb, _config: AppConfig): Record<string, 
       totalCandidatesEvaluated: paperEligibilityDiagnostics.totalCandidatesEvaluated,
       eligibleForPaperCount: paperEligibilityDiagnostics.eligibleForPaperCount,
       paperBuysWouldOpenCount: paperEligibilityDiagnostics.paperBuysWouldOpenCount,
-      topSkipReasons: paperEligibilityDiagnostics.topSkipReasons
+      topSkipReasons: paperEligibilityDiagnostics.topSkipReasons,
+      topWarnings: paperEligibilityDiagnostics.topWarnings
     },
     safetyPenaltySummary: {
       riskyHolderCount: latestStates.filter((state) => state.snapshot?.holderConcentration === 'RISKY').length,

@@ -87,19 +87,17 @@ function getSkipReason(db: AppDb, config: AppConfig, tokenId: number, snapshot: 
 }
 
 export function buildPaperEligibilityDiagnostics(db: AppDb, config: AppConfig): Record<string, unknown> {
-  const rows: PaperEligibilityDiagnosticRow[] = db.listLatestTokenStates(50).map((state) => {
+  const rows: Array<PaperEligibilityDiagnosticRow & { warnings: string[] }> = db.listLatestTokenStates(50).map((state) => {
     const latestQuote = db.getLatestQuoteSellabilityCheck(state.tokenId);
     const preparedSnapshot = applyLatestQuoteResultToSnapshot(state.snapshot, latestQuote, config);
     const preparedScore = preparedSnapshot ? scoreToken(state.tokenId, preparedSnapshot, config) : state.score;
     const blockers = [
-      isPaperQuoteReady(preparedSnapshot, preparedScore, config),
-      preparedScore && preparedScore.totalScore < config.paperMinTotalScore ? 'total score below paper minimum' : null,
-      preparedScore && preparedScore.safetyScore < config.paperMinSafetyScore ? 'safety score below paper minimum' : null,
-      preparedScore && preparedScore.momentumScore < config.paperMinMomentumScore ? 'momentum score below paper minimum' : null,
-      preparedSnapshot && (preparedSnapshot.liquidityUsd ?? 0) <= 0 ? 'latest liquidity missing' : null,
-      preparedSnapshot && (tokenAgeMinutes(preparedSnapshot) < config.minTokenAgeMin || tokenAgeMinutes(preparedSnapshot) > config.maxTokenAgeHours * 60) ? 'token age outside configured range' : null,
-      ...(preparedScore?.redFlags ?? [])
+      isPaperResearchBlocked(preparedSnapshot, preparedScore, config),
+      db.getLatestOpenPositionByToken(state.tokenId, 'PAPER') ? 'duplicate open paper position exists' : null,
+      db.getOpenPositionCount('PAPER') >= config.maxOpenPositions ? 'max open paper positions reached' : null,
+      db.getDailyPaperBuyCount() >= config.maxDailyPaperBuys ? 'daily paper buy cap reached' : null
     ].filter((value): value is string => Boolean(value));
+    const warnings = [...new Set(preparedScore?.redFlags ?? [])];
 
     return {
       tokenId: state.tokenId,
@@ -116,6 +114,7 @@ export function buildPaperEligibilityDiagnostics(db: AppDb, config: AppConfig): 
       holderConcentration: preparedSnapshot?.holderConcentration ?? null,
       verdict: preparedScore?.verdict ?? null,
       blockers,
+      warnings,
       distanceToPaperScore: preparedScore ? Number(Math.max(0, config.paperMinTotalScore - preparedScore.totalScore).toFixed(2)) : null
     };
   });
@@ -128,8 +127,11 @@ export function buildPaperEligibilityDiagnostics(db: AppDb, config: AppConfig): 
 
   const eligibleForPaper = rows.filter((row) => row.blockers.length === 0);
   const closest = [...rows]
-    .filter((row) => row.blockers.length > 0)
-    .sort((a, b) => (a.distanceToPaperScore ?? Number.POSITIVE_INFINITY) - (b.distanceToPaperScore ?? Number.POSITIVE_INFINITY))
+    .sort((a, b) => {
+      const blockerDelta = a.blockers.length - b.blockers.length;
+      if (blockerDelta !== 0) return blockerDelta;
+      return (a.distanceToPaperScore ?? Number.POSITIVE_INFINITY) - (b.distanceToPaperScore ?? Number.POSITIVE_INFINITY);
+    })
     .slice(0, 10);
 
   return {
@@ -154,6 +156,7 @@ export function buildPaperEligibilityDiagnostics(db: AppDb, config: AppConfig): 
     eligibleForPaperCount: eligibleForPaper.length,
     paperBuysWouldOpenCount: Math.max(0, Math.min(eligibleForPaper.length, config.maxDailyPaperBuys - db.getDailyPaperBuyCount(), config.maxOpenPositions - db.getOpenPositionCount('PAPER'))),
     topSkipReasons: topItems(rows.flatMap((row) => row.blockers)),
+    topWarnings: topItems(rows.flatMap((row) => row.warnings)),
     topClosestCandidates: closest,
     finalSafetyStatus: 'Real trading remains locked.'
   };

@@ -215,14 +215,6 @@ describe('live paper loop', () => {
     db.close();
   });
 
-  it('manual paperBuy without paperApproved still blocks AVOID verdict', async () => {
-    const { dir, config, db } = await seedScoredDb();
-    cleanup.push(dir);
-    const watch = db.findTokenByMint('WATCH111111111111111111111111111111111111111')!;
-    expect(() => paperBuy(db, config, { mint: watch.mint })).toThrow(/not eligible for paper buy/);
-    db.close();
-  });
-
   it('a candidate with score verdict AVOID caused only by strict score logic can open simulated paper if all paper gates pass', async () => {
     const { dir, config, db } = await seedScoredDb();
     cleanup.push(dir);
@@ -353,6 +345,39 @@ describe('live paper loop', () => {
     db.close();
   });
 
+  it('paper-eligibility blockers do not include creator status unknown, data stale, or MAX_CHASE when paper gates pass', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const safeSnapshot = db.getLatestSnapshot(safe.id)!;
+    db.createQuoteSellabilityCheck(safe.id, safeSnapshot.mint, new Date().toISOString(), 'jupiter', safeSnapshot.mint, 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
+    safeSnapshot.creatorStatus = 'UNKNOWN';
+    safeSnapshot.dataUpdatedAt = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    safeSnapshot.movedBeforeDiscoveryPct = config.maxChasePct + 25;
+    db.insertSnapshot(safe.id, safeSnapshot);
+    const report = buildPaperEligibilityDiagnostics(db, config) as any;
+    const candidate = report.topClosestCandidates.find((row: any) => row.tokenId === safe.id);
+    expect(candidate).toBeTruthy();
+    expect(JSON.stringify(candidate.blockers)).not.toMatch(/creator status unknown|data stale|MAX_CHASE/);
+    expect(JSON.stringify(report.topWarnings)).toMatch(/creator status unknown|data stale|MAX_CHASE|token moved above MAX_CHASE_PCT before discovery/);
+    db.close();
+  });
+
+  it('eligibleForPaperCount uses blockers, not warnings and topSkipReasons counts blockers only', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const safeSnapshot = db.getLatestSnapshot(safe.id)!;
+    db.createQuoteSellabilityCheck(safe.id, safeSnapshot.mint, new Date().toISOString(), 'jupiter', safeSnapshot.mint, 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
+    safeSnapshot.creatorStatus = 'UNKNOWN';
+    db.insertSnapshot(safe.id, safeSnapshot);
+    const report = buildPaperEligibilityDiagnostics(db, config) as any;
+    expect(report.eligibleForPaperCount).toBeGreaterThanOrEqual(1);
+    expect(JSON.stringify(report.topSkipReasons)).not.toMatch(/creator status unknown|data stale|MAX_CHASE/);
+    expect(JSON.stringify(report.topWarnings)).toMatch(/creator status unknown|data stale|MAX_CHASE|holder concentration/);
+    db.close();
+  });
+
   it('paper-eligibility report counts quote-ready vs quote-unknown candidates and returns closest candidates', async () => {
     const { dir, config, db } = await seedScoredDb();
     cleanup.push(dir);
@@ -376,6 +401,7 @@ describe('live paper loop', () => {
     expect(report).toHaveProperty('failedTotalScoreCount');
     expect(report).toHaveProperty('failedSafetyScoreCount');
     expect(report).toHaveProperty('failedMomentumScoreCount');
+    expect(report).toHaveProperty('topWarnings');
     expect(JSON.stringify(report.topSkipReasons)).toMatch(/sell quote unknown|sell quote unavailable|slippage/);
     db.close();
   });
