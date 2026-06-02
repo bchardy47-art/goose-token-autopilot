@@ -36,6 +36,7 @@ export function buildDailyReport(db: AppDb, _config: AppConfig): Record<string, 
   const worstWatchOnly = [...watchOnly].sort((a, b) => (a.worstDrawdownPct ?? Number.POSITIVE_INFINITY) - (b.worstDrawdownPct ?? Number.POSITIVE_INFINITY))[0] ?? null;
   const watchAnalysisSummary = summarizeWatchOnlySignalAnalysis(db);
   const enrichments = db.listSolanaSafetyEnrichments();
+  const latestStates = db.listLatestTokenStates(100);
 
   return {
     tokensScannedToday: scanLogs.reduce((sum, log) => sum + Number(log.summary.scanned ?? 0), 0),
@@ -65,6 +66,13 @@ export function buildDailyReport(db: AppDb, _config: AppConfig): Record<string, 
       freezeAuthorityRenouncedCount: enrichments.filter((row) => row.freezeAuthorityRenounced === true).length,
       highHolderConcentrationCount: enrichments.filter((row) => row.holderConcentrationLevel === 'HIGH').length,
       unknownAuthorityCount: enrichments.filter((row) => row.mintAuthority === 'UNKNOWN' || row.freezeAuthority === 'UNKNOWN').length
+    },
+    safetyPenaltySummary: {
+      riskyHolderCount: latestStates.filter((state) => state.snapshot?.holderConcentration === 'RISKY').length,
+      unsafeMintCount: latestStates.filter((state) => state.snapshot?.mintAuthority === 'UNSAFE').length,
+      unsafeFreezeCount: latestStates.filter((state) => state.snapshot?.freezeAuthority === 'UNSAFE').length,
+      unknownSellabilityCount: latestStates.filter((state) => state.snapshot?.sellQuoteAvailable === 'UNKNOWN').length,
+      enrichmentMissingCount: latestStates.filter((state) => state.snapshot?.mintAuthority === 'UNKNOWN' && state.snapshot?.freezeAuthority === 'UNKNOWN' && state.snapshot?.holderConcentration === 'UNKNOWN').length
     },
     topRedFlags: topItems(redFlags),
     topSkipReasons: topItems(skippedReasons),

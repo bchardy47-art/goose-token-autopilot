@@ -66,6 +66,16 @@ describe('watch-only lane', () => {
     expect(qualifiesForWatchOnly(candidate, score).ok).toBe(false);
   });
 
+  it('holder concentration RISKY is treated as penalty, not clean filter', () => {
+    const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener' });
+    cleanup.push(dir);
+    const candidate = makeLiveCandidate({ holderConcentration: 'RISKY' });
+    const score = scoreToken(1, candidate, config);
+    const watch = qualifiesForWatchOnly(candidate, score);
+    expect(score.reasons).toContain('holder concentration risky');
+    expect(watch.ok).toBe(true);
+  });
+
   it('low liquidity blocks WATCH_ONLY', () => {
     const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener' });
     cleanup.push(dir);

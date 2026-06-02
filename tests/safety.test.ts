@@ -148,7 +148,81 @@ describe('safety guards', () => {
     const safety = evaluateSafety(snapshot, config);
     expect(safety.hardRedFlags).toContain('freeze authority unknown');
     expect(safety.hardRedFlags).toContain('mint authority active');
+    expect(safety.autopilotBlockers).toContain('unknown freeze authority blocks autopilot');
+    expect(safety.autopilotBlockers).toContain('mint authority active blocks autopilot');
     db.close();
+  });
+
+  it('freeze authority UNSAFE creates hard red flag and blocks paper/autopilot', () => {
+    const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener' });
+    cleanup.push(dir);
+    const candidate = {
+      chain: 'solana', mint: 'F111', symbol: 'F', name: 'Freeze', source: 'dexscreener', sourceUrl: null,
+      discoveredAt: new Date().toISOString(), tokenCreatedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      priceUsd: 1, liquidityUsd: 25000, marketCapUsd: 100000, volume5mUsd: 6000, volume1hUsd: 25000, volume24hUsd: 50000,
+      priceChange5mPct: 10, priceChange1hPct: 20, buys5m: 20, sells5m: 10, liquidityGrowthPct: 10,
+      freezeAuthority: 'UNSAFE' as const, mintAuthority: 'SAFE' as const, sellQuoteAvailable: 'YES' as const, estimatedSlippageBps: 100,
+      metadataPresent: true, websitePresent: true, socialsPresent: true, holderConcentration: 'SAFE' as const, creatorStatus: 'SAFE' as const,
+      movedBeforeDiscoveryPct: 10, dataUpdatedAt: new Date().toISOString(), raw: {}
+    };
+    const score = scoreToken(1, candidate, config);
+    expect(score.redFlags).toContain('freeze authority active');
+    expect(score.autopilotBlockers).toContain('freeze authority active blocks autopilot');
+    expect(score.verdict).toBe('AVOID');
+  });
+
+  it('mint authority UNSAFE creates hard red flag and blocks paper/autopilot', () => {
+    const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener' });
+    cleanup.push(dir);
+    const candidate = {
+      chain: 'solana', mint: 'M111', symbol: 'M', name: 'Mint', source: 'dexscreener', sourceUrl: null,
+      discoveredAt: new Date().toISOString(), tokenCreatedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      priceUsd: 1, liquidityUsd: 25000, marketCapUsd: 100000, volume5mUsd: 6000, volume1hUsd: 25000, volume24hUsd: 50000,
+      priceChange5mPct: 10, priceChange1hPct: 20, buys5m: 20, sells5m: 10, liquidityGrowthPct: 10,
+      freezeAuthority: 'SAFE' as const, mintAuthority: 'UNSAFE' as const, sellQuoteAvailable: 'YES' as const, estimatedSlippageBps: 100,
+      metadataPresent: true, websitePresent: true, socialsPresent: true, holderConcentration: 'SAFE' as const, creatorStatus: 'SAFE' as const,
+      movedBeforeDiscoveryPct: 10, dataUpdatedAt: new Date().toISOString(), raw: {}
+    };
+    const score = scoreToken(1, candidate, config);
+    expect(score.redFlags).toContain('mint authority active');
+    expect(score.autopilotBlockers).toContain('mint authority active blocks autopilot');
+    expect(score.verdict).toBe('AVOID');
+  });
+
+  it('holder concentration RISKY reduces safety score compared to SAFE', () => {
+    const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener' });
+    cleanup.push(dir);
+    const base = {
+      chain: 'solana', mint: 'H111', symbol: 'H', name: 'Holder', source: 'dexscreener', sourceUrl: null,
+      discoveredAt: new Date().toISOString(), tokenCreatedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      priceUsd: 1, liquidityUsd: 25000, marketCapUsd: 100000, volume5mUsd: 6000, volume1hUsd: 25000, volume24hUsd: 50000,
+      priceChange5mPct: 10, priceChange1hPct: 20, buys5m: 20, sells5m: 10, liquidityGrowthPct: 10,
+      freezeAuthority: 'SAFE' as const, mintAuthority: 'SAFE' as const, sellQuoteAvailable: 'YES' as const, estimatedSlippageBps: 100,
+      metadataPresent: true, websitePresent: true, socialsPresent: true, creatorStatus: 'SAFE' as const,
+      movedBeforeDiscoveryPct: 10, dataUpdatedAt: new Date().toISOString(), raw: {}
+    };
+    const safeScore = scoreToken(1, { ...base, holderConcentration: 'SAFE' as const }, config);
+    const riskyScore = scoreToken(1, { ...base, holderConcentration: 'RISKY' as const }, config);
+    expect(riskyScore.safetyScore).toBeLessThan(safeScore.safetyScore);
+    expect(riskyScore.reasons).toContain('holder concentration risky');
+  });
+
+  it('holder concentration UNKNOWN remains conservative/unsafe', () => {
+    const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener' });
+    cleanup.push(dir);
+    const candidate = {
+      chain: 'solana', mint: 'HU111', symbol: 'HU', name: 'HolderUnknown', source: 'dexscreener', sourceUrl: null,
+      discoveredAt: new Date().toISOString(), tokenCreatedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      priceUsd: 1, liquidityUsd: 25000, marketCapUsd: 100000, volume5mUsd: 6000, volume1hUsd: 25000, volume24hUsd: 50000,
+      priceChange5mPct: 10, priceChange1hPct: 20, buys5m: 20, sells5m: 10, liquidityGrowthPct: 10,
+      freezeAuthority: 'SAFE' as const, mintAuthority: 'SAFE' as const, sellQuoteAvailable: 'YES' as const, estimatedSlippageBps: 100,
+      metadataPresent: true, websitePresent: true, socialsPresent: true, holderConcentration: 'UNKNOWN' as const, creatorStatus: 'SAFE' as const,
+      movedBeforeDiscoveryPct: 10, dataUpdatedAt: new Date().toISOString(), raw: {}
+    };
+    const score = scoreToken(1, candidate, config);
+    expect(score.redFlags).toContain('holder concentration unknown');
+    expect(score.autopilotBlockers).toContain('unknown holder concentration blocks autopilot');
+    expect(score.verdict).toBe('AVOID');
   });
 
   it('low liquidity rejects token', async () => {
@@ -167,6 +241,43 @@ describe('safety guards', () => {
     expect(quote.ok).toBe(false);
     expect(quote.reason).toMatch(/sell quote unavailable/);
     db.close();
+  });
+
+  it('sell quote UNKNOWN or unavailable blocks readiness', () => {
+    const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener' });
+    cleanup.push(dir);
+    const base = {
+      chain: 'solana', mint: 'SQ111', symbol: 'SQ', name: 'Sellability', source: 'dexscreener', sourceUrl: null,
+      discoveredAt: new Date().toISOString(), tokenCreatedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      priceUsd: 1, liquidityUsd: 25000, marketCapUsd: 100000, volume5mUsd: 6000, volume1hUsd: 25000, volume24hUsd: 50000,
+      priceChange5mPct: 10, priceChange1hPct: 20, buys5m: 20, sells5m: 10, liquidityGrowthPct: 10,
+      freezeAuthority: 'SAFE' as const, mintAuthority: 'SAFE' as const, estimatedSlippageBps: 100,
+      metadataPresent: true, websitePresent: true, socialsPresent: true, holderConcentration: 'SAFE' as const, creatorStatus: 'SAFE' as const,
+      movedBeforeDiscoveryPct: 10, dataUpdatedAt: new Date().toISOString(), raw: {}
+    };
+    const unknownScore = scoreToken(1, { ...base, sellQuoteAvailable: 'UNKNOWN' as const }, config);
+    const noScore = scoreToken(2, { ...base, sellQuoteAvailable: 'NO' as const }, config);
+    expect(unknownScore.redFlags).toContain('sell quote unknown');
+    expect(unknownScore.autopilotBlockers).toContain('unknown sellability blocks autopilot');
+    expect(noScore.redFlags).toContain('sell quote unavailable');
+    expect(noScore.autopilotBlockers).toContain('sell quote unavailable blocks autopilot');
+  });
+
+  it('missing enrichment is conservative', () => {
+    const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener' });
+    cleanup.push(dir);
+    const candidate = {
+      chain: 'solana', mint: 'ME111', symbol: 'ME', name: 'MissingEnrichment', source: 'dexscreener', sourceUrl: null,
+      discoveredAt: new Date().toISOString(), tokenCreatedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      priceUsd: 1, liquidityUsd: 25000, marketCapUsd: 100000, volume5mUsd: 6000, volume1hUsd: 25000, volume24hUsd: 50000,
+      priceChange5mPct: 10, priceChange1hPct: 20, buys5m: 20, sells5m: 10, liquidityGrowthPct: 10,
+      freezeAuthority: 'UNKNOWN' as const, mintAuthority: 'UNKNOWN' as const, sellQuoteAvailable: 'UNKNOWN' as const, estimatedSlippageBps: 100,
+      metadataPresent: true, websitePresent: true, socialsPresent: true, holderConcentration: 'UNKNOWN' as const, creatorStatus: 'SAFE' as const,
+      movedBeforeDiscoveryPct: 10, dataUpdatedAt: new Date().toISOString(), raw: {}
+    };
+    const score = scoreToken(1, candidate, config);
+    expect(score.reasons).toContain('safety enrichment missing');
+    expect(score.autopilotBlocked).toBe(true);
   });
 
   it('slippage above max rejects token', async () => {

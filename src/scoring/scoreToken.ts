@@ -12,6 +12,9 @@ function tokenAgeMinutes(candidate: TokenCandidate): number {
 export function scoreToken(tokenId: number, candidate: TokenCandidate, config: AppConfig): TokenScoreResult {
   const safety = evaluateSafety(candidate, config);
   const reasons = [...safety.reasons];
+  const pushUnique = (list: string[], value: string): void => {
+    if (!list.includes(value)) list.push(value);
+  };
 
   const buySellRatio = (candidate.buys5m ?? 0) / Math.max(1, candidate.sells5m ?? 0);
   const volumeAcceleration = (candidate.volume5mUsd ?? 0) > 0 && (candidate.volume1hUsd ?? 0) > 0
@@ -28,18 +31,49 @@ export function scoreToken(tokenId: number, candidate: TokenCandidate, config: A
 
   if (age >= config.minTokenAgeMin && age <= config.maxTokenAgeHours * 60) {
     momentum += 4;
-    reasons.push('token age is inside preferred momentum window');
+    pushUnique(reasons, 'token age is inside preferred momentum window');
   } else {
-    reasons.push('token age is outside preferred momentum window');
+    pushUnique(reasons, 'token age is outside preferred momentum window');
   }
 
   let safetyScore = 0;
   if ((candidate.liquidityUsd ?? 0) >= config.minLiquidityUsd) safetyScore += 12;
-  if (candidate.freezeAuthority === 'SAFE') safetyScore += 8;
-  if (candidate.mintAuthority === 'SAFE') safetyScore += 8;
+  if (candidate.freezeAuthority === 'SAFE') {
+    safetyScore += 8;
+    pushUnique(reasons, 'freeze authority renounced');
+  }
+  if (candidate.mintAuthority === 'SAFE') {
+    safetyScore += 8;
+    pushUnique(reasons, 'mint authority renounced');
+  }
   if (candidate.sellQuoteAvailable === 'YES') safetyScore += 5;
   if ((candidate.estimatedSlippageBps ?? Number.POSITIVE_INFINITY) <= config.maxSlippageBps) safetyScore += 3;
-  if (candidate.holderConcentration === 'SAFE') safetyScore += 2;
+  if (candidate.holderConcentration === 'SAFE') {
+    safetyScore += 2;
+    pushUnique(reasons, 'holder concentration safe');
+  }
+  if (candidate.holderConcentration === 'RISKY') {
+    safetyScore -= 6;
+    pushUnique(reasons, 'holder concentration risky');
+  }
+  if (candidate.holderConcentration === 'UNKNOWN') {
+    safetyScore -= 8;
+    pushUnique(reasons, 'holder concentration unknown');
+  }
+  if (candidate.sellQuoteAvailable === 'NO') {
+    safetyScore -= 8;
+    pushUnique(reasons, 'sell quote unavailable');
+  }
+  if (candidate.sellQuoteAvailable === 'UNKNOWN') {
+    safetyScore -= 10;
+    pushUnique(reasons, 'sell quote unknown');
+  }
+  if (candidate.freezeAuthority === 'UNSAFE') safetyScore -= 15;
+  if (candidate.mintAuthority === 'UNSAFE') safetyScore -= 15;
+  if (candidate.freezeAuthority === 'UNKNOWN' || candidate.mintAuthority === 'UNKNOWN') {
+    safetyScore -= 6;
+    pushUnique(reasons, 'safety enrichment missing');
+  }
   if (candidate.creatorStatus === 'SAFE') safetyScore += 1;
   if (candidate.metadataPresent && candidate.priceUsd !== null && candidate.liquidityUsd !== null) safetyScore += 1;
 
@@ -57,7 +91,7 @@ export function scoreToken(tokenId: number, candidate: TokenCandidate, config: A
 
   if (safety.hardRedFlags.length > 0) {
     verdict = 'AVOID';
-    reasons.push('hard red flags force AVOID');
+    pushUnique(reasons, 'hard red flags force AVOID');
   } else if (
     total >= config.minTotalScoreForAutopilot &&
     safetyScore >= config.minSafetyScoreForAutopilot &&
@@ -65,21 +99,21 @@ export function scoreToken(tokenId: number, candidate: TokenCandidate, config: A
     safety.autopilotBlockers.length === 0
   ) {
     verdict = 'AUTOPILOT_ELIGIBLE';
-    reasons.push('passes total, safety, momentum, and blocker thresholds');
+    pushUnique(reasons, 'passes total, safety, momentum, and blocker thresholds');
   } else if (total >= 60) {
     verdict = 'PAPER_BUY';
-    reasons.push('strong enough for paper buy but not safe enough for real autopilot');
+    pushUnique(reasons, 'strong enough for paper buy but not safe enough for real autopilot');
   } else if (total >= 40) {
     verdict = 'WATCH';
-    reasons.push('worth watching but not ready to buy');
+    pushUnique(reasons, 'worth watching but not ready to buy');
   } else {
     verdict = 'AVOID';
-    reasons.push('score too low');
+    pushUnique(reasons, 'score too low');
   }
 
-  if (buySellRatio > 1) reasons.push(`buy/sell ratio supportive at ${buySellRatio.toFixed(2)}`);
-  if ((candidate.estimatedSlippageBps ?? Number.POSITIVE_INFINITY) <= config.maxSlippageBps) reasons.push('slippage is within configured limit');
-  if ((candidate.liquidityUsd ?? 0) >= config.minLiquidityUsd) reasons.push('liquidity is above configured minimum');
+  if (buySellRatio > 1) pushUnique(reasons, `buy/sell ratio supportive at ${buySellRatio.toFixed(2)}`);
+  if ((candidate.estimatedSlippageBps ?? Number.POSITIVE_INFINITY) <= config.maxSlippageBps) pushUnique(reasons, 'slippage is within configured limit');
+  if ((candidate.liquidityUsd ?? 0) >= config.minLiquidityUsd) pushUnique(reasons, 'liquidity is above configured minimum');
 
   return {
     tokenId,
