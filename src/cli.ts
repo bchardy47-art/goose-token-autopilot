@@ -9,7 +9,7 @@ import { verifySafety } from './verifySafety';
 import { activateKillSwitch } from './kill';
 import { runAutopilot } from './autopilot/runAutopilot';
 import { buildPaperEligibilityDiagnostics, runAutoPaper } from './paper/autoPaper';
-import { runPaperReview } from './paper/review';
+import { runPaperReview, runPaperReviewLoop, type PaperReviewLoopCycleSummary } from './paper/review';
 import { buildPaperPerformanceReport } from './paper/performance';
 import { buildDailyReport, renderPaperDashboard } from './paper/dailyReport';
 import { buildWatchOnlyReport, runWatchOnly } from './watchOnly';
@@ -26,6 +26,28 @@ import { runQuoteCheck } from './quoteCheck';
 function getArgValue(flag: string): string | undefined {
   const index = process.argv.indexOf(flag);
   return index >= 0 ? process.argv[index + 1] : undefined;
+}
+
+function parseNumberArg(flag: string, fallback: number, options: { integer?: boolean; min?: number } = {}): number {
+  const raw = getArgValue(flag);
+  if (raw == null) return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) {
+    throw new Error(`${flag} must be a valid number`);
+  }
+  if (options.integer && !Number.isInteger(value)) {
+    throw new Error(`${flag} must be an integer`);
+  }
+  if (options.min != null && value < options.min) {
+    throw new Error(`${flag} must be >= ${options.min}`);
+  }
+  return value;
+}
+
+function printPaperReviewLoopCycleSummary(summary: PaperReviewLoopCycleSummary): void {
+  console.log(
+    `[paper-review-loop] cycle ${summary.cycleNumber}: reviewed=${summary.reviewedCount} refreshed=${summary.refreshedCount} remainingOpen=${summary.remainingOpenCount}`
+  );
 }
 
 async function main(): Promise<void> {
@@ -71,6 +93,17 @@ async function main(): Promise<void> {
       case 'token:paper-review':
         console.log(JSON.stringify(await runPaperReview(db, config), null, 2));
         break;
+      case 'token:paper-review-loop': {
+        const intervalSeconds = parseNumberArg('--interval-seconds', 60, { min: 0 });
+        const maxCycles = parseNumberArg('--max-cycles', 30, { integer: true, min: 0 });
+        const result = await runPaperReviewLoop(db, config, {
+          intervalMs: intervalSeconds * 1000,
+          maxCycles,
+          onCycle: printPaperReviewLoopCycleSummary
+        });
+        console.log(JSON.stringify(result, null, 2));
+        break;
+      }
       case 'token:paper-performance':
         console.log(JSON.stringify(buildPaperPerformanceReport(db), null, 2));
         break;

@@ -4,7 +4,7 @@ import { createDb } from '../src/db';
 import { makeTestConfig, seedScoredDb } from './helpers';
 import { applyLatestQuoteResultToSnapshot, buildPaperEligibilityDiagnostics, isPaperQuoteReady, isPaperResearchBlocked, runAutoPaper } from '../src/paper/autoPaper';
 import { paperBuy } from '../src/trading/paper';
-import { runPaperReview } from '../src/paper/review';
+import { runPaperReview, runPaperReviewLoop } from '../src/paper/review';
 import { buildPaperPerformanceReport } from '../src/paper/performance';
 import { buildDailyReport, renderPaperDashboard } from '../src/paper/dailyReport';
 import { verifySafety } from '../src/verifySafety';
@@ -394,6 +394,79 @@ describe('live paper loop', () => {
     vi.spyOn(scanner, 'refreshSnapshotsForTokenAddresses').mockResolvedValue({ refreshed: 0, tokenIds: [] });
     await runPaperReview(db, config);
     expect(db.getOpenPositionCount('PAPER')).toBeLessThanOrEqual(beforeOpen);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
+    db.close();
+  });
+
+  it('paper-review-loop stops immediately when no open paper positions remain', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const sleep = vi.fn(async () => undefined);
+    const onCycle = vi.fn();
+    const result = await runPaperReviewLoop(db, config, { sleep, onCycle });
+    expect(result.cyclesRun).toBe(0);
+    expect(result.stoppedReason).toBe('no_open_positions');
+    expect(result.intervalMs).toBe(60_000);
+    expect(result.maxCycles).toBe(30);
+    expect(result.cycleSummaries).toEqual([]);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(onCycle).not.toHaveBeenCalled();
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
+    db.close();
+  });
+
+  it('paper-review-loop repeats reviews until all paper positions are closed', async () => {
+    const { dir, config, db } = await seedScoredDb({ PAPER_TAKE_PROFIT_PCT: '1000', PAPER_STOP_LOSS_PCT: '-1000', PAPER_MAX_HOLD_MINUTES: '1' });
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const proposalId = db.createProposal(safe.id, 'BUY', 1, 'PAPER_BUY', 'loop test', 'PENDING', {});
+    const { positionId } = paperBuy(db, config, { proposalId, paperApproved: true });
+    const open = db.listPositions('PAPER').find((position) => position.id === positionId)!;
+    let sleepCalls = 0;
+    const sleep = vi.fn(async () => {
+      sleepCalls += 1;
+      if (sleepCalls === 1) {
+        db.sqlite.prepare("UPDATE positions SET opened_at = ? WHERE id = ?").run(new Date(Date.now() - 2 * 60 * 1000).toISOString(), open.id);
+      }
+    });
+    const onCycle = vi.fn();
+    vi.spyOn(scanner, 'refreshSnapshotsForTokenAddresses').mockImplementation(async () => {
+      const refreshed = db.getLatestSnapshot(open.tokenId)!;
+      refreshed.priceUsd = open.entryPriceUsd * 1.01;
+      db.insertSnapshot(open.tokenId, refreshed);
+      return { refreshed: 1, tokenIds: [open.tokenId] };
+    });
+    const result = await runPaperReviewLoop(db, config, { intervalMs: 5, maxCycles: 5, sleep, onCycle });
+    expect(result.cyclesRun).toBe(2);
+    expect(result.stoppedReason).toBe('no_open_positions');
+    expect(result.cycleSummaries).toHaveLength(2);
+    expect(result.cycleSummaries[0]).toMatchObject({ cycleNumber: 1, reviewedCount: 1, refreshedCount: 1, remainingOpenCount: 1 });
+    expect(result.cycleSummaries[1]).toMatchObject({ cycleNumber: 2, reviewedCount: 1, refreshedCount: 1, remainingOpenCount: 0 });
+    expect(result.cycleSummaries[1].decisions.some((decision) => decision.reason === 'max_hold_time')).toBe(true);
+    expect(onCycle).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalledWith(5);
+    expect(db.getOpenPositionCount('PAPER')).toBe(0);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
+    db.close();
+  });
+
+  it('paper-review-loop stops at max cycles when positions remain open', async () => {
+    const { dir, config, db } = await seedScoredDb({ PAPER_TAKE_PROFIT_PCT: '1000', PAPER_STOP_LOSS_PCT: '-1000', PAPER_MAX_HOLD_MINUTES: '1000' });
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const proposalId = db.createProposal(safe.id, 'BUY', 1, 'PAPER_BUY', 'loop test', 'PENDING', {});
+    paperBuy(db, config, { proposalId, paperApproved: true });
+    vi.spyOn(scanner, 'refreshSnapshotsForTokenAddresses').mockResolvedValue({ refreshed: 1, tokenIds: [safe.id] });
+    const sleep = vi.fn(async () => undefined);
+    const result = await runPaperReviewLoop(db, config, { intervalMs: 7, maxCycles: 3, sleep });
+    expect(result.cyclesRun).toBe(3);
+    expect(result.stoppedReason).toBe('max_cycles_reached');
+    expect(result.cycleSummaries).toHaveLength(3);
+    expect(result.cycleSummaries.every((summary) => summary.reviewedCount >= 1)).toBe(true);
+    expect(result.cycleSummaries.at(-1)?.remainingOpenCount).toBeGreaterThan(0);
+    expect(sleep).toHaveBeenCalledTimes(2);
+    expect(db.getOpenPositionCount('PAPER')).toBeGreaterThan(0);
     expect(db.getBlockedRealTradeAttempts()).toBe(0);
     db.close();
   });
