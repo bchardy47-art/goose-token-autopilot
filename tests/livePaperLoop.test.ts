@@ -214,6 +214,22 @@ describe('live paper loop', () => {
     db.close();
   });
 
+  it('a candidate with score verdict AVOID caused only by strict score logic can open simulated paper if all paper gates pass', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    db.createQuoteSellabilityCheck(safe.id, 'SAFE11111111111111111111111111111111111111111', new Date().toISOString(), 'jupiter', 'SAFE11111111111111111111111111111111111111111', 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
+    const snapshot = db.getLatestSnapshot(safe.id)!;
+    snapshot.creatorStatus = 'UNKNOWN';
+    snapshot.sellQuoteAvailable = 'YES';
+    snapshot.estimatedSlippageBps = 100;
+    db.insertSnapshot(safe.id, snapshot);
+    const result = await runAutoPaper(db, config);
+    expect(result.decisions.some((decision) => decision.action === 'BOUGHT' && decision.tokenId === safe.id)).toBe(true);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
+    db.close();
+  });
+
   it('duplicate open paper positions are not created', async () => {
     const { dir, config, db } = await seedScoredDb();
     cleanup.push(dir);
@@ -232,7 +248,7 @@ describe('live paper loop', () => {
     cleanup.push(dir);
     const result = await runAutoPaper(db, config);
     const skipped = result.decisions.filter((decision) => decision.action === 'SKIPPED').map((decision) => decision.reason).join(' | ');
-    expect(skipped).toMatch(/verdict AVOID not eligible|hard red flags|sell quote unknown blocks paper eligibility/);
+    expect(skipped).toMatch(/hard red flags|sell quote unknown blocks paper eligibility|total score below paper minimum|safety score below paper minimum|momentum score below paper minimum/);
     db.close();
   });
 

@@ -80,7 +80,6 @@ export function isPaperResearchBlocked(snapshot: TokenCandidate | null, score: T
 function getSkipReason(db: AppDb, config: AppConfig, tokenId: number, snapshot: TokenCandidate | null, score: TokenScoreResult | null): string | null {
   const paperBlocker = isPaperResearchBlocked(snapshot, score, config);
   if (paperBlocker) return paperBlocker;
-  if (!['PAPER_BUY', 'AUTOPILOT_ELIGIBLE'].includes(score!.verdict)) return `verdict ${score!.verdict} not eligible`;
   if (db.getLatestOpenPositionByToken(tokenId, 'PAPER')) return 'duplicate open paper position exists';
   if (db.getOpenPositionCount('PAPER') >= config.maxOpenPositions) return 'max open paper positions reached';
   if (db.getDailyPaperBuyCount() >= config.maxDailyPaperBuys) return 'daily paper buy cap reached';
@@ -94,7 +93,6 @@ export function buildPaperEligibilityDiagnostics(db: AppDb, config: AppConfig): 
     const preparedScore = preparedSnapshot ? scoreToken(state.tokenId, preparedSnapshot, config) : state.score;
     const blockers = [
       isPaperQuoteReady(preparedSnapshot, preparedScore, config),
-      preparedScore && !['PAPER_BUY', 'AUTOPILOT_ELIGIBLE'].includes(preparedScore.verdict) ? `verdict ${preparedScore.verdict} not eligible` : null,
       preparedScore && preparedScore.totalScore < config.paperMinTotalScore ? 'total score below paper minimum' : null,
       preparedScore && preparedScore.safetyScore < config.paperMinSafetyScore ? 'safety score below paper minimum' : null,
       preparedScore && preparedScore.momentumScore < config.paperMinMomentumScore ? 'momentum score below paper minimum' : null,
