@@ -9,9 +9,24 @@ function tokenAgeMinutes(candidate: TokenCandidate): number {
   return (Date.now() - new Date(candidate.tokenCreatedAt).getTime()) / 60_000;
 }
 
+export function isPaperQuoteReady(snapshot: TokenCandidate | null, score: TokenScoreResult | null, config: AppConfig): string | null {
+  if (!snapshot || !score) return 'missing score or snapshot';
+  if (snapshot.sellQuoteAvailable === 'UNKNOWN') return 'sell quote unknown blocks paper eligibility';
+  if (snapshot.sellQuoteAvailable === 'NO') return 'sell quote unavailable blocks paper eligibility';
+  if (snapshot.sellQuoteAvailable !== 'YES') return 'sell quote not proven for paper eligibility';
+  if (snapshot.estimatedSlippageBps === null || snapshot.estimatedSlippageBps === undefined) return 'slippage missing blocks paper eligibility';
+  if (!Number.isFinite(snapshot.estimatedSlippageBps)) return 'slippage missing blocks paper eligibility';
+  if (snapshot.estimatedSlippageBps > config.maxSlippageBps) return 'slippage above MAX_SLIPPAGE_BPS blocks paper eligibility';
+  if (snapshot.mintAuthority === 'UNSAFE') return 'mint authority active blocks paper eligibility';
+  if (snapshot.freezeAuthority === 'UNSAFE') return 'freeze authority active blocks paper eligibility';
+  return null;
+}
+
 function getSkipReason(db: AppDb, config: AppConfig, tokenId: number, snapshot: TokenCandidate | null, score: TokenScoreResult | null): string | null {
   if (!config.enableAutoPaperTrading) return 'auto paper trading disabled';
   if (!snapshot || !score) return 'missing score or snapshot';
+  const quoteReadiness = isPaperQuoteReady(snapshot, score, config);
+  if (quoteReadiness) return quoteReadiness;
   if (!['PAPER_BUY', 'AUTOPILOT_ELIGIBLE'].includes(score.verdict)) return `verdict ${score.verdict} not eligible`;
   if (score.redFlags.length > 0) return `hard red flags: ${score.redFlags.join(', ')}`;
   if ((snapshot.priceUsd ?? 0) <= 0) return 'latest price missing';

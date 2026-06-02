@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createDb } from '../src/db';
 import { makeTestConfig, seedScoredDb } from './helpers';
-import { runAutoPaper } from '../src/paper/autoPaper';
+import { isPaperQuoteReady, runAutoPaper } from '../src/paper/autoPaper';
 import { runPaperReview } from '../src/paper/review';
 import { buildPaperPerformanceReport } from '../src/paper/performance';
 import { buildDailyReport } from '../src/paper/dailyReport';
@@ -40,6 +40,61 @@ describe('live paper loop', () => {
     cleanup.push(dir);
     const result = await runAutoPaper(db, config);
     expect(result.decisions.every((decision) => decision.action === 'SKIPPED')).toBe(true);
+    db.close();
+  });
+
+  it('paper buy blocked when quote UNKNOWN', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const snapshot = db.getLatestSnapshot(safe.id)!;
+    snapshot.sellQuoteAvailable = 'UNKNOWN';
+    snapshot.estimatedSlippageBps = null;
+    expect(isPaperQuoteReady(snapshot, db.getLatestScore(safe.id)!, config)).toMatch(/sell quote unknown/);
+    db.close();
+  });
+
+  it('paper buy blocked when quote NO', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const snapshot = db.getLatestSnapshot(safe.id)!;
+    snapshot.sellQuoteAvailable = 'NO';
+    snapshot.estimatedSlippageBps = 100;
+    expect(isPaperQuoteReady(snapshot, db.getLatestScore(safe.id)!, config)).toMatch(/sell quote unavailable/);
+    db.close();
+  });
+
+  it('paper buy blocked when slippage missing', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const snapshot = db.getLatestSnapshot(safe.id)!;
+    snapshot.sellQuoteAvailable = 'YES';
+    snapshot.estimatedSlippageBps = null;
+    expect(isPaperQuoteReady(snapshot, db.getLatestScore(safe.id)!, config)).toMatch(/slippage missing/);
+    db.close();
+  });
+
+  it('paper buy blocked when slippage above max', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const snapshot = db.getLatestSnapshot(safe.id)!;
+    snapshot.sellQuoteAvailable = 'YES';
+    snapshot.estimatedSlippageBps = config.maxSlippageBps + 1;
+    expect(isPaperQuoteReady(snapshot, db.getLatestScore(safe.id)!, config)).toMatch(/slippage above MAX_SLIPPAGE_BPS/);
+    db.close();
+  });
+
+  it('paper buy allowed only when quote YES, slippage within max, and existing gates pass', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const snapshot = db.getLatestSnapshot(safe.id)!;
+    snapshot.sellQuoteAvailable = 'YES';
+    snapshot.estimatedSlippageBps = Math.max(1, config.maxSlippageBps - 1);
+    expect(isPaperQuoteReady(snapshot, db.getLatestScore(safe.id)!, config)).toBeNull();
     db.close();
   });
 

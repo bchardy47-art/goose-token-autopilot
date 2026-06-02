@@ -72,6 +72,7 @@ describe('read-only quote checks', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ outAmount: '1000', priceImpactPct: '0.01', routePlan: [{}] }), { status: 200 })) as any);
     await runQuoteCheck(db, config);
     expect(db.getOpenPositionCount('PAPER')).toBe(0);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
     db.close();
   });
 
