@@ -139,9 +139,79 @@ describe('safety rpc proof', () => {
     expect(solanaSafety.normalizeFreezeAuthority(parsed.mintInfo).status).toBe('UNSAFE');
   });
 
+  it('Token-2022 parsed mint null authorities => SAFE/renounced', () => {
+    const parsed = solanaSafety.parseMintAccountInfoFromRpcResult({
+      value: {
+        owner: 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb',
+        executable: false,
+        lamports: 123,
+        data: {
+          program: 'spl-token-2022',
+          parsed: {
+            type: 'mint',
+            info: {
+              mintAuthority: null,
+              freezeAuthority: null,
+              supply: '1000000',
+              decimals: 6,
+              isInitialized: true
+            }
+          }
+        }
+      }
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.accountDataShape).toBe('parsed-object');
+    expect(solanaSafety.normalizeMintAuthority(parsed.mintInfo).status).toBe('SAFE');
+    expect(solanaSafety.normalizeMintAuthority(parsed.mintInfo).renounced).toBe(true);
+    expect(solanaSafety.normalizeFreezeAuthority(parsed.mintInfo).status).toBe('SAFE');
+    expect(solanaSafety.normalizeFreezeAuthority(parsed.mintInfo).renounced).toBe(true);
+  });
+
+  it('Token-2022 parsed mint active authority => UNSAFE', () => {
+    const parsed = solanaSafety.parseMintAccountInfoFromRpcResult({
+      value: {
+        owner: 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb',
+        executable: false,
+        lamports: 123,
+        data: {
+          program: 'spl-token-2022',
+          parsed: {
+            type: 'mint',
+            info: {
+              mintAuthority: 'MintAuthority2022',
+              freezeAuthority: null,
+              supply: '1000000',
+              decimals: 6,
+              isInitialized: true
+            }
+          }
+        }
+      }
+    });
+    expect(parsed.success).toBe(true);
+    expect(solanaSafety.normalizeMintAuthority(parsed.mintInfo).status).toBe('UNSAFE');
+  });
+
   it('parser handles malformed RPC as unknown', () => {
     const parsed = solanaSafety.parseMintAccountInfoFromRpcResult({ value: { owner: 'Tokenkeg', data: { weird: true } } });
     expect(parsed.success).toBe(false);
+    expect(solanaSafety.normalizeMintAuthority(parsed.mintInfo).status).toBe('UNKNOWN');
+    expect(solanaSafety.normalizeFreezeAuthority(parsed.mintInfo).status).toBe('UNKNOWN');
+  });
+
+  it('encoded/unparsed mint account => UNKNOWN with diagnostic', () => {
+    const parsed = solanaSafety.parseMintAccountInfoFromRpcResult({
+      value: {
+        owner: 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb',
+        executable: false,
+        lamports: 123,
+        data: ['BASE64_DATA', 'base64']
+      }
+    });
+    expect(parsed.success).toBe(false);
+    expect(parsed.accountDataShape).toBe('encoded-array');
+    expect(parsed.error).toMatch(/encoded mint data not parsed by RPC/);
     expect(solanaSafety.normalizeMintAuthority(parsed.mintInfo).status).toBe('UNKNOWN');
     expect(solanaSafety.normalizeFreezeAuthority(parsed.mintInfo).status).toBe('UNKNOWN');
   });

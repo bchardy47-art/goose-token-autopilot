@@ -39,6 +39,8 @@ export interface ParsedMintAccountInfoFromRpc {
   executable: boolean | null;
   lamports: number | null;
   parsedType: string | null;
+  accountDataShape: 'parsed-object' | 'encoded-array' | 'unknown';
+  topLevelKeys: string[];
   rawMintAuthorityOption: number | null;
   rawMintAuthority: string | null;
   rawFreezeAuthorityOption: number | null;
@@ -98,6 +100,7 @@ export interface SolanaSafetyOptions {
 }
 
 const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 const DEFAULT_QUOTE_BASE_URL = 'https://api.dexscreener.com/latest/dex/tokens';
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -190,27 +193,45 @@ export function computeHolderConcentration(topHolderPct: number | null, top10Hol
   };
 }
 
-function toParsedMintInfoFromInfo(info: Record<string, unknown>): SolanaMintAccountInfo | null {
-  const supplyValue = info.supply as string | number | undefined;
-  const decimalsValue = info.decimals as number | undefined;
-  const mintAuthority = typeof info.mintAuthority === 'string' ? info.mintAuthority : null;
-  const freezeAuthority = typeof info.freezeAuthority === 'string' ? info.freezeAuthority : null;
-  const hasMintAuthorityKey = Object.prototype.hasOwnProperty.call(info, 'mintAuthority');
-  const hasFreezeAuthorityKey = Object.prototype.hasOwnProperty.call(info, 'freezeAuthority');
-
-  if (!hasMintAuthorityKey && !hasFreezeAuthorityKey && supplyValue === undefined && decimalsValue === undefined) {
-    return null;
+function nestedInfoCandidates(info: Record<string, unknown>): Array<Record<string, unknown>> {
+  const candidates: Array<Record<string, unknown>> = [info];
+  for (const key of ['extensions', 'parsed', 'base', 'mintInfo', 'info']) {
+    const value = info[key];
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      candidates.push(value as Record<string, unknown>);
+    }
   }
+  return candidates;
+}
 
-  return {
-    mintAuthorityOption: hasMintAuthorityKey ? (mintAuthority === null ? 0 : 1) : undefined,
-    mintAuthority,
-    supply: supplyValue === undefined ? undefined : String(supplyValue),
-    decimals: typeof decimalsValue === 'number' ? decimalsValue : undefined,
-    isInitialized: typeof info.isInitialized === 'boolean' ? info.isInitialized : undefined,
-    freezeAuthorityOption: hasFreezeAuthorityKey ? (freezeAuthority === null ? 0 : 1) : undefined,
-    freezeAuthority
-  };
+function ownerSupportsRawBinary(ownerProgram: string | null): boolean {
+  return ownerProgram === TOKEN_PROGRAM;
+}
+
+function toParsedMintInfoFromInfo(info: Record<string, unknown>): SolanaMintAccountInfo | null {
+  for (const candidate of nestedInfoCandidates(info)) {
+    const supplyValue = candidate.supply as string | number | undefined;
+    const decimalsValue = candidate.decimals as number | undefined;
+    const mintAuthority = typeof candidate.mintAuthority === 'string' ? candidate.mintAuthority : null;
+    const freezeAuthority = typeof candidate.freezeAuthority === 'string' ? candidate.freezeAuthority : null;
+    const hasMintAuthorityKey = Object.prototype.hasOwnProperty.call(candidate, 'mintAuthority');
+    const hasFreezeAuthorityKey = Object.prototype.hasOwnProperty.call(candidate, 'freezeAuthority');
+
+    if (!hasMintAuthorityKey && !hasFreezeAuthorityKey && supplyValue === undefined && decimalsValue === undefined) {
+      continue;
+    }
+
+    return {
+      mintAuthorityOption: hasMintAuthorityKey ? (mintAuthority === null ? 0 : 1) : undefined,
+      mintAuthority,
+      supply: supplyValue === undefined ? undefined : String(supplyValue),
+      decimals: typeof decimalsValue === 'number' ? decimalsValue : undefined,
+      isInitialized: typeof candidate.isInitialized === 'boolean' ? candidate.isInitialized : undefined,
+      freezeAuthorityOption: hasFreezeAuthorityKey ? (freezeAuthority === null ? 0 : 1) : undefined,
+      freezeAuthority
+    };
+  }
+  return null;
 }
 
 export function parseMintAccountInfoFromRpcResult(result: any): ParsedMintAccountInfoFromRpc {
@@ -224,6 +245,8 @@ export function parseMintAccountInfoFromRpcResult(result: any): ParsedMintAccoun
       executable: null,
       lamports: null,
       parsedType: null,
+      accountDataShape: 'unknown',
+      topLevelKeys: [],
       rawMintAuthorityOption: null,
       rawMintAuthority: null,
       rawFreezeAuthorityOption: null,
@@ -240,50 +263,109 @@ export function parseMintAccountInfoFromRpcResult(result: any): ParsedMintAccoun
   const executable = typeof value.executable === 'boolean' ? value.executable : null;
   const lamports = typeof value.lamports === 'number' ? value.lamports : null;
   const data = value.data;
+  const topLevelKeys = data && typeof data === 'object' && !Array.isArray(data) ? Object.keys(data as Record<string, unknown>).slice(0, 20) : [];
 
   try {
-    if (data?.program === 'spl-token' && data?.parsed?.type === 'mint' && data?.parsed?.info) {
-      const parsedInfo = data.parsed.info as Record<string, unknown>;
-      const mintInfo = toParsedMintInfoFromInfo(parsedInfo);
+    const isSupportedProgram = ownerProgram === TOKEN_PROGRAM || ownerProgram === TOKEN_2022_PROGRAM;
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      const program = typeof (data as any).program === 'string' ? (data as any).program : null;
+      const parsed = (data as any).parsed;
+      const parsedType = typeof parsed?.type === 'string' ? parsed.type : null;
+      const parsedInfo = parsed?.info && typeof parsed.info === 'object' && !Array.isArray(parsed.info)
+        ? parsed.info as Record<string, unknown>
+        : null;
+
+      if (isSupportedProgram && parsedInfo) {
+        const mintInfo = toParsedMintInfoFromInfo(parsedInfo);
+        if (mintInfo) {
+          return {
+            success: true,
+            error: null,
+            accountExists: true,
+            ownerProgram,
+            executable,
+            lamports,
+            parsedType,
+            accountDataShape: 'parsed-object',
+            topLevelKeys,
+            rawMintAuthorityOption: mintInfo.mintAuthorityOption ?? null,
+            rawMintAuthority: mintInfo.mintAuthority ?? null,
+            rawFreezeAuthorityOption: mintInfo.freezeAuthorityOption ?? null,
+            rawFreezeAuthority: mintInfo.freezeAuthority ?? null,
+            rawSupply: mintInfo.supply ?? null,
+            rawDecimals: mintInfo.decimals ?? null,
+            tokenProgram: ownerProgram ?? program,
+            mintInfo,
+            raw: { ownerProgram, topLevelKeys, parsedType, program }
+          };
+        }
+      }
+
       return {
-        success: true,
-        error: null,
+        success: false,
+        error: isSupportedProgram ? 'encoded mint data not parsed by RPC' : 'unsupported mint rpc data shape',
         accountExists: true,
         ownerProgram,
         executable,
         lamports,
-        parsedType: data.parsed.type,
-        rawMintAuthorityOption: mintInfo?.mintAuthorityOption ?? null,
-        rawMintAuthority: mintInfo?.mintAuthority ?? null,
-        rawFreezeAuthorityOption: mintInfo?.freezeAuthorityOption ?? null,
-        rawFreezeAuthority: mintInfo?.freezeAuthority ?? null,
-        rawSupply: mintInfo?.supply ?? null,
-        rawDecimals: mintInfo?.decimals ?? null,
+        parsedType,
+        accountDataShape: 'parsed-object',
+        topLevelKeys,
+        rawMintAuthorityOption: null,
+        rawMintAuthority: null,
+        rawFreezeAuthorityOption: null,
+        rawFreezeAuthority: null,
+        rawSupply: null,
+        rawDecimals: null,
         tokenProgram: ownerProgram,
-        mintInfo,
-        raw: { result }
+        mintInfo: null,
+        raw: { ownerProgram, topLevelKeys, parsedType, program }
       };
     }
 
     if (Array.isArray(data) && typeof data[0] === 'string') {
-      const mintInfo = parseMintAccountData(data[0]);
+      if (ownerSupportsRawBinary(ownerProgram)) {
+        const mintInfo = parseMintAccountData(data[0]);
+        return {
+          success: true,
+          error: null,
+          accountExists: true,
+          ownerProgram,
+          executable,
+          lamports,
+          parsedType: null,
+          accountDataShape: 'encoded-array',
+          topLevelKeys,
+          rawMintAuthorityOption: mintInfo.mintAuthorityOption ?? null,
+          rawMintAuthority: mintInfo.mintAuthority ?? null,
+          rawFreezeAuthorityOption: mintInfo.freezeAuthorityOption ?? null,
+          rawFreezeAuthority: mintInfo.freezeAuthority ?? null,
+          rawSupply: mintInfo.supply ?? null,
+          rawDecimals: mintInfo.decimals ?? null,
+          tokenProgram: ownerProgram,
+          mintInfo,
+          raw: { ownerProgram, encoding: data[1] ?? null }
+        };
+      }
       return {
-        success: true,
-        error: null,
+        success: false,
+        error: 'encoded mint data not parsed by RPC',
         accountExists: true,
         ownerProgram,
         executable,
         lamports,
         parsedType: null,
-        rawMintAuthorityOption: mintInfo.mintAuthorityOption ?? null,
-        rawMintAuthority: mintInfo.mintAuthority ?? null,
-        rawFreezeAuthorityOption: mintInfo.freezeAuthorityOption ?? null,
-        rawFreezeAuthority: mintInfo.freezeAuthority ?? null,
-        rawSupply: mintInfo.supply ?? null,
-        rawDecimals: mintInfo.decimals ?? null,
+        accountDataShape: 'encoded-array',
+        topLevelKeys,
+        rawMintAuthorityOption: null,
+        rawMintAuthority: null,
+        rawFreezeAuthorityOption: null,
+        rawFreezeAuthority: null,
+        rawSupply: null,
+        rawDecimals: null,
         tokenProgram: ownerProgram,
-        mintInfo,
-        raw: { result }
+        mintInfo: null,
+        raw: { ownerProgram, encoding: data[1] ?? null }
       };
     }
 
@@ -295,6 +377,8 @@ export function parseMintAccountInfoFromRpcResult(result: any): ParsedMintAccoun
       executable,
       lamports,
       parsedType: null,
+      accountDataShape: 'unknown',
+      topLevelKeys,
       rawMintAuthorityOption: null,
       rawMintAuthority: null,
       rawFreezeAuthorityOption: null,
@@ -303,7 +387,7 @@ export function parseMintAccountInfoFromRpcResult(result: any): ParsedMintAccoun
       rawDecimals: null,
       tokenProgram: ownerProgram,
       mintInfo: null,
-      raw: { result }
+      raw: { ownerProgram, topLevelKeys }
     };
   } catch (error) {
     return {
@@ -314,6 +398,8 @@ export function parseMintAccountInfoFromRpcResult(result: any): ParsedMintAccoun
       executable,
       lamports,
       parsedType: null,
+      accountDataShape: 'unknown',
+      topLevelKeys,
       rawMintAuthorityOption: null,
       rawMintAuthority: null,
       rawFreezeAuthorityOption: null,
@@ -322,7 +408,7 @@ export function parseMintAccountInfoFromRpcResult(result: any): ParsedMintAccoun
       rawDecimals: null,
       tokenProgram: ownerProgram,
       mintInfo: null,
-      raw: { result }
+      raw: { ownerProgram, topLevelKeys }
     };
   }
 }

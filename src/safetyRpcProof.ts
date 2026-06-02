@@ -7,7 +7,8 @@ import {
   normalizeFreezeAuthority,
   normalizeMintAuthority,
   parseLargestTokenAccountsFromRpcResult,
-  parseMintAccountInfoFromRpcResult
+  parseMintAccountInfoFromRpcResult,
+  solanaSafetyRpcHelpers
 } from './enrichment/solanaSafety';
 
 const DEFAULT_LIMIT = 5;
@@ -80,6 +81,8 @@ export async function buildSafetyRpcProofReport(db: AppDb, config: AppConfig, en
       executable: null,
       lamports: null,
       parsedType: null,
+      accountDataShape: 'unknown',
+      topLevelKeys: [],
       rawMintAuthorityOption: null,
       rawMintAuthority: null,
       rawFreezeAuthorityOption: null,
@@ -104,15 +107,15 @@ export async function buildSafetyRpcProofReport(db: AppDb, config: AppConfig, en
     let rawErrorSummary: string | null = null;
 
     try {
-      const mintRpcResult = await fetchMintAccountRpcResult(fetch, config.solanaRpcUrl, snapshot.mint);
-      mintParsed = parseMintAccountInfoFromRpcResult(mintRpcResult);
+      const mintRpcResult = await solanaSafetyRpcHelpers.fetchMintAccountRpcResult(fetch, config.solanaRpcUrl, snapshot.mint);
+      mintParsed = solanaSafetyRpcHelpers.parseMintAccountInfoFromRpcResult(mintRpcResult);
     } catch (error) {
       rawErrorSummary = error instanceof Error ? error.message : 'mint rpc failed';
     }
 
     try {
-      const largestRpcResult = await fetchLargestTokenAccountsRpcResult(fetch, config.solanaRpcUrl, snapshot.mint);
-      largestParsed = parseLargestTokenAccountsFromRpcResult(largestRpcResult, mintParsed.mintInfo);
+      const largestRpcResult = await solanaSafetyRpcHelpers.fetchLargestTokenAccountsRpcResult(fetch, config.solanaRpcUrl, snapshot.mint);
+      largestParsed = solanaSafetyRpcHelpers.parseLargestTokenAccountsFromRpcResult(largestRpcResult, mintParsed.mintInfo);
     } catch (error) {
       rawErrorSummary = [rawErrorSummary, error instanceof Error ? error.message : 'largest accounts rpc failed'].filter(Boolean).join('; ');
     }
@@ -141,6 +144,8 @@ export async function buildSafetyRpcProofReport(db: AppDb, config: AppConfig, en
         executable: mintParsed.executable,
         lamports: mintParsed.lamports,
         parsedType: mintParsed.parsedType,
+        accountDataShape: mintParsed.accountDataShape,
+        topLevelKeys: mintParsed.topLevelKeys,
         rawMintAuthorityOption: mintParsed.rawMintAuthorityOption,
         rawMintAuthority: mintParsed.rawMintAuthority,
         rawFreezeAuthorityOption: mintParsed.rawFreezeAuthorityOption,
@@ -158,6 +163,7 @@ export async function buildSafetyRpcProofReport(db: AppDb, config: AppConfig, en
         holderConcentrationStatus: largestParsed.holderConcentrationStatus
       },
       parserNotes: [mintParsed.error, largestParsed.error].filter(Boolean),
+      parserNoteShort: mintParsed.error ?? largestParsed.error ?? null,
       rawErrorSummary,
       signalAuditRowUsesEnrichment: auditUsesEnrichment,
       finalSafetyStatus: 'Real trading remains locked.'
@@ -177,9 +183,9 @@ export function formatSafetyRpcProofTable(report: Record<string, any>): string {
   if (report.message) {
     return ['Safety RPC Proof', String(report.message), String(report.finalSafetyStatus)].join('\n');
   }
-  const header = 'tokenId | symbol | class | mintAuth | freezeAuth | holderStatus | top10Pct';
+  const header = 'tokenId | symbol | class | ownerProgram | parsedType | dataShape | mintAuth | freezeAuth | holderStatus | top10Pct | note';
   const rows = ((report.rows as Array<Record<string, any>>) ?? []).map((row) => (
-    `${row.tokenId} | ${row.symbol ?? '-'} | ${row.signalClass ?? '-'} | ${row.normalizedMintAuthority?.status ?? '-'} | ${row.normalizedFreezeAuthority?.status ?? '-'} | ${row.getTokenLargestAccounts?.holderConcentrationStatus ?? '-'} | ${row.getTokenLargestAccounts?.top10HolderPct ?? '-'}`
+    `${row.tokenId} | ${row.symbol ?? '-'} | ${row.signalClass ?? '-'} | ${row.getParsedAccountInfo?.ownerProgram ?? '-'} | ${row.getParsedAccountInfo?.parsedType ?? '-'} | ${row.getParsedAccountInfo?.accountDataShape ?? '-'} | ${row.normalizedMintAuthority?.status ?? '-'} | ${row.normalizedFreezeAuthority?.status ?? '-'} | ${row.getTokenLargestAccounts?.holderConcentrationStatus ?? '-'} | ${row.getTokenLargestAccounts?.top10HolderPct ?? '-'} | ${row.parserNoteShort ?? '-'}`
   ));
   return [
     'Safety RPC Proof',
