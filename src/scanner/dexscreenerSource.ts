@@ -60,11 +60,20 @@ interface DexScreenerTokenResponse {
   pairs?: DexScreenerPair[];
 }
 
+interface DexScreenerSearchResponse {
+  pairs?: DexScreenerPair[];
+}
+
 interface DexScreenerSourceOptions {
   fetchImpl?: FetchImpl;
   profilesUrl?: string;
   recentUpdatesUrl?: string;
   includeRecentUpdates?: boolean;
+  searchUrl?: string;
+  includeSearchProbes?: boolean;
+  searchProbes?: string[];
+  searchLimitPerQuery?: number;
+  searchMaxTotal?: number;
   tokensBaseUrl?: string;
   maxTokens?: number;
   batchSize?: number;
@@ -81,6 +90,14 @@ interface DexScreenerFetchSummary {
   profilesAfterDedupe: number;
   duplicateProfilesRemoved: number;
   recentUpdatesEnabled: boolean;
+  searchProbesEnabled: boolean;
+  searchQueriesRun: number;
+  searchPairsFetched: number;
+  searchSolanaPairsConsidered: number;
+  searchCandidatesAcceptedBeforeFreshness: number;
+  searchCandidatesAccepted: number;
+  profileCandidatesAccepted: number;
+  duplicatesRemovedAcrossLanes: number;
   solanaProfilesConsidered: number;
   candidatesAccepted: number;
   freshAcceptedCount: number;
@@ -92,6 +109,8 @@ interface DexScreenerFetchSummary {
 
 const DEFAULT_PROFILES_URL = 'https://api.dexscreener.com/token-profiles/latest/v1';
 const DEFAULT_RECENT_UPDATES_URL = 'https://api.dexscreener.com/token-profiles/recent-updates/v1';
+const DEFAULT_SEARCH_URL = 'https://api.dexscreener.com/latest/dex/search';
+const DEFAULT_SEARCH_PROBES = ['solana', 'pump', 'pumpswap', 'raydium', 'SOL'];
 const DEFAULT_TOKENS_BASE_URL = 'https://api.dexscreener.com/latest/dex/tokens';
 const DEFAULT_MAX_TOKENS = 25;
 const DEFAULT_BATCH_SIZE = 20;
@@ -99,6 +118,9 @@ const DEFAULT_MAX_PAIR_AGE_MINUTES = 180;
 const DEFAULT_MAX_DATA_AGE_MINUTES = 60;
 const DEFAULT_MAX_MOVED_BEFORE_DISCOVERY_PCT = 150;
 const DEFAULT_INCLUDE_RECENT_UPDATES = true;
+const DEFAULT_INCLUDE_SEARCH_PROBES = true;
+const DEFAULT_SEARCH_LIMIT_PER_QUERY = 10;
+const DEFAULT_SEARCH_MAX_TOTAL = 30;
 const MS_PER_MINUTE = 60_000;
 
 function toNumber(value: unknown): number | null {
@@ -177,15 +199,15 @@ function pickBestPair(pairs: DexScreenerPair[]): DexScreenerPair | null {
   })[0] ?? null;
 }
 
-function deriveWebsitePresent(profile: DexScreenerProfile, pair: DexScreenerPair | null): boolean {
+function deriveWebsitePresent(profile: DexScreenerProfile | null, pair: DexScreenerPair | null): boolean {
   const infoWebsite = pair?.info?.websites?.some((website) => Boolean(website.url));
-  const profileWebsite = profile.links?.some((link) => Boolean(link.url) && (link.label?.toLowerCase() === 'website' || link.type?.toLowerCase() === 'website'));
+  const profileWebsite = profile?.links?.some((link) => Boolean(link.url) && (link.label?.toLowerCase() === 'website' || link.type?.toLowerCase() === 'website'));
   return Boolean(infoWebsite || profileWebsite);
 }
 
-function deriveSocialsPresent(profile: DexScreenerProfile, pair: DexScreenerPair | null): boolean {
+function deriveSocialsPresent(profile: DexScreenerProfile | null, pair: DexScreenerPair | null): boolean {
   const infoSocial = pair?.info?.socials?.some((social) => Boolean(social.url));
-  const profileSocial = profile.links?.some((link) => Boolean(link.url) && link.label?.toLowerCase() !== 'website');
+  const profileSocial = profile?.links?.some((link) => Boolean(link.url) && link.label?.toLowerCase() !== 'website');
   return Boolean(infoSocial || profileSocial);
 }
 
@@ -204,7 +226,7 @@ function normalizeFallbackSymbol(address: string): string {
   return `UNK-${address.slice(0, 4)}`;
 }
 
-function getDiscoveryMetrics(profile: DexScreenerProfile, pair: DexScreenerPair | null, observedAt: string): {
+function getDiscoveryMetrics(profile: DexScreenerProfile | null, pair: DexScreenerPair | null, observedAt: string): {
   pairCreatedAt: string | null;
   dataUpdatedAt: string;
   pairAgeMinutes: number | null;
@@ -212,7 +234,7 @@ function getDiscoveryMetrics(profile: DexScreenerProfile, pair: DexScreenerPair 
   movedBeforeDiscoveryPct: number;
 } {
   const pairCreatedAt = toIsoDate(pair?.pairCreatedAt);
-  const dataUpdatedAt = toIsoDate(profile.updatedAt) ?? pairCreatedAt ?? observedAt;
+  const dataUpdatedAt = toIsoDate(profile?.updatedAt) ?? pairCreatedAt ?? observedAt;
   return {
     pairCreatedAt,
     dataUpdatedAt,
@@ -238,7 +260,75 @@ function candidateMovedBeforeDiscovery(candidate: TokenCandidate): number {
   return candidate.movedBeforeDiscoveryPct ?? Number.POSITIVE_INFINITY;
 }
 
-export function normalizeDexScreenerCandidate(profile: DexScreenerProfile, pairsForToken: DexScreenerPair[], observedAt = new Date().toISOString()): TokenCandidate | null {
+function candidateLiquidity(candidate: TokenCandidate): number {
+  return candidate.liquidityUsd ?? Number.NEGATIVE_INFINITY;
+}
+
+function candidateDataAge(candidate: TokenCandidate): number {
+  return candidateFreshnessValue(candidate, 'dataAgeMinutes');
+}
+
+function isSearchProbeCandidate(candidate: TokenCandidate): boolean {
+  return (candidate.raw?.discoveryLane as string | undefined) === 'search-probe';
+}
+
+function choosePreferredCandidate(left: TokenCandidate, right: TokenCandidate): TokenCandidate {
+  const leftPairAge = candidateFreshnessValue(left, 'pairAgeMinutes');
+  const rightPairAge = candidateFreshnessValue(right, 'pairAgeMinutes');
+  if (leftPairAge !== rightPairAge) {
+    return leftPairAge <= rightPairAge ? left : right;
+  }
+
+  const leftUsableLiquidity = Number((left.liquidityUsd ?? 0) > 0);
+  const rightUsableLiquidity = Number((right.liquidityUsd ?? 0) > 0);
+  if (leftUsableLiquidity !== rightUsableLiquidity) {
+    return leftUsableLiquidity >= rightUsableLiquidity ? left : right;
+  }
+
+  if (candidateLiquidity(left) !== candidateLiquidity(right)) {
+    return candidateLiquidity(left) >= candidateLiquidity(right) ? left : right;
+  }
+
+  const leftMoved = candidateMovedBeforeDiscovery(left);
+  const rightMoved = candidateMovedBeforeDiscovery(right);
+  if (leftMoved !== rightMoved) {
+    return leftMoved <= rightMoved ? left : right;
+  }
+
+  const leftDataAge = candidateDataAge(left);
+  const rightDataAge = candidateDataAge(right);
+  if (leftDataAge !== rightDataAge) {
+    return leftDataAge <= rightDataAge ? left : right;
+  }
+
+  if (isSearchProbeCandidate(left) !== isSearchProbeCandidate(right)) {
+    return isSearchProbeCandidate(left) ? left : right;
+  }
+
+  return left;
+}
+
+function summarizeSelectedPair(pair: DexScreenerPair | null, discovery: ReturnType<typeof getDiscoveryMetrics>): Record<string, unknown> | null {
+  if (!pair) return null;
+  return {
+    pairAddress: pair.pairAddress,
+    dexId: pair.dexId,
+    quoteToken: pair.quoteToken,
+    liquidityUsd: pair.liquidity?.usd ?? null,
+    volume24hUsd: pair.volume?.h24 ?? null,
+    pairCreatedAt: discovery.pairCreatedAt,
+    priceChange5mPct: pair.priceChange?.m5 ?? null,
+    priceChange1hPct: pair.priceChange?.h1 ?? null,
+    priceChange24hPct: pair.priceChange?.h24 ?? null
+  };
+}
+
+export function normalizeDexScreenerCandidate(
+  profile: DexScreenerProfile,
+  pairsForToken: DexScreenerPair[],
+  observedAt = new Date().toISOString(),
+  rawExtras: Record<string, unknown> = {}
+): TokenCandidate | null {
   if (profile.chainId !== 'solana' || !profile.tokenAddress) {
     return null;
   }
@@ -281,19 +371,9 @@ export function normalizeDexScreenerCandidate(profile: DexScreenerProfile, pairs
     raw: {
       profile,
       pairCount: pairsForToken.length,
-      selectedPair: pair
-        ? {
-            pairAddress: pair.pairAddress,
-            dexId: pair.dexId,
-            quoteToken: pair.quoteToken,
-            liquidityUsd: pair.liquidity?.usd ?? null,
-            volume24hUsd: pair.volume?.h24 ?? null,
-            pairCreatedAt: discovery.pairCreatedAt,
-            priceChange5mPct: pair.priceChange?.m5 ?? null,
-            priceChange1hPct: pair.priceChange?.h1 ?? null,
-            priceChange24hPct: pair.priceChange?.h24 ?? null
-          }
-        : null,
+      discoveryLane: rawExtras.discoveryLane ?? 'profile-feed',
+      ...rawExtras,
+      selectedPair: summarizeSelectedPair(pair, discovery),
       discovery: {
         profileUpdatedAt: toIsoDate(profile.updatedAt),
         pairCreatedAt: discovery.pairCreatedAt,
@@ -305,6 +385,78 @@ export function normalizeDexScreenerCandidate(profile: DexScreenerProfile, pairs
   };
 }
 
+function normalizeDexScreenerSearchPair(pair: DexScreenerPair, query: string, observedAt = new Date().toISOString()): TokenCandidate | null {
+  if (pair.chainId !== 'solana' || !pair.baseToken?.address) {
+    return null;
+  }
+
+  const discovery = getDiscoveryMetrics(null, pair, observedAt);
+  const tokenCreatedAt = discovery.pairCreatedAt ?? observedAt;
+  const mint = pair.baseToken.address;
+
+  return {
+    chain: 'solana',
+    mint,
+    symbol: pair.baseToken.symbol ?? normalizeFallbackSymbol(mint),
+    name: pair.baseToken.name ?? `Unknown ${mint.slice(0, 8)}`,
+    source: 'dexscreener',
+    sourceUrl: pair.url ?? null,
+    discoveredAt: observedAt,
+    tokenCreatedAt,
+    priceUsd: toNumber(pair.priceUsd),
+    liquidityUsd: toNumber(pair.liquidity?.usd),
+    marketCapUsd: toNumber(pair.marketCap) ?? toNumber(pair.fdv),
+    volume5mUsd: toNumber(pair.volume?.m5),
+    volume1hUsd: toNumber(pair.volume?.h1),
+    volume24hUsd: toNumber(pair.volume?.h24),
+    priceChange5mPct: toNumber(pair.priceChange?.m5),
+    priceChange1hPct: toNumber(pair.priceChange?.h1),
+    buys5m: toNumber(pair.txns?.m5?.buys),
+    sells5m: toNumber(pair.txns?.m5?.sells),
+    liquidityGrowthPct: null,
+    freezeAuthority: 'UNKNOWN',
+    mintAuthority: 'UNKNOWN',
+    sellQuoteAvailable: 'UNKNOWN',
+    estimatedSlippageBps: null,
+    metadataPresent: deriveMetadataPresent(pair),
+    websitePresent: deriveWebsitePresent(null, pair),
+    socialsPresent: deriveSocialsPresent(null, pair),
+    holderConcentration: 'UNKNOWN',
+    creatorStatus: 'UNKNOWN',
+    movedBeforeDiscoveryPct: discovery.movedBeforeDiscoveryPct,
+    dataUpdatedAt: observedAt,
+    raw: {
+      discoveryLane: 'search-probe',
+      searchQuery: query,
+      pairCount: 1,
+      selectedPair: summarizeSelectedPair(pair, discovery),
+      discovery: {
+        profileUpdatedAt: null,
+        pairCreatedAt: discovery.pairCreatedAt,
+        pairAgeMinutes: discovery.pairAgeMinutes,
+        dataAgeMinutes: discovery.dataAgeMinutes,
+        movedBeforeDiscoveryPct: discovery.movedBeforeDiscoveryPct
+      }
+    }
+  };
+}
+
+function dedupeCandidatesByMint(candidates: TokenCandidate[]): { candidates: TokenCandidate[]; duplicatesRemovedAcrossLanes: number } {
+  const bestByMint = new Map<string, TokenCandidate>();
+  for (const candidate of candidates) {
+    const current = bestByMint.get(candidate.mint);
+    if (!current) {
+      bestByMint.set(candidate.mint, candidate);
+      continue;
+    }
+    bestByMint.set(candidate.mint, choosePreferredCandidate(current, candidate));
+  }
+  return {
+    candidates: [...bestByMint.values()],
+    duplicatesRemovedAcrossLanes: Math.max(0, candidates.length - bestByMint.size)
+  };
+}
+
 export class DexScreenerTokenSource implements TokenSource {
   readonly name = 'dexscreener';
 
@@ -312,6 +464,11 @@ export class DexScreenerTokenSource implements TokenSource {
   private readonly profilesUrl: string;
   private readonly recentUpdatesUrl: string;
   private readonly includeRecentUpdates: boolean;
+  private readonly searchUrl: string;
+  private readonly includeSearchProbes: boolean;
+  private readonly searchProbes: string[];
+  private readonly searchLimitPerQuery: number;
+  private readonly searchMaxTotal: number;
   private readonly tokensBaseUrl: string;
   private readonly maxTokens: number;
   private readonly batchSize: number;
@@ -326,6 +483,11 @@ export class DexScreenerTokenSource implements TokenSource {
     this.profilesUrl = options.profilesUrl ?? DEFAULT_PROFILES_URL;
     this.recentUpdatesUrl = options.recentUpdatesUrl ?? DEFAULT_RECENT_UPDATES_URL;
     this.includeRecentUpdates = options.includeRecentUpdates ?? DEFAULT_INCLUDE_RECENT_UPDATES;
+    this.searchUrl = options.searchUrl ?? DEFAULT_SEARCH_URL;
+    this.includeSearchProbes = options.includeSearchProbes ?? DEFAULT_INCLUDE_SEARCH_PROBES;
+    this.searchProbes = options.searchProbes ?? DEFAULT_SEARCH_PROBES;
+    this.searchLimitPerQuery = options.searchLimitPerQuery ?? DEFAULT_SEARCH_LIMIT_PER_QUERY;
+    this.searchMaxTotal = options.searchMaxTotal ?? DEFAULT_SEARCH_MAX_TOTAL;
     this.tokensBaseUrl = options.tokensBaseUrl ?? DEFAULT_TOKENS_BASE_URL;
     this.maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
     this.batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
@@ -346,45 +508,36 @@ export class DexScreenerTokenSource implements TokenSource {
       const recentProfiles = this.includeRecentUpdates ? await this.fetchProfiles(this.recentUpdatesUrl) : [];
       const mergedProfiles = [...latestProfiles, ...recentProfiles];
       const { dedupedProfiles, duplicateProfilesRemoved } = mergeProfilesByNewest(mergedProfiles);
-      const solanaProfiles = dedupedProfiles
-        .filter((profile) => profile.chainId === 'solana' && profile.tokenAddress)
-        .slice(0, this.maxTokens);
-
-      if (solanaProfiles.length === 0) {
-        this.lastFetchSummary = {
-          profilesFetched: mergedProfiles.length,
-          latestProfilesFetched: latestProfiles.length,
-          recentProfilesFetched: recentProfiles.length,
-          profilesAfterDedupe: dedupedProfiles.length,
-          duplicateProfilesRemoved,
-          recentUpdatesEnabled: this.includeRecentUpdates,
-          solanaProfilesConsidered: 0,
-          candidatesAccepted: 0,
-          freshAcceptedCount: 0,
-          staleRejectedCount: 0,
-          alreadyMovedRejectedCount: 0,
-          missingPairRejectedCount: 0,
-          limitedOutCount: 0
-        };
-        return [];
-      }
+      const solanaProfiles = dedupedProfiles.filter((profile) => profile.chainId === 'solana' && profile.tokenAddress).slice(0, this.maxTokens);
 
       const pairMap = await this.fetchPairsForTokens(solanaProfiles.map((profile) => profile.tokenAddress as string));
+      let missingPairRejectedCount = 0;
+      const profileCandidates = solanaProfiles
+        .map((profile) => normalizeDexScreenerCandidate(profile, pairMap.get(profile.tokenAddress as string) ?? [], observedAt, { discoveryLane: 'profile-feed' }))
+        .filter((candidate): candidate is TokenCandidate => {
+          if (!candidate) return false;
+          const selectedPair = (candidate.raw?.selectedPair as Record<string, unknown> | undefined) ?? null;
+          if (!selectedPair) {
+            missingPairRejectedCount += 1;
+            return false;
+          }
+          return true;
+        });
+
+      const searchProbeResult = this.includeSearchProbes ? await this.fetchSearchProbeCandidates(observedAt) : {
+        queriesRun: 0,
+        searchPairsFetched: 0,
+        searchSolanaPairsConsidered: 0,
+        candidates: [] as TokenCandidate[]
+      };
+
+      const { candidates: laneDedupedCandidates, duplicatesRemovedAcrossLanes } = dedupeCandidatesByMint([...profileCandidates, ...searchProbeResult.candidates]);
+
       const accepted: TokenCandidate[] = [];
       let staleRejectedCount = 0;
       let alreadyMovedRejectedCount = 0;
-      let missingPairRejectedCount = 0;
 
-      for (const profile of solanaProfiles) {
-        const candidate = normalizeDexScreenerCandidate(profile, pairMap.get(profile.tokenAddress as string) ?? [], observedAt);
-        if (!candidate) continue;
-
-        const selectedPair = (candidate.raw?.selectedPair as Record<string, unknown> | undefined) ?? null;
-        if (!selectedPair) {
-          missingPairRejectedCount += 1;
-          continue;
-        }
-
+      for (const candidate of laneDedupedCandidates) {
         const discovery = (candidate.raw?.discovery as Record<string, unknown> | undefined) ?? {};
         const pairAgeMinutes = typeof discovery.pairAgeMinutes === 'number' ? discovery.pairAgeMinutes : null;
         const dataAgeMinutes = typeof discovery.dataAgeMinutes === 'number' ? discovery.dataAgeMinutes : null;
@@ -413,7 +566,7 @@ export class DexScreenerTokenSource implements TokenSource {
         const movedDelta = candidateMovedBeforeDiscovery(left) - candidateMovedBeforeDiscovery(right);
         if (movedDelta !== 0) return movedDelta;
 
-        const liquidityDelta = (right.liquidityUsd ?? -1) - (left.liquidityUsd ?? -1);
+        const liquidityDelta = candidateLiquidity(right) - candidateLiquidity(left);
         if (liquidityDelta !== 0) return liquidityDelta;
 
         return (right.volume24hUsd ?? -1) - (left.volume24hUsd ?? -1);
@@ -427,6 +580,14 @@ export class DexScreenerTokenSource implements TokenSource {
         profilesAfterDedupe: dedupedProfiles.length,
         duplicateProfilesRemoved,
         recentUpdatesEnabled: this.includeRecentUpdates,
+        searchProbesEnabled: this.includeSearchProbes,
+        searchQueriesRun: searchProbeResult.queriesRun,
+        searchPairsFetched: searchProbeResult.searchPairsFetched,
+        searchSolanaPairsConsidered: searchProbeResult.searchSolanaPairsConsidered,
+        searchCandidatesAcceptedBeforeFreshness: searchProbeResult.candidates.length,
+        searchCandidatesAccepted: candidates.filter((candidate) => isSearchProbeCandidate(candidate)).length,
+        profileCandidatesAccepted: profileCandidates.length,
+        duplicatesRemovedAcrossLanes,
         solanaProfilesConsidered: solanaProfiles.length,
         candidatesAccepted: candidates.length,
         freshAcceptedCount: candidates.length,
@@ -476,6 +637,47 @@ export class DexScreenerTokenSource implements TokenSource {
     }
   }
 
+  private async fetchSearchProbeCandidates(observedAt: string): Promise<{ queriesRun: number; searchPairsFetched: number; searchSolanaPairsConsidered: number; candidates: TokenCandidate[] }> {
+    const candidates: TokenCandidate[] = [];
+    let queriesRun = 0;
+    let searchPairsFetched = 0;
+    let searchSolanaPairsConsidered = 0;
+
+    for (const query of this.searchProbes) {
+      if (candidates.length >= this.searchMaxTotal) break;
+      queriesRun += 1;
+      try {
+        const response = await this.fetchImpl(`${this.searchUrl}?q=${encodeURIComponent(query)}`, {
+          headers: {
+            accept: 'application/json',
+            'user-agent': 'goose-token-autopilot/1.0'
+          }
+        });
+
+        if (response.status === 429 || !response.ok) {
+          continue;
+        }
+
+        const data = (await response.json()) as DexScreenerSearchResponse;
+        const pairs = Array.isArray(data?.pairs) ? data.pairs : [];
+        searchPairsFetched += pairs.length;
+        const solanaPairs = pairs.filter((pair) => pair.chainId === 'solana' && pair.baseToken?.address).slice(0, this.searchLimitPerQuery);
+        searchSolanaPairsConsidered += solanaPairs.length;
+
+        for (const pair of solanaPairs) {
+          if (candidates.length >= this.searchMaxTotal) break;
+          const candidate = normalizeDexScreenerSearchPair(pair, query, observedAt);
+          if (!candidate) continue;
+          candidates.push(candidate);
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    return { queriesRun, searchPairsFetched, searchSolanaPairsConsidered, candidates };
+  }
+
   private async fetchPairsForTokens(tokenAddresses: string[]): Promise<Map<string, DexScreenerPair[]>> {
     const pairsByToken = new Map<string, DexScreenerPair[]>();
 
@@ -511,11 +713,22 @@ export class DexScreenerTokenSource implements TokenSource {
   }
 }
 
-export function createDexScreenerSourceFromConfig(config: AppConfig, options: Omit<DexScreenerSourceOptions, 'recentUpdatesUrl' | 'includeRecentUpdates' | 'maxPairAgeMinutes' | 'maxDataAgeMinutes' | 'maxMovedBeforeDiscoveryPct' | 'freshDiscoveryLimit'> = {}): DexScreenerTokenSource {
+export function createDexScreenerSourceFromConfig(
+  config: AppConfig,
+  options: Omit<
+    DexScreenerSourceOptions,
+    'recentUpdatesUrl' | 'includeRecentUpdates' | 'searchUrl' | 'includeSearchProbes' | 'searchProbes' | 'searchLimitPerQuery' | 'searchMaxTotal' | 'maxPairAgeMinutes' | 'maxDataAgeMinutes' | 'maxMovedBeforeDiscoveryPct' | 'freshDiscoveryLimit'
+  > = {}
+): DexScreenerTokenSource {
   return new DexScreenerTokenSource({
     ...options,
     recentUpdatesUrl: config.dexScreenerRecentUpdatesUrl,
     includeRecentUpdates: config.dexScreenerIncludeRecentUpdates,
+    searchUrl: config.dexScreenerSearchUrl,
+    includeSearchProbes: config.dexScreenerIncludeSearchProbes,
+    searchProbes: config.dexScreenerSearchProbes,
+    searchLimitPerQuery: config.dexScreenerSearchLimitPerQuery,
+    searchMaxTotal: config.dexScreenerSearchMaxTotal,
     maxPairAgeMinutes: config.dexScreenerMaxPairAgeMinutes,
     maxDataAgeMinutes: config.dexScreenerMaxDataAgeMinutes,
     maxMovedBeforeDiscoveryPct: config.dexScreenerMaxMovedBeforeDiscoveryPct,

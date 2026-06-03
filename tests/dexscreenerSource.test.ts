@@ -161,7 +161,7 @@ describe('DexScreener adapter', () => {
     const badSource = new DexScreenerTokenSource({
       fetchImpl: async (input) => {
         const url = String(input);
-        if (url.includes('/token-profiles/latest/v1') || url.includes('/token-profiles/recent-updates/v1')) {
+        if (url.includes('/token-profiles/latest/v1') || url.includes('/token-profiles/recent-updates/v1') || url.includes('/latest/dex/search')) {
           return new Response('not-json', { status: 200, headers: { 'content-type': 'application/json' } });
         }
         return makeJsonResponse({}, { status: 500 });
@@ -173,6 +173,31 @@ describe('DexScreener adapter', () => {
       fetchImpl: async () => makeJsonResponse({ message: 'rate limit' }, { status: 429 })
     });
     expect(await rateLimitedSource.fetchCandidates()).toEqual([]);
+  });
+
+  it('search probes disabled means no search URL is fetched', async () => {
+    const token = 'NoSearchMint11111111111111111111111111111111111';
+    const now = Date.now();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/token-profiles/latest/v1')) {
+        return makeJsonResponse([makeDexProfile(token, new Date(now - 2 * 60 * 1000).toISOString(), 'no-search')]);
+      }
+      if (url.includes('/token-profiles/recent-updates/v1')) {
+        return makeJsonResponse([]);
+      }
+      if (url.includes('/latest/dex/tokens/')) {
+        return makeJsonResponse({ pairs: [makeDexPair(token, { pairAddress: 'NoSearchPair111', pairCreatedAt: now - 10 * 60 * 1000 })] });
+      }
+      return makeJsonResponse({}, { status: 404 });
+    });
+
+    const source = new DexScreenerTokenSource({ fetchImpl, includeSearchProbes: false, maxTokens: 10, batchSize: 10 });
+    const candidates = await source.fetchCandidates();
+
+    expect(candidates).toHaveLength(1);
+    expect(fetchImpl.mock.calls.some(([input]) => String(input).includes('/latest/dex/search'))).toBe(false);
+    expect(source.getLastFetchSummary()).toMatchObject({ searchProbesEnabled: false, searchQueriesRun: 0, searchPairsFetched: 0 });
   });
 
   it('latest-only behavior remains available when recent updates are disabled', async () => {
@@ -227,6 +252,9 @@ describe('DexScreener adapter', () => {
           makeDexProfile(recentOnlyToken, new Date(now - 1 * 60 * 1000).toISOString(), 'recent-only')
         ]);
       }
+      if (url.includes('/latest/dex/search')) {
+        return makeJsonResponse({ pairs: [] });
+      }
       if (url.includes('/latest/dex/tokens/')) {
         return makeJsonResponse({
           pairs: [
@@ -238,7 +266,7 @@ describe('DexScreener adapter', () => {
       return makeJsonResponse({}, { status: 404 });
     });
 
-    const source = new DexScreenerTokenSource({ fetchImpl, includeRecentUpdates: true, maxTokens: 10, batchSize: 10 });
+    const source = new DexScreenerTokenSource({ fetchImpl, includeRecentUpdates: true, includeSearchProbes: false, maxTokens: 10, batchSize: 10 });
     const candidates = await source.fetchCandidates();
     const shared = candidates.find((candidate) => candidate.mint === sharedToken);
 
@@ -256,10 +284,97 @@ describe('DexScreener adapter', () => {
     });
   });
 
+  it('search probes enabled calls search URL for configured queries and ignores non-Solana pairs', async () => {
+    const searchToken = 'SearchMint111111111111111111111111111111111111';
+    const now = Date.now();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/token-profiles/latest/v1')) return makeJsonResponse([]);
+      if (url.includes('/token-profiles/recent-updates/v1')) return makeJsonResponse([]);
+      if (url.includes('/latest/dex/search')) {
+        return makeJsonResponse({
+          pairs: [
+            makeDexPair(searchToken, { pairAddress: 'SearchPair111', pairCreatedAt: now - 9 * 60 * 1000, priceChange: { m5: 6, h1: 9, h24: 15 }, liquidity: { usd: 60000 } }),
+            makeDexPair('EthMint111111111111111111111111111111111111111', { chainId: 'ethereum', pairAddress: 'EthPair111' })
+          ]
+        });
+      }
+      return makeJsonResponse({}, { status: 404 });
+    });
+
+    const source = new DexScreenerTokenSource({
+      fetchImpl,
+      includeRecentUpdates: false,
+      includeSearchProbes: true,
+      searchProbes: ['solana', 'pump'],
+      searchLimitPerQuery: 10,
+      searchMaxTotal: 30,
+      maxTokens: 10,
+      batchSize: 10
+    });
+
+    const candidates = await source.fetchCandidates();
+    const searchCandidate = candidates.find((candidate) => candidate.mint === searchToken);
+
+    expect(fetchImpl.mock.calls.filter(([input]) => String(input).includes('/latest/dex/search')).length).toBe(2);
+    expect(searchCandidate).toBeTruthy();
+    expect(searchCandidate?.liquidityUsd).toBe(60000);
+    expect(searchCandidate?.raw.discoveryLane).toBe('search-probe');
+    expect(candidates.every((candidate) => candidate.chain === 'solana')).toBe(true);
+    expect(source.getLastFetchSummary()).toMatchObject({
+      searchProbesEnabled: true,
+      searchQueriesRun: 2,
+      searchPairsFetched: 4,
+      searchSolanaPairsConsidered: 2,
+      searchCandidatesAcceptedBeforeFreshness: 2
+    });
+  });
+
+  it('duplicate profile/search token dedupes to preferred fresher and more liquid candidate', async () => {
+    const sharedToken = 'LaneDupMint11111111111111111111111111111111111';
+    const now = Date.now();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/token-profiles/latest/v1')) {
+        return makeJsonResponse([makeDexProfile(sharedToken, new Date(now - 15 * 60 * 1000).toISOString(), 'lane-profile')]);
+      }
+      if (url.includes('/token-profiles/recent-updates/v1')) return makeJsonResponse([]);
+      if (url.includes('/latest/dex/search')) {
+        return makeJsonResponse({
+          pairs: [makeDexPair(sharedToken, { pairAddress: 'LaneSearchPair111', pairCreatedAt: now - 5 * 60 * 1000, liquidity: { usd: 80000 }, priceChange: { m5: 5, h1: 9, h24: 14 } })]
+        });
+      }
+      if (url.includes('/latest/dex/tokens/')) {
+        return makeJsonResponse({
+          pairs: [makeDexPair(sharedToken, { pairAddress: 'LaneProfilePair111', pairCreatedAt: now - 20 * 60 * 1000, liquidity: { usd: 15000 }, priceChange: { m5: 10, h1: 15, h24: 20 } })]
+        });
+      }
+      return makeJsonResponse({}, { status: 404 });
+    });
+
+    const source = new DexScreenerTokenSource({
+      fetchImpl,
+      includeRecentUpdates: false,
+      includeSearchProbes: true,
+      searchProbes: ['solana'],
+      searchLimitPerQuery: 10,
+      searchMaxTotal: 10,
+      maxTokens: 10,
+      batchSize: 10
+    });
+
+    const candidates = await source.fetchCandidates();
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.raw.discoveryLane).toBe('search-probe');
+    expect(candidates[0]?.liquidityUsd).toBe(80000);
+    expect(source.getLastFetchSummary()).toMatchObject({ duplicatesRemovedAcrossLanes: 1, searchCandidatesAccepted: 1, profileCandidatesAccepted: 1 });
+  });
+
   it('runScan inserts fresh valid DexScreener candidates and includes source summary with recent updates counters', async () => {
     const { dir, config } = makeTestConfig({
       TOKEN_SOURCE: 'dexscreener',
       DEXSCREENER_INCLUDE_RECENT_UPDATES: 'true',
+      DEXSCREENER_INCLUDE_SEARCH_PROBES: 'false',
       DEXSCREENER_MAX_PAIR_AGE_MINUTES: '180',
       DEXSCREENER_MAX_DATA_AGE_MINUTES: '60',
       DEXSCREENER_MAX_MOVED_BEFORE_DISCOVERY_PCT: '150',
@@ -283,6 +398,9 @@ describe('DexScreener adapter', () => {
         return makeJsonResponse([
           makeDexProfile(tokenA, new Date(now - 2 * 60 * 1000).toISOString(), 'scan-fresh-new')
         ]);
+      }
+      if (url.includes('/latest/dex/search')) {
+        return makeJsonResponse({ pairs: [] });
       }
       if (url.includes('/latest/dex/tokens/')) {
         return makeJsonResponse({

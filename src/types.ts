@@ -424,6 +424,11 @@ export interface AppConfig {
   maxTokenAgeHours: number;
   dexScreenerRecentUpdatesUrl: string;
   dexScreenerIncludeRecentUpdates: boolean;
+  dexScreenerSearchUrl: string;
+  dexScreenerIncludeSearchProbes: boolean;
+  dexScreenerSearchProbes: string[];
+  dexScreenerSearchLimitPerQuery: number;
+  dexScreenerSearchMaxTotal: number;
   dexScreenerMaxPairAgeMinutes: number;
   dexScreenerMaxDataAgeMinutes: number;
   dexScreenerMaxMovedBeforeDiscoveryPct: number;
