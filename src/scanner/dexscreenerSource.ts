@@ -63,6 +63,8 @@ interface DexScreenerTokenResponse {
 interface DexScreenerSourceOptions {
   fetchImpl?: FetchImpl;
   profilesUrl?: string;
+  recentUpdatesUrl?: string;
+  includeRecentUpdates?: boolean;
   tokensBaseUrl?: string;
   maxTokens?: number;
   batchSize?: number;
@@ -74,6 +76,11 @@ interface DexScreenerSourceOptions {
 
 interface DexScreenerFetchSummary {
   profilesFetched: number;
+  latestProfilesFetched: number;
+  recentProfilesFetched: number;
+  profilesAfterDedupe: number;
+  duplicateProfilesRemoved: number;
+  recentUpdatesEnabled: boolean;
   solanaProfilesConsidered: number;
   candidatesAccepted: number;
   freshAcceptedCount: number;
@@ -84,12 +91,14 @@ interface DexScreenerFetchSummary {
 }
 
 const DEFAULT_PROFILES_URL = 'https://api.dexscreener.com/token-profiles/latest/v1';
+const DEFAULT_RECENT_UPDATES_URL = 'https://api.dexscreener.com/token-profiles/recent-updates/v1';
 const DEFAULT_TOKENS_BASE_URL = 'https://api.dexscreener.com/latest/dex/tokens';
 const DEFAULT_MAX_TOKENS = 25;
 const DEFAULT_BATCH_SIZE = 20;
 const DEFAULT_MAX_PAIR_AGE_MINUTES = 180;
 const DEFAULT_MAX_DATA_AGE_MINUTES = 60;
 const DEFAULT_MAX_MOVED_BEFORE_DISCOVERY_PCT = 150;
+const DEFAULT_INCLUDE_RECENT_UPDATES = true;
 const MS_PER_MINUTE = 60_000;
 
 function toNumber(value: unknown): number | null {
@@ -129,6 +138,26 @@ function sortProfilesByFreshness(left: DexScreenerProfile, right: DexScreenerPro
   const leftUpdated = new Date(toIsoDate(left.updatedAt) ?? 0).getTime();
   const rightUpdated = new Date(toIsoDate(right.updatedAt) ?? 0).getTime();
   return rightUpdated - leftUpdated;
+}
+
+function mergeProfilesByNewest(profiles: DexScreenerProfile[]): { dedupedProfiles: DexScreenerProfile[]; duplicateProfilesRemoved: number } {
+  const bestByKey = new Map<string, DexScreenerProfile>();
+  for (const profile of profiles) {
+    if (!profile.chainId || !profile.tokenAddress) continue;
+    const key = `${profile.chainId}:${profile.tokenAddress}`;
+    const current = bestByKey.get(key);
+    if (!current) {
+      bestByKey.set(key, profile);
+      continue;
+    }
+    const profileUpdated = new Date(toIsoDate(profile.updatedAt) ?? 0).getTime();
+    const currentUpdated = new Date(toIsoDate(current.updatedAt) ?? 0).getTime();
+    if (profileUpdated >= currentUpdated) {
+      bestByKey.set(key, profile);
+    }
+  }
+  const dedupedProfiles = [...bestByKey.values()].sort(sortProfilesByFreshness);
+  return { dedupedProfiles, duplicateProfilesRemoved: Math.max(0, profiles.length - dedupedProfiles.length) };
 }
 
 function pickBestPair(pairs: DexScreenerPair[]): DexScreenerPair | null {
@@ -281,6 +310,8 @@ export class DexScreenerTokenSource implements TokenSource {
 
   private readonly fetchImpl: FetchImpl;
   private readonly profilesUrl: string;
+  private readonly recentUpdatesUrl: string;
+  private readonly includeRecentUpdates: boolean;
   private readonly tokensBaseUrl: string;
   private readonly maxTokens: number;
   private readonly batchSize: number;
@@ -293,6 +324,8 @@ export class DexScreenerTokenSource implements TokenSource {
   constructor(options: DexScreenerSourceOptions = {}) {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.profilesUrl = options.profilesUrl ?? DEFAULT_PROFILES_URL;
+    this.recentUpdatesUrl = options.recentUpdatesUrl ?? DEFAULT_RECENT_UPDATES_URL;
+    this.includeRecentUpdates = options.includeRecentUpdates ?? DEFAULT_INCLUDE_RECENT_UPDATES;
     this.tokensBaseUrl = options.tokensBaseUrl ?? DEFAULT_TOKENS_BASE_URL;
     this.maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
     this.batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
@@ -309,17 +342,22 @@ export class DexScreenerTokenSource implements TokenSource {
   async fetchCandidates(): Promise<TokenCandidate[]> {
     try {
       const observedAt = new Date().toISOString();
-      const profiles = await this.fetchProfiles();
-      const solanaProfiles = [...new Map(
-        profiles
-          .filter((profile) => profile.chainId === 'solana' && profile.tokenAddress)
-          .sort(sortProfilesByFreshness)
-          .map((profile) => [profile.tokenAddress as string, profile])
-      ).values()];
+      const latestProfiles = await this.fetchProfiles(this.profilesUrl);
+      const recentProfiles = this.includeRecentUpdates ? await this.fetchProfiles(this.recentUpdatesUrl) : [];
+      const mergedProfiles = [...latestProfiles, ...recentProfiles];
+      const { dedupedProfiles, duplicateProfilesRemoved } = mergeProfilesByNewest(mergedProfiles);
+      const solanaProfiles = dedupedProfiles
+        .filter((profile) => profile.chainId === 'solana' && profile.tokenAddress)
+        .slice(0, this.maxTokens);
 
       if (solanaProfiles.length === 0) {
         this.lastFetchSummary = {
-          profilesFetched: profiles.length,
+          profilesFetched: mergedProfiles.length,
+          latestProfilesFetched: latestProfiles.length,
+          recentProfilesFetched: recentProfiles.length,
+          profilesAfterDedupe: dedupedProfiles.length,
+          duplicateProfilesRemoved,
+          recentUpdatesEnabled: this.includeRecentUpdates,
           solanaProfilesConsidered: 0,
           candidatesAccepted: 0,
           freshAcceptedCount: 0,
@@ -383,7 +421,12 @@ export class DexScreenerTokenSource implements TokenSource {
 
       const candidates = ranked.slice(0, this.freshDiscoveryLimit);
       this.lastFetchSummary = {
-        profilesFetched: profiles.length,
+        profilesFetched: mergedProfiles.length,
+        latestProfilesFetched: latestProfiles.length,
+        recentProfilesFetched: recentProfiles.length,
+        profilesAfterDedupe: dedupedProfiles.length,
+        duplicateProfilesRemoved,
+        recentUpdatesEnabled: this.includeRecentUpdates,
         solanaProfilesConsidered: solanaProfiles.length,
         candidatesAccepted: candidates.length,
         freshAcceptedCount: candidates.length,
@@ -413,9 +456,9 @@ export class DexScreenerTokenSource implements TokenSource {
     }
   }
 
-  private async fetchProfiles(): Promise<DexScreenerProfile[]> {
+  private async fetchProfiles(url: string): Promise<DexScreenerProfile[]> {
     try {
-      const response = await this.fetchImpl(this.profilesUrl, {
+      const response = await this.fetchImpl(url, {
         headers: {
           accept: 'application/json',
           'user-agent': 'goose-token-autopilot/1.0'
@@ -468,9 +511,11 @@ export class DexScreenerTokenSource implements TokenSource {
   }
 }
 
-export function createDexScreenerSourceFromConfig(config: AppConfig, options: Omit<DexScreenerSourceOptions, 'maxPairAgeMinutes' | 'maxDataAgeMinutes' | 'maxMovedBeforeDiscoveryPct' | 'freshDiscoveryLimit'> = {}): DexScreenerTokenSource {
+export function createDexScreenerSourceFromConfig(config: AppConfig, options: Omit<DexScreenerSourceOptions, 'recentUpdatesUrl' | 'includeRecentUpdates' | 'maxPairAgeMinutes' | 'maxDataAgeMinutes' | 'maxMovedBeforeDiscoveryPct' | 'freshDiscoveryLimit'> = {}): DexScreenerTokenSource {
   return new DexScreenerTokenSource({
     ...options,
+    recentUpdatesUrl: config.dexScreenerRecentUpdatesUrl,
+    includeRecentUpdates: config.dexScreenerIncludeRecentUpdates,
     maxPairAgeMinutes: config.dexScreenerMaxPairAgeMinutes,
     maxDataAgeMinutes: config.dexScreenerMaxDataAgeMinutes,
     maxMovedBeforeDiscoveryPct: config.dexScreenerMaxMovedBeforeDiscoveryPct,

@@ -23,10 +23,10 @@ function makeJsonResponse(body: unknown, init: { status?: number } = {}): Respon
   });
 }
 
-function makeDexProfile(tokenAddress: string, updatedAt: string, suffix: string) {
+function makeDexProfile(tokenAddress: string, updatedAt: string, suffix: string, chainId = 'solana') {
   return {
-    url: `https://dexscreener.com/solana/${suffix}`,
-    chainId: 'solana',
+    url: `https://dexscreener.com/${chainId}/${suffix}`,
+    chainId,
     tokenAddress,
     updatedAt,
     links: [{ label: 'Website', url: `https://${suffix}.example.com` }]
@@ -97,6 +97,9 @@ describe('DexScreener adapter', () => {
           }
         ]);
       }
+      if (url.includes('/token-profiles/recent-updates/v1')) {
+        return makeJsonResponse([]);
+      }
       if (url.includes('/latest/dex/tokens/')) {
         return makeJsonResponse({
           pairs: [
@@ -158,7 +161,7 @@ describe('DexScreener adapter', () => {
     const badSource = new DexScreenerTokenSource({
       fetchImpl: async (input) => {
         const url = String(input);
-        if (url.includes('/token-profiles/latest/v1')) {
+        if (url.includes('/token-profiles/latest/v1') || url.includes('/token-profiles/recent-updates/v1')) {
           return new Response('not-json', { status: 200, headers: { 'content-type': 'application/json' } });
         }
         return makeJsonResponse({}, { status: 500 });
@@ -172,6 +175,149 @@ describe('DexScreener adapter', () => {
     expect(await rateLimitedSource.fetchCandidates()).toEqual([]);
   });
 
+  it('latest-only behavior remains available when recent updates are disabled', async () => {
+    const latestToken = 'LatestOnlyMint111111111111111111111111111111111';
+    const recentToken = 'RecentOnlyMint111111111111111111111111111111111';
+    const now = Date.now();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/token-profiles/latest/v1')) {
+        return makeJsonResponse([makeDexProfile(latestToken, new Date(now - 2 * 60 * 1000).toISOString(), 'latest-only')]);
+      }
+      if (url.includes('/token-profiles/recent-updates/v1')) {
+        return makeJsonResponse([makeDexProfile(recentToken, new Date(now - 1 * 60 * 1000).toISOString(), 'recent-only')]);
+      }
+      if (url.includes('/latest/dex/tokens/')) {
+        return makeJsonResponse({
+          pairs: [makeDexPair(latestToken, { pairAddress: 'LatestOnlyPair111', pairCreatedAt: now - 10 * 60 * 1000, priceChange: { m5: 7, h1: 12, h24: 18 } })]
+        });
+      }
+      return makeJsonResponse({}, { status: 404 });
+    });
+
+    const source = new DexScreenerTokenSource({ fetchImpl, includeRecentUpdates: false, maxTokens: 10, batchSize: 10 });
+    const candidates = await source.fetchCandidates();
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.mint).toBe(latestToken);
+    expect(fetchImpl.mock.calls.some(([input]) => String(input).includes('/token-profiles/recent-updates/v1'))).toBe(false);
+    expect(source.getLastFetchSummary()).toMatchObject({
+      latestProfilesFetched: 1,
+      recentProfilesFetched: 0,
+      recentUpdatesEnabled: false,
+      profilesAfterDedupe: 1,
+      duplicateProfilesRemoved: 0
+    });
+  });
+
+  it('recent-updates profiles are fetched when enabled and deduped by newest updatedAt', async () => {
+    const sharedToken = 'SharedMint1111111111111111111111111111111111111';
+    const recentOnlyToken = 'RecentMint1111111111111111111111111111111111111';
+    const now = Date.now();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/token-profiles/latest/v1')) {
+        return makeJsonResponse([
+          makeDexProfile(sharedToken, new Date(now - 20 * 60 * 1000).toISOString(), 'shared-old')
+        ]);
+      }
+      if (url.includes('/token-profiles/recent-updates/v1')) {
+        return makeJsonResponse([
+          makeDexProfile(sharedToken, new Date(now - 2 * 60 * 1000).toISOString(), 'shared-new'),
+          makeDexProfile(recentOnlyToken, new Date(now - 1 * 60 * 1000).toISOString(), 'recent-only')
+        ]);
+      }
+      if (url.includes('/latest/dex/tokens/')) {
+        return makeJsonResponse({
+          pairs: [
+            makeDexPair(sharedToken, { pairAddress: 'SharedPair111', pairCreatedAt: now - 12 * 60 * 1000, priceChange: { m5: 7, h1: 12, h24: 18 } }),
+            makeDexPair(recentOnlyToken, { pairAddress: 'RecentPair111', pairCreatedAt: now - 8 * 60 * 1000, priceChange: { m5: 6, h1: 10, h24: 16 } })
+          ]
+        });
+      }
+      return makeJsonResponse({}, { status: 404 });
+    });
+
+    const source = new DexScreenerTokenSource({ fetchImpl, includeRecentUpdates: true, maxTokens: 10, batchSize: 10 });
+    const candidates = await source.fetchCandidates();
+    const shared = candidates.find((candidate) => candidate.mint === sharedToken);
+
+    expect(fetchImpl.mock.calls.some(([input]) => String(input).includes('/token-profiles/recent-updates/v1'))).toBe(true);
+    expect(fetchImpl.mock.calls.some(([input]) => String(input).includes('/latest/dex/tokens/'))).toBe(true);
+    expect(candidates).toHaveLength(2);
+    expect(shared).toBeTruthy();
+    expect(shared?.sourceUrl).toContain('sharedpair111');
+    expect(source.getLastFetchSummary()).toMatchObject({
+      latestProfilesFetched: 1,
+      recentProfilesFetched: 2,
+      profilesAfterDedupe: 2,
+      duplicateProfilesRemoved: 1,
+      recentUpdatesEnabled: true
+    });
+  });
+
+  it('runScan inserts fresh valid DexScreener candidates and includes source summary with recent updates counters', async () => {
+    const { dir, config } = makeTestConfig({
+      TOKEN_SOURCE: 'dexscreener',
+      DEXSCREENER_INCLUDE_RECENT_UPDATES: 'true',
+      DEXSCREENER_MAX_PAIR_AGE_MINUTES: '180',
+      DEXSCREENER_MAX_DATA_AGE_MINUTES: '60',
+      DEXSCREENER_MAX_MOVED_BEFORE_DISCOVERY_PCT: '150',
+      DEXSCREENER_FRESH_DISCOVERY_LIMIT: '5'
+    });
+    cleanup.push(dir);
+    const db = createDb(config);
+    const now = Date.now();
+    const tokenA = 'ScanMintFresh111111111111111111111111111111111';
+    const tokenB = 'ScanMintStale111111111111111111111111111111111';
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/token-profiles/latest/v1')) {
+        return makeJsonResponse([
+          makeDexProfile(tokenA, new Date(now - 20 * 60 * 1000).toISOString(), 'scan-fresh-old'),
+          makeDexProfile(tokenB, new Date(now - 90 * 60 * 1000).toISOString(), 'scan-stale')
+        ]);
+      }
+      if (url.includes('/token-profiles/recent-updates/v1')) {
+        return makeJsonResponse([
+          makeDexProfile(tokenA, new Date(now - 2 * 60 * 1000).toISOString(), 'scan-fresh-new')
+        ]);
+      }
+      if (url.includes('/latest/dex/tokens/')) {
+        return makeJsonResponse({
+          pairs: [
+            makeDexPair(tokenA, { pairAddress: 'ScanFreshPair111', pairCreatedAt: now - 12 * 60 * 1000, priceChange: { m5: 7, h1: 10, h24: 16 } }),
+            makeDexPair(tokenB, { pairAddress: 'ScanStalePair111', pairCreatedAt: now - 6 * 60 * 60 * 1000, priceChange: { m5: 11, h1: 20, h24: 22 } })
+          ]
+        });
+      }
+      return makeJsonResponse({}, { status: 404 });
+    });
+
+    const result = await runScan(db, config);
+    const fresh = db.findTokenByMint(tokenA);
+    const stale = db.findTokenByMint(tokenB);
+
+    expect(result.scanned).toBe(1);
+    expect(result.source).toBe('dexscreener');
+    expect(result.sourceSummary).toMatchObject({
+      recentUpdatesEnabled: true,
+      latestProfilesFetched: 2,
+      recentProfilesFetched: 1,
+      profilesFetched: 3,
+      profilesAfterDedupe: 2,
+      duplicateProfilesRemoved: 1,
+      freshAcceptedCount: 1,
+      staleRejectedCount: 1,
+      alreadyMovedRejectedCount: 0
+    });
+    expect(fresh).not.toBeNull();
+    expect(stale).toBeNull();
+    expect(db.getLatestSnapshot(fresh!.id)?.source).toBe('dexscreener');
+    db.close();
+  });
+
   it('prefers newer pairs over older stale ones and reports freshness summary', async () => {
     const freshToken = 'FreshMint1111111111111111111111111111111111111';
     const oldToken = 'OlderMint1111111111111111111111111111111111111';
@@ -183,6 +329,9 @@ describe('DexScreener adapter', () => {
           makeDexProfile(oldToken, new Date(now - 10 * 60 * 1000).toISOString(), 'old-token'),
           makeDexProfile(freshToken, new Date(now - 2 * 60 * 1000).toISOString(), 'fresh-token')
         ]);
+      }
+      if (url.includes('/token-profiles/recent-updates/v1')) {
+        return makeJsonResponse([]);
       }
       if (url.includes('/latest/dex/tokens/')) {
         return makeJsonResponse({
@@ -237,6 +386,9 @@ describe('DexScreener adapter', () => {
           makeDexProfile(freshToken, new Date(now - 2 * 60 * 1000).toISOString(), 'okay-token')
         ]);
       }
+      if (url.includes('/token-profiles/recent-updates/v1')) {
+        return makeJsonResponse([]);
+      }
       if (url.includes('/latest/dex/tokens/')) {
         return makeJsonResponse({
           pairs: [
@@ -276,56 +428,6 @@ describe('DexScreener adapter', () => {
       staleRejectedCount: 0,
       alreadyMovedRejectedCount: 1
     });
-  });
-
-  it('runScan inserts fresh valid DexScreener candidates and includes source summary', async () => {
-    const { dir, config } = makeTestConfig({
-      TOKEN_SOURCE: 'dexscreener',
-      DEXSCREENER_MAX_PAIR_AGE_MINUTES: '180',
-      DEXSCREENER_MAX_DATA_AGE_MINUTES: '60',
-      DEXSCREENER_MAX_MOVED_BEFORE_DISCOVERY_PCT: '150',
-      DEXSCREENER_FRESH_DISCOVERY_LIMIT: '5'
-    });
-    cleanup.push(dir);
-    const db = createDb(config);
-    const now = Date.now();
-    const tokenA = 'ScanMintFresh111111111111111111111111111111111';
-    const tokenB = 'ScanMintStale111111111111111111111111111111111';
-
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes('/token-profiles/latest/v1')) {
-        return makeJsonResponse([
-          makeDexProfile(tokenA, new Date(now - 2 * 60 * 1000).toISOString(), 'scan-fresh'),
-          makeDexProfile(tokenB, new Date(now - 90 * 60 * 1000).toISOString(), 'scan-stale')
-        ]);
-      }
-      if (url.includes('/latest/dex/tokens/')) {
-        return makeJsonResponse({
-          pairs: [
-            makeDexPair(tokenA, { pairAddress: 'ScanFreshPair111', pairCreatedAt: now - 12 * 60 * 1000, priceChange: { m5: 7, h1: 10, h24: 16 } }),
-            makeDexPair(tokenB, { pairAddress: 'ScanStalePair111', pairCreatedAt: now - 6 * 60 * 60 * 1000, priceChange: { m5: 11, h1: 20, h24: 22 } })
-          ]
-        });
-      }
-      return makeJsonResponse({}, { status: 404 });
-    });
-
-    const result = await runScan(db, config);
-    const fresh = db.findTokenByMint(tokenA);
-    const stale = db.findTokenByMint(tokenB);
-
-    expect(result.scanned).toBe(1);
-    expect(result.source).toBe('dexscreener');
-    expect(result.sourceSummary).toMatchObject({
-      freshAcceptedCount: 1,
-      staleRejectedCount: 1,
-      alreadyMovedRejectedCount: 0
-    });
-    expect(fresh).not.toBeNull();
-    expect(stale).toBeNull();
-    expect(db.getLatestSnapshot(fresh!.id)?.source).toBe('dexscreener');
-    db.close();
   });
 
   it('live-source missing authority holder and sellability fields cannot become AUTOPILOT_ELIGIBLE', () => {

@@ -418,6 +418,8 @@ export interface AppConfig {
   maxChasePct: number;
   minTokenAgeMin: number;
   maxTokenAgeHours: number;
+  dexScreenerRecentUpdatesUrl: string;
+  dexScreenerIncludeRecentUpdates: boolean;
   dexScreenerMaxPairAgeMinutes: number;
   dexScreenerMaxDataAgeMinutes: number;
   dexScreenerMaxMovedBeforeDiscoveryPct: number;
