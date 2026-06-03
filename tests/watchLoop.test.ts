@@ -61,6 +61,31 @@ describe('watch loop', () => {
     db.close();
   });
 
+  it('watch-cycle reports cycle-scoped paper buys only when auto-paper is disabled and old paper buys exist', async () => {
+    const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener', ENABLE_AUTO_PAPER_TRADING: 'false' });
+    cleanup.push(dir);
+    const db = createDb(config);
+    const candidate = makeLiveCandidate({
+      tokenAddress: 'LoopMintHistorical1111111111111111111111111111',
+      pairAddress: 'LoopPairHistorical111',
+      url: 'https://dexscreener.com/solana/loop-historical',
+      movedBeforeDiscoveryPct: 20
+    });
+    const tokenId = db.upsertToken(candidate);
+    db.insertSnapshot(tokenId, candidate);
+    const proposalId = db.createProposal(tokenId, 'BUY', 1, 'PAPER_BUY', 'historical paper buy', 'PENDING', {});
+    db.createPaperTrade(tokenId, proposalId, 'BUY', 1, candidate.priceUsd ?? 1, 1, 'historical paper buy');
+    db.createPosition(tokenId, 'PAPER', 'OPEN', candidate.priceUsd ?? 1, 1, 1, 'historical paper buy');
+
+    const summary = await runWatchCycle(db, config, 1, new AppLogger(false));
+
+    expect(db.getDailyPaperBuyCount()).toBe(1);
+    expect(summary.paperBuysOpened).toBe(0);
+    expect(db.getOpenPositionCount('PAPER')).toBe(1);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
+    db.close();
+  });
+
   it('watch-cycle runs without real trade attempts', async () => {
     const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener' });
     cleanup.push(dir);

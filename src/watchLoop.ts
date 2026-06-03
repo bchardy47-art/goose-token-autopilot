@@ -66,9 +66,12 @@ function formatCycleSummary(summary: WatchCycleSummary): string {
 
 export async function runWatchCycle(db: AppDb, config: AppConfig, cycleNumber = 1, logger = new AppLogger()): Promise<WatchCycleSummary> {
   const timestamp = new Date().toISOString();
+  const paperBuyCountBeforeCycle = db.getDailyPaperBuyCount();
   const watchOnlyResult = await runWatchOnly(db, config, logger);
   const outcomesResult = await runWatchOutcomes(db, config, logger);
   const analysisResult = await runWatchAnalysis(db, config, logger);
+  const paperBuyCountAfterCycle = db.getDailyPaperBuyCount();
+  const paperBuysOpenedThisCycle = Math.max(0, paperBuyCountAfterCycle - paperBuyCountBeforeCycle);
   const watchReport = buildWatchOnlyReport(db, config) as Record<string, any>;
   const dailyReport = buildDailyReport(db, config) as Record<string, any>;
   const safety = verifySafety(config) as Record<string, any>;
@@ -88,7 +91,7 @@ export async function runWatchCycle(db: AppDb, config: AppConfig, cycleNumber = 
     },
     bestCurrentMover: watchReport.bestMover ?? null,
     worstCurrentMover: watchReport.worstMover ?? null,
-    paperBuysOpened: Number(dailyReport.paperBuysOpened ?? 0),
+    paperBuysOpened: paperBuysOpenedThisCycle,
     realTradeAttempts: Number(dailyReport.blockedRealTradeAttempts ?? 0),
     tokensScannedToday: dailyReport.tokensScannedToday === undefined ? null : Number(dailyReport.tokensScannedToday),
     tokensScoredToday: dailyReport.tokensScoredToday === undefined ? null : Number(dailyReport.tokensScoredToday),
