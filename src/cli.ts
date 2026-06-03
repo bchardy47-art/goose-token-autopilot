@@ -13,6 +13,7 @@ import { renderFreshCandidateWatchlist } from './paper/freshWatchlist';
 import { renderFreshRejectionAnalytics } from './paper/freshRejections';
 import { renderTooEarlyWatchReport } from './paper/tooEarlyWatch';
 import { renderTokenSessionSummary } from './paper/sessionSummary';
+import { renderNearMissShadowReport } from './paper/nearMiss';
 import { runPaperReview, runPaperReviewLoop, type PaperReviewLoopCycleSummary } from './paper/review';
 import { buildPaperPerformanceReport } from './paper/performance';
 import { buildDailyReport, renderPaperAutopsy, renderPaperDashboard } from './paper/dailyReport';
@@ -115,6 +116,11 @@ async function main(): Promise<void> {
       case 'token:session-summary': {
         const windowMinutes = parseNumberArg('--window-minutes', 60, { min: 0 });
         console.log(renderTokenSessionSummary(db, config, { windowMinutes }));
+        break;
+      }
+      case 'token:near-miss': {
+        const windowMinutes = parseNumberArg('--window-minutes', 60, { min: 0 });
+        console.log(renderNearMissShadowReport(db, config, { windowMinutes }));
         break;
       }
       case 'token:paper-review':

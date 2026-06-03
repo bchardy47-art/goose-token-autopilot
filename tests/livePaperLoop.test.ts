@@ -6,6 +6,7 @@ import { applyLatestQuoteResultToSnapshot, buildPaperEligibilityDiagnostics, isP
 import { buildFreshCandidateWatchlist, renderFreshCandidateWatchlist } from '../src/paper/freshWatchlist';
 import { buildTooEarlyWatchReport, renderTooEarlyWatchReport } from '../src/paper/tooEarlyWatch';
 import { buildTokenSessionSummary, renderTokenSessionSummary } from '../src/paper/sessionSummary';
+import { buildNearMissShadowReport, renderNearMissShadowReport } from '../src/paper/nearMiss';
 import { paperBuy } from '../src/trading/paper';
 import { runPaperReview, runPaperReviewLoop } from '../src/paper/review';
 import { buildPaperPerformanceReport } from '../src/paper/performance';
@@ -966,6 +967,22 @@ describe('live paper loop', () => {
     const output = renderTokenSessionSummary(db, config, { windowMinutes: 60 });
     expect(['KEEP_WATCHING', 'INVESTIGATE_NOW', 'SAFE_TO_STOP', 'DO_NOT_BUY']).toContain(report.recommendation);
     expect(output).toContain('Token Session Summary');
+    expect(output).toContain('Recommendation:');
+    expect(output).toContain('No paper buys opened.');
+    expect(output).toContain('Real trading remains locked.');
+    expect(output).not.toMatch(/rawJson/i);
+    expect(db.getOpenPositionCount('PAPER')).toBe(0);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
+    db.close();
+  });
+
+  it('near-miss shadow lane stays read-only and excludes raw json', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const report = buildNearMissShadowReport(db, config, { windowMinutes: 60 });
+    const output = renderNearMissShadowReport(db, config, { windowMinutes: 60 });
+    expect(['DO_NOT_LOOSEN', 'CONSIDER_SHADOW_PAPER_RULE', 'RECHECK_SOON', 'INVESTIGATE_NOW']).toContain(report.recommendation);
+    expect(output).toContain('Near-Miss Shadow Lane');
     expect(output).toContain('Recommendation:');
     expect(output).toContain('No paper buys opened.');
     expect(output).toContain('Real trading remains locked.');

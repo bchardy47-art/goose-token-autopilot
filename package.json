@@ -17,6 +17,7 @@
     "token:fresh-rejections": "tsx src/cli.ts token:fresh-rejections",
     "token:too-early-watch": "tsx src/cli.ts token:too-early-watch",
     "token:session-summary": "tsx src/cli.ts token:session-summary",
+    "token:near-miss": "tsx src/cli.ts token:near-miss",
     "token:paper-review": "tsx src/cli.ts token:paper-review",
     "token:paper-review-loop": "tsx src/cli.ts token:paper-review-loop",
     "token:paper-performance": "tsx src/cli.ts token:paper-performance",
