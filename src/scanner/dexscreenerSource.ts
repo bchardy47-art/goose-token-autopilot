@@ -84,6 +84,16 @@ interface DexScreenerSourceOptions {
   freshDiscoveryLimit?: number;
 }
 
+interface DexScreenerRejectedSample {
+  symbol: string;
+  mint: string;
+  discoveryLane: 'search-probe' | 'profile-feed';
+  pairAgeMinutes: number | null;
+  dataAgeMinutes: number | null;
+  movedBeforeDiscoveryPct: number | null;
+  reason: string;
+}
+
 interface DexScreenerFetchSummary {
   profilesFetched: number;
   latestProfilesFetched: number;
@@ -97,8 +107,23 @@ interface DexScreenerFetchSummary {
   searchSolanaPairsConsidered: number;
   searchCandidatesAcceptedBeforeFreshness: number;
   searchCandidatesAccepted: number;
+  searchRejectedStaleCount: number;
+  searchRejectedAlreadyMovedCount: number;
+  searchRejectedTooOldCount: number;
+  searchRejectedMissingPairCount: number;
+  searchRejectedLimitedOutCount: number;
   profileCandidatesAccepted: number;
+  profileRejectedStaleCount: number;
+  profileRejectedAlreadyMovedCount: number;
+  profileRejectedMissingPairCount: number;
+  profileRejectedLimitedOutCount: number;
   duplicatesRemovedAcrossLanes: number;
+  searchOldestPairAgeMinutes: number | null;
+  searchNewestPairAgeMinutes: number | null;
+  searchMedianPairAgeMinutes: number | null;
+  searchOldestDataAgeMinutes: number | null;
+  searchNewestDataAgeMinutes: number | null;
+  searchSampleRejectedReasons: DexScreenerRejectedSample[];
   solanaProfilesConsidered: number;
   candidatesAccepted: number;
   freshAcceptedCount: number;
@@ -459,6 +484,37 @@ function dedupeCandidatesByMint(candidates: TokenCandidate[]): { candidates: Tok
   };
 }
 
+function candidateDiscoveryLane(candidate: TokenCandidate): 'search-probe' | 'profile-feed' {
+  return isSearchProbeCandidate(candidate) ? 'search-probe' : 'profile-feed';
+}
+
+function shortenMint(mint: string): string {
+  return mint.length <= 12 ? mint : `${mint.slice(0, 4)}...${mint.slice(-4)}`;
+}
+
+function median(numbers: number[]): number | null {
+  if (numbers.length === 0) return null;
+  const sorted = [...numbers].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) return sorted[middle] ?? null;
+  const left = sorted[middle - 1];
+  const right = sorted[middle];
+  return left != null && right != null ? (left + right) / 2 : null;
+}
+
+function buildRejectedSample(candidate: TokenCandidate, reason: string): DexScreenerRejectedSample {
+  const discovery = (candidate.raw?.discovery as Record<string, unknown> | undefined) ?? {};
+  return {
+    symbol: candidate.symbol,
+    mint: shortenMint(candidate.mint),
+    discoveryLane: candidateDiscoveryLane(candidate),
+    pairAgeMinutes: typeof discovery.pairAgeMinutes === 'number' ? Number(discovery.pairAgeMinutes.toFixed(2)) : null,
+    dataAgeMinutes: typeof discovery.dataAgeMinutes === 'number' ? Number(discovery.dataAgeMinutes.toFixed(2)) : null,
+    movedBeforeDiscoveryPct: candidate.movedBeforeDiscoveryPct != null ? Number(candidate.movedBeforeDiscoveryPct.toFixed(2)) : null,
+    reason
+  };
+}
+
 export class DexScreenerTokenSource implements TokenSource {
   readonly name = 'dexscreener';
 
@@ -533,11 +589,23 @@ export class DexScreenerTokenSource implements TokenSource {
         candidates: [] as TokenCandidate[]
       };
 
+      const searchPairAges = searchProbeResult.candidates
+        .map((candidate) => (candidate.raw?.discovery as Record<string, unknown> | undefined)?.pairAgeMinutes)
+        .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+      const searchDataAges = searchProbeResult.candidates
+        .map((candidate) => (candidate.raw?.discovery as Record<string, unknown> | undefined)?.dataAgeMinutes)
+        .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+
       const { candidates: laneDedupedCandidates, duplicatesRemovedAcrossLanes } = dedupeCandidatesByMint([...profileCandidates, ...searchProbeResult.candidates]);
 
       const accepted: TokenCandidate[] = [];
       let staleRejectedCount = 0;
       let alreadyMovedRejectedCount = 0;
+      let profileRejectedStaleCount = 0;
+      let profileRejectedAlreadyMovedCount = 0;
+      let searchRejectedStaleCount = 0;
+      let searchRejectedAlreadyMovedCount = 0;
+      const searchSampleRejectedReasons: DexScreenerRejectedSample[] = [];
 
       for (const candidate of laneDedupedCandidates) {
         const discovery = (candidate.raw?.discovery as Record<string, unknown> | undefined) ?? {};
@@ -545,13 +613,26 @@ export class DexScreenerTokenSource implements TokenSource {
         const dataAgeMinutes = typeof discovery.dataAgeMinutes === 'number' ? discovery.dataAgeMinutes : null;
         const stalePair = pairAgeMinutes !== null && pairAgeMinutes > this.maxPairAgeMinutes;
         const staleData = dataAgeMinutes !== null && dataAgeMinutes > this.maxDataAgeMinutes;
+        const searchLane = candidateDiscoveryLane(candidate) === 'search-probe';
         if (stalePair || staleData) {
           staleRejectedCount += 1;
+          if (searchLane) {
+            searchRejectedStaleCount += 1;
+            if (searchSampleRejectedReasons.length < 5) searchSampleRejectedReasons.push(buildRejectedSample(candidate, stalePair ? 'pair age stale' : 'data age stale'));
+          } else {
+            profileRejectedStaleCount += 1;
+          }
           continue;
         }
 
         if ((candidate.movedBeforeDiscoveryPct ?? 0) > this.maxMovedBeforeDiscoveryPct) {
           alreadyMovedRejectedCount += 1;
+          if (searchLane) {
+            searchRejectedAlreadyMovedCount += 1;
+            if (searchSampleRejectedReasons.length < 5) searchSampleRejectedReasons.push(buildRejectedSample(candidate, 'moved before discovery'));
+          } else {
+            profileRejectedAlreadyMovedCount += 1;
+          }
           continue;
         }
 
@@ -588,8 +669,23 @@ export class DexScreenerTokenSource implements TokenSource {
         searchSolanaPairsConsidered: searchProbeResult.searchSolanaPairsConsidered,
         searchCandidatesAcceptedBeforeFreshness: searchProbeResult.candidates.length,
         searchCandidatesAccepted: candidates.filter((candidate) => isSearchProbeCandidate(candidate)).length,
+        searchRejectedStaleCount,
+        searchRejectedAlreadyMovedCount,
+        searchRejectedTooOldCount: searchRejectedStaleCount,
+        searchRejectedMissingPairCount: 0,
+        searchRejectedLimitedOutCount: Math.max(0, ranked.filter((candidate) => isSearchProbeCandidate(candidate)).length - candidates.filter((candidate) => isSearchProbeCandidate(candidate)).length),
         profileCandidatesAccepted: profileCandidates.length,
+        profileRejectedStaleCount,
+        profileRejectedAlreadyMovedCount,
+        profileRejectedMissingPairCount: missingPairRejectedCount,
+        profileRejectedLimitedOutCount: Math.max(0, ranked.filter((candidate) => !isSearchProbeCandidate(candidate)).length - candidates.filter((candidate) => !isSearchProbeCandidate(candidate)).length),
         duplicatesRemovedAcrossLanes,
+        searchOldestPairAgeMinutes: searchPairAges.length > 0 ? Math.max(...searchPairAges) : null,
+        searchNewestPairAgeMinutes: searchPairAges.length > 0 ? Math.min(...searchPairAges) : null,
+        searchMedianPairAgeMinutes: searchPairAges.length > 0 ? median(searchPairAges) : null,
+        searchOldestDataAgeMinutes: searchDataAges.length > 0 ? Math.max(...searchDataAges) : null,
+        searchNewestDataAgeMinutes: searchDataAges.length > 0 ? Math.min(...searchDataAges) : null,
+        searchSampleRejectedReasons,
         solanaProfilesConsidered: solanaProfiles.length,
         candidatesAccepted: candidates.length,
         freshAcceptedCount: candidates.length,

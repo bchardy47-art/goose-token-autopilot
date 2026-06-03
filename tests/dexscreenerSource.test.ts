@@ -330,8 +330,106 @@ describe('DexScreener adapter', () => {
       searchQueriesRun: 2,
       searchPairsFetched: 4,
       searchSolanaPairsConsidered: 2,
-      searchCandidatesAcceptedBeforeFreshness: 2
+      searchCandidatesAcceptedBeforeFreshness: 2,
+      searchNewestPairAgeMinutes: expect.any(Number),
+      searchOldestPairAgeMinutes: expect.any(Number),
+      searchMedianPairAgeMinutes: expect.any(Number)
     });
+  });
+
+  it('search stale candidate increments searchRejectedStaleCount and includes sample rejected reason', async () => {
+    const staleSearchToken = 'StaleSearchMint1111111111111111111111111111111';
+    const now = Date.now();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/token-profiles/latest/v1')) return makeJsonResponse([]);
+      if (url.includes('/token-profiles/recent-updates/v1')) return makeJsonResponse([]);
+      if (url.includes('/latest/dex/search')) {
+        return makeJsonResponse({
+          schemaVersion: '1.0.0',
+          pairs: [makeDexPair(staleSearchToken, { pairAddress: 'StaleSearchPair111', pairCreatedAt: now - 8 * 60 * 60 * 1000, liquidity: { usd: 90000 } })]
+        });
+      }
+      return makeJsonResponse({}, { status: 404 });
+    });
+
+    const source = new DexScreenerTokenSource({
+      fetchImpl,
+      includeRecentUpdates: false,
+      includeSearchProbes: true,
+      searchProbes: ['pump'],
+      searchLimitPerQuery: 10,
+      searchMaxTotal: 10,
+      maxTokens: 10,
+      batchSize: 10,
+      maxPairAgeMinutes: 180,
+      maxDataAgeMinutes: 60
+    });
+
+    const candidates = await source.fetchCandidates();
+    const summary = source.getLastFetchSummary() as any;
+    expect(candidates).toHaveLength(0);
+    expect(summary.searchRejectedStaleCount).toBe(1);
+    expect(summary.searchSampleRejectedReasons[0]).toMatchObject({ discoveryLane: 'search-probe', reason: 'pair age stale' });
+    expect(JSON.stringify(summary.searchSampleRejectedReasons[0])).not.toMatch(/rawJson/);
+  });
+
+  it('search already-moved candidate increments searchRejectedAlreadyMovedCount', async () => {
+    const movedSearchToken = 'MovedSearchMint1111111111111111111111111111111';
+    const now = Date.now();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/token-profiles/latest/v1')) return makeJsonResponse([]);
+      if (url.includes('/token-profiles/recent-updates/v1')) return makeJsonResponse([]);
+      if (url.includes('/latest/dex/search')) {
+        return makeJsonResponse({
+          schemaVersion: '1.0.0',
+          pairs: [makeDexPair(movedSearchToken, { pairAddress: 'MovedSearchPair111', pairCreatedAt: now - 10 * 60 * 1000, liquidity: { usd: 90000 }, priceChange: { m5: 50, h1: 170, h24: 220 } })]
+        });
+      }
+      return makeJsonResponse({}, { status: 404 });
+    });
+
+    const source = new DexScreenerTokenSource({
+      fetchImpl,
+      includeRecentUpdates: false,
+      includeSearchProbes: true,
+      searchProbes: ['pump'],
+      searchLimitPerQuery: 10,
+      searchMaxTotal: 10,
+      maxTokens: 10,
+      batchSize: 10,
+      maxPairAgeMinutes: 180,
+      maxDataAgeMinutes: 60,
+      maxMovedBeforeDiscoveryPct: 150
+    });
+
+    await source.fetchCandidates();
+    expect(source.getLastFetchSummary()).toMatchObject({ searchRejectedAlreadyMovedCount: 1 });
+  });
+
+  it('profile stale candidate increments profileRejectedStaleCount', async () => {
+    const staleProfileToken = 'StaleProfileMint111111111111111111111111111111';
+    const now = Date.now();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/token-profiles/latest/v1')) {
+        return makeJsonResponse([makeDexProfile(staleProfileToken, new Date(now - 120 * 60 * 1000).toISOString(), 'stale-profile')]);
+      }
+      if (url.includes('/token-profiles/recent-updates/v1')) return makeJsonResponse([]);
+      if (url.includes('/latest/dex/search')) return makeJsonResponse({ schemaVersion: '1.0.0', pairs: [] });
+      if (url.includes('/latest/dex/tokens/')) {
+        return makeJsonResponse({
+          pairs: [makeDexPair(staleProfileToken, { pairAddress: 'StaleProfilePair111', pairCreatedAt: now - 10 * 60 * 1000, liquidity: { usd: 70000 } })]
+        });
+      }
+      return makeJsonResponse({}, { status: 404 });
+    });
+
+    const source = new DexScreenerTokenSource({ fetchImpl, includeSearchProbes: false, maxTokens: 10, batchSize: 10, maxPairAgeMinutes: 180, maxDataAgeMinutes: 60 });
+    const candidates = await source.fetchCandidates();
+    expect(candidates).toHaveLength(0);
+    expect(source.getLastFetchSummary()).toMatchObject({ profileRejectedStaleCount: 1 });
   });
 
   it('duplicate profile/search token dedupes to preferred fresher and more liquid candidate', async () => {
@@ -373,6 +471,42 @@ describe('DexScreener adapter', () => {
     expect(candidates[0]?.raw.discoveryLane).toBe('search-probe');
     expect(candidates[0]?.liquidityUsd).toBe(80000);
     expect(source.getLastFetchSummary()).toMatchObject({ duplicatesRemovedAcrossLanes: 1, searchCandidatesAccepted: 1, profileCandidatesAccepted: 1 });
+  });
+
+  it('accepted search candidate increments searchCandidatesAccepted', async () => {
+    const acceptedSearchToken = 'AcceptedSearchMint11111111111111111111111111111';
+    const now = Date.now();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/token-profiles/latest/v1')) return makeJsonResponse([]);
+      if (url.includes('/token-profiles/recent-updates/v1')) return makeJsonResponse([]);
+      if (url.includes('/latest/dex/search')) {
+        return makeJsonResponse({
+          schemaVersion: '1.0.0',
+          pairs: [makeDexPair(acceptedSearchToken, { pairAddress: 'AcceptedSearchPair111', pairCreatedAt: now - 5 * 60 * 1000, liquidity: { usd: 120000 }, priceChange: { m5: 4, h1: 10, h24: 12 } })]
+        });
+      }
+      return makeJsonResponse({}, { status: 404 });
+    });
+
+    const source = new DexScreenerTokenSource({
+      fetchImpl,
+      includeRecentUpdates: false,
+      includeSearchProbes: true,
+      searchProbes: ['SOL'],
+      searchLimitPerQuery: 10,
+      searchMaxTotal: 10,
+      maxTokens: 10,
+      batchSize: 10,
+      maxPairAgeMinutes: 180,
+      maxDataAgeMinutes: 60,
+      maxMovedBeforeDiscoveryPct: 150,
+      freshDiscoveryLimit: 10
+    });
+
+    const candidates = await source.fetchCandidates();
+    expect(candidates.some((candidate) => candidate.mint === acceptedSearchToken)).toBe(true);
+    expect(source.getLastFetchSummary()).toMatchObject({ searchCandidatesAcceptedBeforeFreshness: 1, searchCandidatesAccepted: 1 });
   });
 
   it('runScan inserts fresh valid DexScreener candidates and includes source summary with recent updates counters', async () => {
