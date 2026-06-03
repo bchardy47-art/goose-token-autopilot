@@ -6,7 +6,7 @@ import { applyLatestQuoteResultToSnapshot, buildPaperEligibilityDiagnostics, isP
 import { paperBuy } from '../src/trading/paper';
 import { runPaperReview, runPaperReviewLoop } from '../src/paper/review';
 import { buildPaperPerformanceReport } from '../src/paper/performance';
-import { buildDailyReport, renderPaperDashboard } from '../src/paper/dailyReport';
+import { buildDailyReport, renderPaperAutopsy, renderPaperDashboard } from '../src/paper/dailyReport';
 import { verifySafety } from '../src/verifySafety';
 import * as scanner from '../src/scanner';
 
@@ -564,6 +564,30 @@ describe('live paper loop', () => {
     expect(dashboard).toContain('Summary');
     expect(dashboard).toContain('Real trading remains locked.');
     expect(dashboard).toContain('Paper only.');
+    expect(db.getOpenPositionCount('PAPER')).toBeGreaterThanOrEqual(0);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
+    db.close();
+  });
+
+  it('paper-autopsy renders closed winners and losers with score/snapshot fields, summary counts, and safety footer', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    db.createQuoteSellabilityCheck(safe.id, 'SAFE11111111111111111111111111111111111111111', new Date().toISOString(), 'jupiter', 'SAFE11111111111111111111111111111111111111111', 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
+    await runAutoPaper(db, config);
+    const open = db.listPositions('PAPER').find((position) => position.status === 'OPEN')!;
+    const snap = db.getLatestSnapshot(open.tokenId)!;
+    snap.priceUsd = open.entryPriceUsd * 1.6;
+    db.insertSnapshot(open.tokenId, snap);
+    await runPaperReview(db, config);
+    const autopsy = renderPaperAutopsy(db, config);
+    expect(autopsy).toContain('Paper Trade Autopsy');
+    expect(autopsy).toContain('Summary');
+    expect(autopsy).toContain('winners count');
+    expect(autopsy).toContain('losers count');
+    expect(autopsy).toContain('score total=');
+    expect(autopsy).toContain('snapshot liq=');
+    expect(autopsy).toContain('Real trading remains locked. Paper only.');
     expect(db.getOpenPositionCount('PAPER')).toBeGreaterThanOrEqual(0);
     expect(db.getBlockedRealTradeAttempts()).toBe(0);
     db.close();

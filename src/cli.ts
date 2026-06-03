@@ -11,7 +11,7 @@ import { runAutopilot } from './autopilot/runAutopilot';
 import { buildPaperEligibilityDiagnostics, runAutoPaper } from './paper/autoPaper';
 import { runPaperReview, runPaperReviewLoop, type PaperReviewLoopCycleSummary } from './paper/review';
 import { buildPaperPerformanceReport } from './paper/performance';
-import { buildDailyReport, renderPaperDashboard } from './paper/dailyReport';
+import { buildDailyReport, renderPaperAutopsy, renderPaperDashboard } from './paper/dailyReport';
 import { buildWatchOnlyReport, runWatchOnly } from './watchOnly';
 import { runWatchOutcomes } from './watchOutcomes';
 import { runWatchAnalysis } from './watchAnalysis';
@@ -109,6 +109,9 @@ async function main(): Promise<void> {
         break;
       case 'token:paper-dashboard':
         console.log(renderPaperDashboard(db, config));
+        break;
+      case 'token:paper-autopsy':
+        console.log(renderPaperAutopsy(db, config));
         break;
       case 'token:daily-report':
         console.log(JSON.stringify(buildDailyReport(db, config), null, 2));

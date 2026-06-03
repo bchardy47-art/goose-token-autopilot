@@ -65,6 +65,41 @@ export function renderPaperDashboard(db: AppDb, _config: AppConfig): string {
   return lines.join('\n');
 }
 
+export function renderPaperAutopsy(db: AppDb, _config: AppConfig): string {
+  const closedPositions = db.listPositions('PAPER').filter((position) => position.status === 'CLOSED');
+  const winners = closedPositions.filter((position) => (position.realizedPnlUsd ?? 0) > 0);
+  const losers = closedPositions.filter((position) => (position.realizedPnlUsd ?? 0) < 0);
+  const avgWinnerPct = winners.length > 0 ? winners.reduce((sum, position) => sum + (position.realizedPnlPct ?? 0), 0) / winners.length : 0;
+  const avgLoserPct = losers.length > 0 ? losers.reduce((sum, position) => sum + (position.realizedPnlPct ?? 0), 0) / losers.length : 0;
+  const bestWinner = [...winners].sort((a, b) => (b.realizedPnlUsd ?? 0) - (a.realizedPnlUsd ?? 0))[0] ?? null;
+  const worstLoser = [...losers].sort((a, b) => (a.realizedPnlUsd ?? 0) - (b.realizedPnlUsd ?? 0))[0] ?? null;
+  const loserRedFlags = losers.flatMap((position) => db.getLatestScore(position.tokenId)?.redFlags ?? []);
+  const lines: string[] = [];
+
+  lines.push('Paper Trade Autopsy');
+  lines.push('');
+  for (const position of closedPositions) {
+    const score = db.getLatestScore(position.tokenId);
+    const snapshot = db.getLatestSnapshot(position.tokenId);
+    lines.push(`- ${position.symbol} pnl=${fmtPct(position.realizedPnlPct)} usd=${fmtMoney(position.realizedPnlUsd)} entry=${position.openedAt} exit=${position.closedAt ?? '-'} reason=${position.notes ?? 'unknown'} best=${fmtPct(position.bestGainPct)} worst=${fmtPct(position.worstDrawdownPct)} entryPx=${fmtMoney(position.entryPriceUsd)} exitPx=${fmtMoney(position.exitPriceUsd)}`);
+    lines.push(`  score total=${score?.totalScore ?? '-'} safety=${score?.safetyScore ?? '-'} momentum=${score?.momentumScore ?? '-'} verdict=${score?.verdict ?? '-'} redFlags=${(score?.redFlags ?? []).join(', ') || '-'}`);
+    lines.push(`  snapshot liq=${fmtMoney(snapshot?.liquidityUsd)} sellQuote=${snapshot?.sellQuoteAvailable ?? '-'} slip=${snapshot?.estimatedSlippageBps ?? '-'} holder=${snapshot?.holderConcentration ?? '-'} mintAuth=${snapshot?.mintAuthority ?? '-'} freezeAuth=${snapshot?.freezeAuthority ?? '-'}`);
+  }
+  if (closedPositions.length === 0) lines.push('- none');
+  lines.push('');
+  lines.push('Summary');
+  lines.push(`- winners count: ${winners.length}`);
+  lines.push(`- losers count: ${losers.length}`);
+  lines.push(`- average winner %: ${fmtPct(avgWinnerPct)}`);
+  lines.push(`- average loser %: ${fmtPct(avgLoserPct)}`);
+  lines.push(`- best winner: ${bestWinner ? `${bestWinner.symbol} ${fmtPct(bestWinner.realizedPnlPct)} ${fmtMoney(bestWinner.realizedPnlUsd)}` : 'none'}`);
+  lines.push(`- worst loser: ${worstLoser ? `${worstLoser.symbol} ${fmtPct(worstLoser.realizedPnlPct)} ${fmtMoney(worstLoser.realizedPnlUsd)}` : 'none'}`);
+  lines.push(`- common loser red flags: ${topItems(loserRedFlags).map((item) => `${item.value} (${item.count})`).join(', ') || 'none'}`);
+  lines.push('');
+  lines.push('Real trading remains locked. Paper only.');
+  return lines.join('\n');
+}
+
 export function buildDailyReport(db: AppDb, _config: AppConfig): Record<string, unknown> {
   const today = new Date().toISOString().slice(0, 10);
   const scanLogs = db.listRunLogs('token:scan', today);

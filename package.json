@@ -17,6 +17,7 @@
     "token:paper-review-loop": "tsx src/cli.ts token:paper-review-loop",
     "token:paper-performance": "tsx src/cli.ts token:paper-performance",
     "token:paper-dashboard": "tsx src/cli.ts token:paper-dashboard",
+    "token:paper-autopsy": "tsx src/cli.ts token:paper-autopsy",
     "token:daily-report": "tsx src/cli.ts token:daily-report",
     "token:watch-only": "tsx src/cli.ts token:watch-only",
     "token:watch-report": "tsx src/cli.ts token:watch-report",
