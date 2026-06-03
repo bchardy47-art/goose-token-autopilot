@@ -222,6 +222,13 @@ export interface PaperEligibilityDiagnosticRow {
   verdict: Verdict | null;
   blockers: string[];
   distanceToPaperScore: number | null;
+  dataAgeMinutes: number | null;
+  isEntryStale: boolean;
+  movedBeforeDiscoveryPct: number | null;
+  isMovedBeforeDiscoveryBlocked: boolean;
+  blockerCount: number;
+  warningCount: number;
+  usefulRankReason: string;
 }
 
 export interface PaperReviewDecision {
