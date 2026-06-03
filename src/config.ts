@@ -44,6 +44,11 @@ const DEFAULTS = {
   DEXSCREENER_SEARCH_PROBES: 'solana,pump,pumpswap,raydium,SOL',
   DEXSCREENER_SEARCH_LIMIT_PER_QUERY: 10,
   DEXSCREENER_SEARCH_MAX_TOTAL: 30,
+  GECKOTERMINAL_NEW_POOLS_URL: 'https://api.geckoterminal.com/api/v2/networks/solana/new_pools',
+  GECKOTERMINAL_MAX_POOL_AGE_MINUTES: 60,
+  GECKOTERMINAL_MAX_DATA_AGE_MINUTES: 30,
+  GECKOTERMINAL_MIN_RESERVE_USD: 20000,
+  GECKOTERMINAL_LIMIT: 20,
   DEXSCREENER_MAX_PAIR_AGE_MINUTES: 180,
   DEXSCREENER_MAX_DATA_AGE_MINUTES: 60,
   DEXSCREENER_MAX_MOVED_BEFORE_DISCOVERY_PCT: 150,
@@ -90,8 +95,8 @@ function parseNumber(name: string, raw: string | undefined, fallback: number, op
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const tokenSource = (env.TOKEN_SOURCE ?? DEFAULTS.TOKEN_SOURCE) as TokenSourceName;
-  if (!['fixture', 'dexscreener'].includes(tokenSource)) {
-    throw new Error('TOKEN_SOURCE must be fixture or dexscreener');
+  if (!['fixture', 'dexscreener', 'geckoterminal'].includes(tokenSource)) {
+    throw new Error('TOKEN_SOURCE must be fixture, dexscreener, or geckoterminal');
   }
 
   const config: AppConfig = {
@@ -133,6 +138,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     dexScreenerSearchProbes: (env.DEXSCREENER_SEARCH_PROBES ?? DEFAULTS.DEXSCREENER_SEARCH_PROBES).split(',').map((value) => value.trim()).filter(Boolean),
     dexScreenerSearchLimitPerQuery: parseNumber('DEXSCREENER_SEARCH_LIMIT_PER_QUERY', env.DEXSCREENER_SEARCH_LIMIT_PER_QUERY, DEFAULTS.DEXSCREENER_SEARCH_LIMIT_PER_QUERY, { integer: true, min: 1 }),
     dexScreenerSearchMaxTotal: parseNumber('DEXSCREENER_SEARCH_MAX_TOTAL', env.DEXSCREENER_SEARCH_MAX_TOTAL, DEFAULTS.DEXSCREENER_SEARCH_MAX_TOTAL, { integer: true, min: 1 }),
+    geckoTerminalNewPoolsUrl: env.GECKOTERMINAL_NEW_POOLS_URL ?? DEFAULTS.GECKOTERMINAL_NEW_POOLS_URL,
+    geckoTerminalMaxPoolAgeMinutes: parseNumber('GECKOTERMINAL_MAX_POOL_AGE_MINUTES', env.GECKOTERMINAL_MAX_POOL_AGE_MINUTES, DEFAULTS.GECKOTERMINAL_MAX_POOL_AGE_MINUTES, { integer: true, min: 1 }),
+    geckoTerminalMaxDataAgeMinutes: parseNumber('GECKOTERMINAL_MAX_DATA_AGE_MINUTES', env.GECKOTERMINAL_MAX_DATA_AGE_MINUTES, DEFAULTS.GECKOTERMINAL_MAX_DATA_AGE_MINUTES, { integer: true, min: 1 }),
+    geckoTerminalMinReserveUsd: parseNumber('GECKOTERMINAL_MIN_RESERVE_USD', env.GECKOTERMINAL_MIN_RESERVE_USD, parseNumber('MIN_LIQUIDITY_USD', env.MIN_LIQUIDITY_USD, DEFAULTS.MIN_LIQUIDITY_USD, { min: 0 }), { min: 0 }),
+    geckoTerminalLimit: parseNumber('GECKOTERMINAL_LIMIT', env.GECKOTERMINAL_LIMIT, DEFAULTS.GECKOTERMINAL_LIMIT, { integer: true, min: 1 }),
     dexScreenerMaxPairAgeMinutes: parseNumber('DEXSCREENER_MAX_PAIR_AGE_MINUTES', env.DEXSCREENER_MAX_PAIR_AGE_MINUTES, DEFAULTS.DEXSCREENER_MAX_PAIR_AGE_MINUTES, { integer: true, min: 1 }),
     dexScreenerMaxDataAgeMinutes: parseNumber('DEXSCREENER_MAX_DATA_AGE_MINUTES', env.DEXSCREENER_MAX_DATA_AGE_MINUTES, DEFAULTS.DEXSCREENER_MAX_DATA_AGE_MINUTES, { integer: true, min: 1 }),
     dexScreenerMaxMovedBeforeDiscoveryPct: parseNumber(
@@ -211,6 +221,11 @@ export function getConfigSafetyStatus(config: AppConfig): Record<string, unknown
     dexScreenerSearchProbes: config.dexScreenerSearchProbes,
     dexScreenerSearchLimitPerQuery: config.dexScreenerSearchLimitPerQuery,
     dexScreenerSearchMaxTotal: config.dexScreenerSearchMaxTotal,
+    geckoTerminalNewPoolsUrl: config.geckoTerminalNewPoolsUrl,
+    geckoTerminalMaxPoolAgeMinutes: config.geckoTerminalMaxPoolAgeMinutes,
+    geckoTerminalMaxDataAgeMinutes: config.geckoTerminalMaxDataAgeMinutes,
+    geckoTerminalMinReserveUsd: config.geckoTerminalMinReserveUsd,
+    geckoTerminalLimit: config.geckoTerminalLimit,
     dexScreenerMaxPairAgeMinutes: config.dexScreenerMaxPairAgeMinutes,
     dexScreenerMaxDataAgeMinutes: config.dexScreenerMaxDataAgeMinutes,
     dexScreenerMaxMovedBeforeDiscoveryPct: config.dexScreenerMaxMovedBeforeDiscoveryPct,

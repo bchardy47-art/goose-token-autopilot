@@ -4,10 +4,13 @@ import type { AppConfig, TokenCandidate } from '../types';
 import { enrichCandidate } from '../enrichment/enrichCandidate';
 import { DexScreenerTokenSource, createDexScreenerSourceFromConfig } from './dexscreenerSource';
 import { FixtureTokenSource } from './fixtureSource';
+import { GeckoTerminalTokenSource, createGeckoTerminalSourceFromConfig } from './geckoTerminalSource';
 import type { TokenSource } from './source';
 
 export function createTokenSource(config: AppConfig): TokenSource {
-  return config.tokenSource === 'dexscreener' ? createDexScreenerSourceFromConfig(config) : new FixtureTokenSource();
+  if (config.tokenSource === 'dexscreener') return createDexScreenerSourceFromConfig(config);
+  if (config.tokenSource === 'geckoterminal') return createGeckoTerminalSourceFromConfig(config);
+  return new FixtureTokenSource();
 }
 
 async function persistCandidates(db: AppDb, config: AppConfig, candidates: TokenCandidate[]): Promise<number[]> {
@@ -39,7 +42,7 @@ export async function runScan(db: AppDb, config: AppConfig, logger = new AppLogg
     const source = createTokenSource(config);
     const candidates = await source.fetchCandidates();
     const tokenIds = await persistCandidates(db, config, candidates);
-    const sourceSummary = source instanceof DexScreenerTokenSource ? source.getLastFetchSummary() : null;
+    const sourceSummary = source instanceof DexScreenerTokenSource || source instanceof GeckoTerminalTokenSource ? source.getLastFetchSummary() : null;
 
     const summary = { scanned: candidates.length, source: source.name, tokenIds, sourceSummary };
     db.finishRunLog(runLogId, 'SUCCESS', summary);
