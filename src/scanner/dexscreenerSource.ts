@@ -61,6 +61,7 @@ interface DexScreenerTokenResponse {
 }
 
 interface DexScreenerSearchResponse {
+  schemaVersion?: string;
   pairs?: DexScreenerPair[];
 }
 
@@ -431,6 +432,7 @@ function normalizeDexScreenerSearchPair(pair: DexScreenerPair, query: string, ob
       pairCount: 1,
       selectedPair: summarizeSelectedPair(pair, discovery),
       discovery: {
+        discoveryLane: 'search-probe',
         profileUpdatedAt: null,
         pairCreatedAt: discovery.pairCreatedAt,
         pairAgeMinutes: discovery.pairAgeMinutes,

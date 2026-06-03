@@ -293,6 +293,7 @@ describe('DexScreener adapter', () => {
       if (url.includes('/token-profiles/recent-updates/v1')) return makeJsonResponse([]);
       if (url.includes('/latest/dex/search')) {
         return makeJsonResponse({
+          schemaVersion: '1.0.0',
           pairs: [
             makeDexPair(searchToken, { pairAddress: 'SearchPair111', pairCreatedAt: now - 9 * 60 * 1000, priceChange: { m5: 6, h1: 9, h24: 15 }, liquidity: { usd: 60000 } }),
             makeDexPair('EthMint111111111111111111111111111111111111111', { chainId: 'ethereum', pairAddress: 'EthPair111' })
@@ -317,9 +318,12 @@ describe('DexScreener adapter', () => {
     const searchCandidate = candidates.find((candidate) => candidate.mint === searchToken);
 
     expect(fetchImpl.mock.calls.filter(([input]) => String(input).includes('/latest/dex/search')).length).toBe(2);
+    expect(fetchImpl.mock.calls.some(([input]) => String(input).includes('/latest/dex/search?q=solana'))).toBe(true);
+    expect(fetchImpl.mock.calls.some(([input]) => String(input).includes('/latest/dex/search?q=pump'))).toBe(true);
     expect(searchCandidate).toBeTruthy();
     expect(searchCandidate?.liquidityUsd).toBe(60000);
     expect(searchCandidate?.raw.discoveryLane).toBe('search-probe');
+    expect((searchCandidate?.raw.discovery as Record<string, unknown> | undefined)?.discoveryLane).toBe('search-probe');
     expect(candidates.every((candidate) => candidate.chain === 'solana')).toBe(true);
     expect(source.getLastFetchSummary()).toMatchObject({
       searchProbesEnabled: true,
@@ -341,6 +345,7 @@ describe('DexScreener adapter', () => {
       if (url.includes('/token-profiles/recent-updates/v1')) return makeJsonResponse([]);
       if (url.includes('/latest/dex/search')) {
         return makeJsonResponse({
+          schemaVersion: '1.0.0',
           pairs: [makeDexPair(sharedToken, { pairAddress: 'LaneSearchPair111', pairCreatedAt: now - 5 * 60 * 1000, liquidity: { usd: 80000 }, priceChange: { m5: 5, h1: 9, h24: 14 } })]
         });
       }
@@ -451,6 +456,9 @@ describe('DexScreener adapter', () => {
       if (url.includes('/token-profiles/recent-updates/v1')) {
         return makeJsonResponse([]);
       }
+      if (url.includes('/latest/dex/search')) {
+        return makeJsonResponse({ schemaVersion: '1.0.0', pairs: [] });
+      }
       if (url.includes('/latest/dex/tokens/')) {
         return makeJsonResponse({
           pairs: [
@@ -506,6 +514,9 @@ describe('DexScreener adapter', () => {
       }
       if (url.includes('/token-profiles/recent-updates/v1')) {
         return makeJsonResponse([]);
+      }
+      if (url.includes('/latest/dex/search')) {
+        return makeJsonResponse({ schemaVersion: '1.0.0', pairs: [] });
       }
       if (url.includes('/latest/dex/tokens/')) {
         return makeJsonResponse({
