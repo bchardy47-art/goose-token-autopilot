@@ -4,7 +4,7 @@ import { createDb } from '../src/db';
 import { makeTestConfig } from './helpers';
 import { normalizeDexScreenerCandidate } from '../src/scanner/dexscreenerSource';
 import { classifyWatchOnlyCandidate, runWatchAnalysis, summarizeWatchOnlySignalAnalysis } from '../src/watchAnalysis';
-import { buildWatchOnlyReport, classifyWatchRunnerProfile, renderWatchAutopsy } from '../src/watchOnly';
+import { buildWatchOnlyReport, classifyWatchPriority, classifyWatchRunnerProfile, renderWatchAutopsy } from '../src/watchOnly';
 import { buildDailyReport } from '../src/paper/dailyReport';
 import { verifySafety } from '../src/verifySafety';
 
@@ -49,6 +49,60 @@ function makeLiveCandidate(overrides: Record<string, unknown> = {}) {
 }
 
 describe('watch-only signal analysis', () => {
+  it('classifier assigns HIGH_WATCH_PRIORITY for strong RUNNER_PROFILE with good liquidity/volume and low drawdown', () => {
+    expect(classifyWatchPriority({
+      profile: 'RUNNER_PROFILE',
+      liquidityUsd: 15000,
+      volume1hUsd: 150000,
+      momentumScore: 22,
+      worstDrawdownPct: -5,
+      priceChange5mPct: 5,
+      priceChange1hPct: 20
+    })).toBe('HIGH_WATCH_PRIORITY');
+  });
+
+  it('classifier assigns MEDIUM_WATCH_PRIORITY for near-runner/unknown strong setup', () => {
+    expect(classifyWatchPriority({
+      profile: 'RUNNER_PROFILE',
+      liquidityUsd: 11000,
+      volume1hUsd: 90000,
+      momentumScore: 19,
+      worstDrawdownPct: -12,
+      priceChange5mPct: 4,
+      priceChange1hPct: 18
+    })).toBe('MEDIUM_WATCH_PRIORITY');
+    expect(classifyWatchPriority({
+      profile: 'UNKNOWN_PROFILE',
+      liquidityUsd: 13000,
+      volume1hUsd: 80000,
+      momentumScore: 18,
+      worstDrawdownPct: -8,
+      priceChange5mPct: 3,
+      priceChange1hPct: 12
+    })).toBe('MEDIUM_WATCH_PRIORITY');
+  });
+
+  it('classifier assigns LOW_WATCH_PRIORITY for noise/weak setup and AVOID_WATCH_PRIORITY for dump or severe drawdown', () => {
+    expect(classifyWatchPriority({
+      profile: 'NOISE_PROFILE',
+      liquidityUsd: 7000,
+      volume1hUsd: 30000,
+      momentumScore: 8,
+      worstDrawdownPct: -6,
+      priceChange5mPct: 1,
+      priceChange1hPct: 3
+    })).toBe('LOW_WATCH_PRIORITY');
+    expect(classifyWatchPriority({
+      profile: 'DUMP_PROFILE',
+      liquidityUsd: 15000,
+      volume1hUsd: 120000,
+      momentumScore: 10,
+      worstDrawdownPct: -40,
+      priceChange5mPct: -30,
+      priceChange1hPct: -55
+    })).toBe('AVOID_WATCH_PRIORITY');
+  });
+
   it('classifier assigns RUNNER_PROFILE for high momentum/high volume/high liquidity', () => {
     expect(classifyWatchRunnerProfile({
       momentumScore: 20,
@@ -239,7 +293,7 @@ describe('watch-only signal analysis', () => {
     db.close();
   });
 
-  it('watch-report includes signal class summary and profile counts', async () => {
+  it('watch-report includes signal class summary, profile counts, and priority counts', async () => {
     const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener' });
     cleanup.push(dir);
     const db = createDb(config);
@@ -251,6 +305,8 @@ describe('watch-only signal analysis', () => {
     expect(report).toHaveProperty('watchOnlySignalClassCounts');
     expect(report).toHaveProperty('watchRunnerProfileCounts');
     expect(report).toHaveProperty('watchRunnerProfileSummary');
+    expect(report).toHaveProperty('watchPriorityCounts');
+    expect(report).toHaveProperty('watchPrioritySummary');
     expect(report).toHaveProperty('analysisSummaryLine', 'Watch-only analysis is research only.');
     db.close();
   });
@@ -282,6 +338,8 @@ describe('watch-only signal analysis', () => {
     expect(autopsy).toContain('Runner vs Dump Comparison');
     expect(autopsy).toContain('RUNNER_PROFILE');
     expect(autopsy).toContain('DUMP_PROFILE');
+    expect(autopsy).toContain('HIGH_WATCH_PRIORITY');
+    expect(autopsy).toContain('AVOID_WATCH_PRIORITY');
     expect(autopsy).toContain('common red flags among runners');
     expect(autopsy).toContain('common red flags among dumps');
     expect(autopsy).toContain('Watch-only analysis is research only.');

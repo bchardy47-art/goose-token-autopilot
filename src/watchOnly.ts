@@ -87,6 +87,7 @@ export async function runWatchOnly(db: AppDb, config: AppConfig, logger = new Ap
 }
 
 export type WatchRunnerProfile = 'RUNNER_PROFILE' | 'DUMP_PROFILE' | 'NOISE_PROFILE' | 'UNKNOWN_PROFILE';
+export type WatchPriority = 'HIGH_WATCH_PRIORITY' | 'MEDIUM_WATCH_PRIORITY' | 'LOW_WATCH_PRIORITY' | 'AVOID_WATCH_PRIORITY';
 
 function fmtPct(value: number | null | undefined): string {
   return value === null || value === undefined ? '-' : `${value.toFixed(2)}%`;
@@ -144,6 +145,43 @@ export function classifyWatchRunnerProfile(input: {
   return 'UNKNOWN_PROFILE';
 }
 
+export function classifyWatchPriority(input: {
+  profile: WatchRunnerProfile;
+  liquidityUsd: number | null;
+  volume1hUsd: number | null;
+  momentumScore: number | null;
+  worstDrawdownPct: number | null;
+  priceChange5mPct: number | null;
+  priceChange1hPct: number | null;
+}): WatchPriority {
+  if (
+    input.profile === 'DUMP_PROFILE' ||
+    (input.worstDrawdownPct ?? 0) <= -35 ||
+    (input.priceChange5mPct ?? 0) <= -25 ||
+    (input.priceChange1hPct ?? 0) <= -50
+  ) {
+    return 'AVOID_WATCH_PRIORITY';
+  }
+  if (
+    input.profile === 'RUNNER_PROFILE' &&
+    (input.liquidityUsd ?? 0) >= 12000 &&
+    (input.volume1hUsd ?? 0) >= 100000 &&
+    ((input.worstDrawdownPct ?? 0) > -10)
+  ) {
+    return 'HIGH_WATCH_PRIORITY';
+  }
+  if (
+    (input.profile === 'RUNNER_PROFILE') ||
+    (input.profile === 'UNKNOWN_PROFILE' && (input.momentumScore ?? -Infinity) >= 18 && (input.liquidityUsd ?? 0) >= 12000)
+  ) {
+    return 'MEDIUM_WATCH_PRIORITY';
+  }
+  if (input.profile === 'NOISE_PROFILE' || (input.volume1hUsd ?? 0) < 50000 || (input.liquidityUsd ?? 0) < 8000) {
+    return 'LOW_WATCH_PRIORITY';
+  }
+  return 'LOW_WATCH_PRIORITY';
+}
+
 export function renderWatchAutopsy(db: AppDb, config: AppConfig): string {
   const candidates = db.listWatchOnlyCandidates();
   const analyses = db.listWatchOnlySignalAnalyses();
@@ -168,11 +206,21 @@ export function renderWatchAutopsy(db: AppDb, config: AppConfig): string {
       holderConcentration: snapshot?.holderConcentration ?? null,
       priceUsd: snapshot?.priceUsd ?? candidate.latestPriceUsd ?? null
     });
+    const priority = classifyWatchPriority({
+      profile,
+      liquidityUsd: candidate.liquidityUsd ?? snapshot?.liquidityUsd ?? null,
+      volume1hUsd: candidate.volume1hUsd ?? snapshot?.volume1hUsd ?? null,
+      momentumScore: score?.momentumScore ?? null,
+      worstDrawdownPct: candidate.worstDrawdownPct,
+      priceChange5mPct: snapshot?.priceChange5mPct ?? null,
+      priceChange1hPct: snapshot?.priceChange1hPct ?? null
+    });
     return {
       symbol: state?.symbol ?? JSON.parse(candidate.rawJson || '{}')?.snapshot?.symbol ?? `T${candidate.tokenId}`,
       tokenId: candidate.tokenId,
       signalClass,
       profile,
+      priority,
       bestGainPct: candidate.bestGainPct,
       worstDrawdownPct: candidate.worstDrawdownPct,
       entryPriceUsd: candidate.entryPriceUsd,
@@ -205,6 +253,12 @@ export function renderWatchAutopsy(db: AppDb, config: AppConfig): string {
     NOISE_PROFILE: rows.filter((row) => row.profile === 'NOISE_PROFILE'),
     UNKNOWN_PROFILE: rows.filter((row) => row.profile === 'UNKNOWN_PROFILE')
   };
+  const priorityGroups = {
+    HIGH_WATCH_PRIORITY: rows.filter((row) => row.priority === 'HIGH_WATCH_PRIORITY'),
+    MEDIUM_WATCH_PRIORITY: rows.filter((row) => row.priority === 'MEDIUM_WATCH_PRIORITY'),
+    LOW_WATCH_PRIORITY: rows.filter((row) => row.priority === 'LOW_WATCH_PRIORITY'),
+    AVOID_WATCH_PRIORITY: rows.filter((row) => row.priority === 'AVOID_WATCH_PRIORITY')
+  };
   const topRunners = [...rows].sort((a, b) => (b.bestGainPct ?? Number.NEGATIVE_INFINITY) - (a.bestGainPct ?? Number.NEGATIVE_INFINITY)).slice(0, 10);
   const topDumps = [...rows].sort((a, b) => (a.worstDrawdownPct ?? Number.POSITIVE_INFINITY) - (b.worstDrawdownPct ?? Number.POSITIVE_INFINITY)).slice(0, 10);
   const runnerFlags = runners.flatMap((row) => row.redFlags);
@@ -236,6 +290,10 @@ export function renderWatchAutopsy(db: AppDb, config: AppConfig): string {
   lines.push(`- DUMP_PROFILE: ${profileGroups.DUMP_PROFILE.length}`);
   lines.push(`- NOISE_PROFILE: ${profileGroups.NOISE_PROFILE.length}`);
   lines.push(`- UNKNOWN_PROFILE: ${profileGroups.UNKNOWN_PROFILE.length}`);
+  lines.push(`- HIGH_WATCH_PRIORITY: ${priorityGroups.HIGH_WATCH_PRIORITY.length}`);
+  lines.push(`- MEDIUM_WATCH_PRIORITY: ${priorityGroups.MEDIUM_WATCH_PRIORITY.length}`);
+  lines.push(`- LOW_WATCH_PRIORITY: ${priorityGroups.LOW_WATCH_PRIORITY.length}`);
+  lines.push(`- AVOID_WATCH_PRIORITY: ${priorityGroups.AVOID_WATCH_PRIORITY.length}`);
   if (outcomeSummary.averageReturnByWindow) lines.push(`- average return by window: ${JSON.stringify(outcomeSummary.averageReturnByWindow)}`);
   if (outcomeSummary.medianReturnByWindow) lines.push(`- median return by window: ${JSON.stringify(outcomeSummary.medianReturnByWindow)}`);
   if (outcomeSummary.takeProfitHitPctByWindow) lines.push(`- take-profit hit % by window: ${JSON.stringify(outcomeSummary.takeProfitHitPctByWindow)}`);
@@ -244,7 +302,12 @@ export function renderWatchAutopsy(db: AppDb, config: AppConfig): string {
     averageBestGainPct: group.length > 0 ? Number((group.reduce((sum, row) => sum + (row.bestGainPct ?? 0), 0) / group.length).toFixed(4)) : 0,
     averageWorstDrawdownPct: group.length > 0 ? Number((group.reduce((sum, row) => sum + (row.worstDrawdownPct ?? 0), 0) / group.length).toFixed(4)) : 0
   }]));
+  const priorityAverage = Object.fromEntries(Object.entries(priorityGroups).map(([key, group]) => [key, {
+    averageBestGainPct: group.length > 0 ? Number((group.reduce((sum, row) => sum + (row.bestGainPct ?? 0), 0) / group.length).toFixed(4)) : 0,
+    averageWorstDrawdownPct: group.length > 0 ? Number((group.reduce((sum, row) => sum + (row.worstDrawdownPct ?? 0), 0) / group.length).toFixed(4)) : 0
+  }]));
   lines.push(`- profile averages: ${JSON.stringify(profileAverage)}`);
+  lines.push(`- priority averages: ${JSON.stringify(priorityAverage)}`);
   lines.push('');
   lines.push('Top Runners');
   for (const row of topRunners) lines.push(`- ${row.symbol} tokenId=${row.tokenId} best=${fmtPct(row.bestGainPct)} worst=${fmtPct(row.worstDrawdownPct)} liq=${fmtNum(row.liquidityUsd)} v1h=${fmtNum(row.volume1hUsd)} total=${fmtNum(row.totalScore)} safety=${fmtNum(row.safetyScore)} momentum=${fmtNum(row.momentumScore)} verdict=${row.verdict ?? '-'} redFlags=${row.redFlags.join(', ') || '-'} mint=${row.mintAuthority ?? '-'} freeze=${row.freezeAuthority ?? '-'} holder=${row.holderConcentration ?? '-'} creator=${row.creatorStatus ?? '-'} sellQuote=${row.sellQuoteAvailable ?? '-'} slip=${row.estimatedSlippageBps ?? '-'} movedBefore=${fmtNum(row.movedBeforeDiscoveryPct)} updated=${row.dataUpdatedAt ?? '-'}`);
@@ -255,6 +318,8 @@ export function renderWatchAutopsy(db: AppDb, config: AppConfig): string {
   lines.push('Runner vs Dump Comparison');
   lines.push(`- top RUNNER_PROFILE candidates: ${profileGroups.RUNNER_PROFILE.slice(0, 5).map((row) => `${row.symbol} ${fmtPct(row.bestGainPct)}`).join(', ') || 'none'}`);
   lines.push(`- top DUMP_PROFILE candidates: ${profileGroups.DUMP_PROFILE.slice(0, 5).map((row) => `${row.symbol} ${fmtPct(row.worstDrawdownPct)}`).join(', ') || 'none'}`);
+  lines.push(`- top HIGH_WATCH_PRIORITY candidates: ${priorityGroups.HIGH_WATCH_PRIORITY.slice(0, 5).map((row) => `${row.symbol} ${fmtPct(row.bestGainPct)}`).join(', ') || 'none'}`);
+  lines.push(`- top AVOID_WATCH_PRIORITY candidates: ${priorityGroups.AVOID_WATCH_PRIORITY.slice(0, 5).map((row) => `${row.symbol} ${fmtPct(row.worstDrawdownPct)}`).join(', ') || 'none'}`);
   lines.push(`- common red flags among runners: ${countItems(runnerFlags).map((x) => `${x.value} (${x.count})`).join(', ') || 'none'}`);
   lines.push(`- common red flags among dumps: ${countItems(dumpFlags).map((x) => `${x.value} (${x.count})`).join(', ') || 'none'}`);
   lines.push(`- runner-heavy signals: ${runnerSignals.map((x) => `${x.value} (${x.count})`).join(', ') || 'none'}`);
@@ -297,8 +362,9 @@ export function buildWatchOnlyReport(db: AppDb, config?: AppConfig): Record<stri
   })();
   const outcomeSummary = config ? summarizeWatchOutcomes(db, config) : {};
   const signalAnalysisSummary = summarizeWatchOnlySignalAnalysis(db);
+  const latestStates = db.listLatestTokenStates(200);
   const profileRows = candidates.map((candidate) => {
-    const state = db.listLatestTokenStates(200).find((item) => item.tokenId === candidate.tokenId);
+    const state = latestStates.find((item) => item.tokenId === candidate.tokenId);
     const score = state?.score;
     const snapshot = state?.snapshot;
     const profile = classifyWatchRunnerProfile({
@@ -311,11 +377,28 @@ export function buildWatchOnlyReport(db: AppDb, config?: AppConfig): Record<stri
       holderConcentration: snapshot?.holderConcentration ?? null,
       priceUsd: snapshot?.priceUsd ?? candidate.latestPriceUsd ?? null
     });
-    return { candidate, profile };
+    const priority = classifyWatchPriority({
+      profile,
+      liquidityUsd: candidate.liquidityUsd ?? snapshot?.liquidityUsd ?? null,
+      volume1hUsd: candidate.volume1hUsd ?? snapshot?.volume1hUsd ?? null,
+      momentumScore: score?.momentumScore ?? null,
+      worstDrawdownPct: candidate.worstDrawdownPct,
+      priceChange5mPct: snapshot?.priceChange5mPct ?? null,
+      priceChange1hPct: snapshot?.priceChange1hPct ?? null
+    });
+    return { candidate, profile, priority };
   });
   const profileSummary = Object.fromEntries((['RUNNER_PROFILE', 'DUMP_PROFILE', 'NOISE_PROFILE', 'UNKNOWN_PROFILE'] as WatchRunnerProfile[]).map((profile) => {
     const group = profileRows.filter((row) => row.profile === profile).map((row) => row.candidate);
     return [profile, {
+      count: group.length,
+      averageBestGainPct: group.length > 0 ? Number((group.reduce((sum, row) => sum + (row.bestGainPct ?? 0), 0) / group.length).toFixed(4)) : 0,
+      averageWorstDrawdownPct: group.length > 0 ? Number((group.reduce((sum, row) => sum + (row.worstDrawdownPct ?? 0), 0) / group.length).toFixed(4)) : 0
+    }];
+  }));
+  const prioritySummary = Object.fromEntries((['HIGH_WATCH_PRIORITY', 'MEDIUM_WATCH_PRIORITY', 'LOW_WATCH_PRIORITY', 'AVOID_WATCH_PRIORITY'] as WatchPriority[]).map((priority) => {
+    const group = profileRows.filter((row) => row.priority === priority).map((row) => row.candidate);
+    return [priority, {
       count: group.length,
       averageBestGainPct: group.length > 0 ? Number((group.reduce((sum, row) => sum + (row.bestGainPct ?? 0), 0) / group.length).toFixed(4)) : 0,
       averageWorstDrawdownPct: group.length > 0 ? Number((group.reduce((sum, row) => sum + (row.worstDrawdownPct ?? 0), 0) / group.length).toFixed(4)) : 0
@@ -337,6 +420,8 @@ export function buildWatchOnlyReport(db: AppDb, config?: AppConfig): Record<stri
     ...signalAnalysisSummary,
     watchRunnerProfileCounts: Object.fromEntries(Object.entries(profileSummary).map(([key, value]) => [key, value.count])),
     watchRunnerProfileSummary: profileSummary,
+    watchPriorityCounts: Object.fromEntries(Object.entries(prioritySummary).map(([key, value]) => [key, value.count])),
+    watchPrioritySummary: prioritySummary,
     finalSafetyStatus: 'Real trading remains locked.'
   };
 }
