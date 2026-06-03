@@ -24,16 +24,30 @@ async function persistCandidates(db: AppDb, config: AppConfig, candidates: Token
   return tokenIds;
 }
 
-export async function refreshSnapshotsForTokenAddresses(db: AppDb, config: AppConfig, tokenAddresses: string[], logger = new AppLogger()): Promise<{ refreshed: number; tokenIds: number[] }> {
-  if (config.tokenSource !== 'dexscreener') {
-    return { refreshed: 0, tokenIds: [] };
+export async function refreshSnapshotsForTokenAddresses(db: AppDb, config: AppConfig, tokenAddresses: string[], logger = new AppLogger()): Promise<{ refreshed: number; tokenIds: number[]; geckoRefreshSummary?: Record<string, unknown> | null }> {
+  if (config.tokenSource === 'dexscreener') {
+    const source = createTokenSource(config) as DexScreenerTokenSource;
+    const candidates = await source.fetchCandidatesByTokenAddresses(tokenAddresses);
+    const tokenIds = await persistCandidates(db, config, candidates);
+    const summary = { refreshed: candidates.length, tokenIds, geckoRefreshSummary: null };
+    logger.info('Open-position snapshot refresh completed', summary);
+    return summary;
   }
-  const source = createTokenSource(config) as DexScreenerTokenSource;
-  const candidates = await source.fetchCandidatesByTokenAddresses(tokenAddresses);
-  const tokenIds = await persistCandidates(db, config, candidates);
-  const summary = { refreshed: candidates.length, tokenIds };
-  logger.info('Open-position snapshot refresh completed', summary);
-  return summary;
+
+  if (config.tokenSource === 'geckoterminal') {
+    const source = createTokenSource(config) as GeckoTerminalTokenSource;
+    const states = db.listLatestTokenStates(100)
+      .filter((state) => tokenAddresses.includes(state.mint) && state.snapshot?.source === 'geckoterminal' && state.snapshot)
+      .map((state) => state.snapshot!)
+      .slice(0, 20);
+    const refresh = await source.refreshCandidatesByPoolAddresses(states, 60, 20);
+    const tokenIds = await persistCandidates(db, config, refresh.refreshed);
+    const summary = { refreshed: refresh.refreshed.length, tokenIds, geckoRefreshSummary: refresh.summary };
+    logger.info('Open-position snapshot refresh completed', summary);
+    return summary;
+  }
+
+  return { refreshed: 0, tokenIds: [], geckoRefreshSummary: null };
 }
 
 export async function runScan(db: AppDb, config: AppConfig, logger = new AppLogger()): Promise<{ scanned: number; source: string; tokenIds: number[]; sourceSummary?: Record<string, unknown> | null }> {

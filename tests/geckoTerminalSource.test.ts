@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadConfig } from '../src/config';
 import { createDb } from '../src/db';
-import { createTokenSource, runScan } from '../src/scanner';
+import { createTokenSource, runScan, refreshSnapshotsForTokenAddresses } from '../src/scanner';
 import { normalizeGeckoTerminalPool, GeckoTerminalTokenSource } from '../src/scanner/geckoTerminalSource';
 import { enrichCandidate } from '../src/enrichment/enrichCandidate';
 import * as solanaSafety from '../src/enrichment/solanaSafety';
@@ -105,6 +105,77 @@ describe('GeckoTerminal source', () => {
     expect(result.source).toBe('geckoterminal');
     expect(result.sourceSummary).toMatchObject({ poolsFetched: 1, candidatesAccepted: 1 });
     expect(db.findTokenByMint('MintScan111111111111111111111111111111111111')).not.toBeNull();
+    db.close();
+  });
+
+  it('refresh uses GeckoTerminal pool endpoint by pool address and updates dataUpdatedAt', async () => {
+    const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'geckoterminal' });
+    cleanup.push(dir);
+    const db = createDb(config);
+    const stale = normalizeGeckoTerminalPool(makePool('MintRefresh111111111111111111111111111111111', { address: 'RefreshPool111' }), new Date(Date.now() - 20 * 60 * 1000).toISOString())!;
+    stale.dataUpdatedAt = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+    const tokenId = db.upsertToken(stale);
+    db.insertSnapshot(tokenId, stale);
+
+    const fetchImpl = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/v2/networks/solana/pools/RefreshPool111')) {
+        return makeJsonResponse({ data: makePool('MintRefresh111111111111111111111111111111111', { address: 'RefreshPool111', reserve_in_usd: '55000' }) });
+      }
+      return makeJsonResponse({ data: [] });
+    });
+
+    const refresh = await refreshSnapshotsForTokenAddresses(db, config, [stale.mint]);
+    const refreshed = db.getLatestSnapshot(tokenId)!;
+    expect(fetchImpl).toHaveBeenCalled();
+    expect(refresh.refreshed).toBe(1);
+    expect(refresh.geckoRefreshSummary).toMatchObject({ geckoRefreshAttempted: 1, geckoRefreshSucceeded: 1 });
+    expect(new Date(refreshed.dataUpdatedAt).getTime()).toBeGreaterThan(new Date(stale.dataUpdatedAt).getTime());
+    expect(refreshed.mint).toBe(stale.mint);
+    expect(refreshed.source).toBe('geckoterminal');
+    expect(refreshed.sourceUrl).toBe(stale.sourceUrl);
+    expect(refreshed.liquidityUsd).toBe(55000);
+    db.close();
+  });
+
+  it('missing pool address is skipped safely during refresh', async () => {
+    const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'geckoterminal' });
+    cleanup.push(dir);
+    const db = createDb(config);
+    const candidate = normalizeGeckoTerminalPool(makePool('MintNoPool11111111111111111111111111111111111', { address: 'NoPool111' }))!;
+    delete (candidate.raw as any).selectedPair;
+    const tokenId = db.upsertToken(candidate);
+    db.insertSnapshot(tokenId, candidate);
+
+    const refresh = await refreshSnapshotsForTokenAddresses(db, config, [candidate.mint]);
+    expect(refresh.refreshed).toBe(0);
+    expect(refresh.geckoRefreshSummary).toMatchObject({ geckoRefreshMissingPoolAddress: 1 });
+    expect(db.getOpenPositionCount('PAPER')).toBe(0);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
+    db.close();
+  });
+
+  it('stale GeckoTerminal candidate can become non-stale after refresh', async () => {
+    const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'geckoterminal', ENABLE_SOLANA_SAFETY_ENRICHMENT: 'false' });
+    cleanup.push(dir);
+    const db = createDb(config);
+    const stale = normalizeGeckoTerminalPool(makePool('MintFreshen111111111111111111111111111111111', { address: 'FreshenPool111' }), new Date(Date.now() - 20 * 60 * 1000).toISOString())!;
+    stale.dataUpdatedAt = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+    const tokenId = db.upsertToken(stale);
+    db.insertSnapshot(tokenId, stale);
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/v2/networks/solana/pools/FreshenPool111')) {
+        return makeJsonResponse({ data: makePool('MintFreshen111111111111111111111111111111111', { address: 'FreshenPool111', reserve_in_usd: '60000' }) });
+      }
+      return makeJsonResponse({ data: [] });
+    });
+
+    await refreshSnapshotsForTokenAddresses(db, config, [stale.mint]);
+    const refreshed = db.getLatestSnapshot(tokenId)!;
+    const ageMinutes = (Date.now() - new Date(refreshed.dataUpdatedAt).getTime()) / 60_000;
+    expect(ageMinutes).toBeLessThan(1);
     db.close();
   });
 

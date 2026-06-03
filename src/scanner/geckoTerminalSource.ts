@@ -46,6 +46,10 @@ interface GeckoTerminalPoolsResponse {
   data?: GeckoTerminalPool[];
 }
 
+interface GeckoTerminalPoolResponse {
+  data?: GeckoTerminalPool;
+}
+
 interface GeckoTerminalSourceOptions {
   fetchImpl?: FetchImpl;
   newPoolsUrl?: string;
@@ -53,6 +57,19 @@ interface GeckoTerminalSourceOptions {
   maxDataAgeMinutes?: number;
   minReserveUsd?: number;
   limit?: number;
+}
+
+export interface GeckoTerminalPoolRefreshResult {
+  refreshed: TokenCandidate[];
+  summary: GeckoTerminalRefreshSummary;
+}
+
+interface GeckoTerminalRefreshSummary {
+  geckoRefreshAttempted: number;
+  geckoRefreshSucceeded: number;
+  geckoRefreshMissingPoolAddress: number;
+  geckoRefreshFailed: number;
+  geckoRefreshSkippedOld: number;
 }
 
 interface GeckoTerminalFetchSummary {
@@ -124,6 +141,14 @@ function deriveMovedBeforeDiscoveryPct(pool: GeckoTerminalPool): number {
   return values.length > 0 ? Math.max(...values) : 0;
 }
 
+function pickFirstNumber(...values: Array<unknown>): number | null {
+  for (const value of values) {
+    const parsed = toNumber(value);
+    if (parsed !== null) return parsed;
+  }
+  return null;
+}
+
 export function normalizeGeckoTerminalPool(pool: GeckoTerminalPool, observedAt = new Date().toISOString()): TokenCandidate | null {
   const baseMint = parseMintFromRelationshipId(pool.relationships?.base_token?.data?.id);
   const poolAddress = pool.attributes?.address ?? null;
@@ -143,13 +168,13 @@ export function normalizeGeckoTerminalPool(pool: GeckoTerminalPool, observedAt =
     priceUsd: toNumber(pool.attributes?.base_token_price_usd),
     liquidityUsd: toNumber(pool.attributes?.reserve_in_usd),
     marketCapUsd: toNumber(pool.attributes?.market_cap_usd) ?? toNumber(pool.attributes?.fdv_usd),
-    volume5mUsd: toNumber(pool.attributes?.volume_usd?.m5),
-    volume1hUsd: toNumber(pool.attributes?.volume_usd?.h1),
-    volume24hUsd: toNumber(pool.attributes?.volume_usd?.h24),
-    priceChange5mPct: toNumber(pool.attributes?.price_change_percentage?.m5),
-    priceChange1hPct: toNumber(pool.attributes?.price_change_percentage?.h1),
-    buys5m: pool.attributes?.transactions?.m5?.buys ?? null,
-    sells5m: pool.attributes?.transactions?.m5?.sells ?? null,
+    volume5mUsd: pickFirstNumber(pool.attributes?.volume_usd?.m5, pool.attributes?.volume_usd?.m15, pool.attributes?.volume_usd?.m30),
+    volume1hUsd: pickFirstNumber(pool.attributes?.volume_usd?.h1, pool.attributes?.volume_usd?.m30),
+    volume24hUsd: pickFirstNumber(pool.attributes?.volume_usd?.h24, pool.attributes?.volume_usd?.h6, pool.attributes?.volume_usd?.h1),
+    priceChange5mPct: pickFirstNumber(pool.attributes?.price_change_percentage?.m5, pool.attributes?.price_change_percentage?.m15, pool.attributes?.price_change_percentage?.m30),
+    priceChange1hPct: pickFirstNumber(pool.attributes?.price_change_percentage?.h1, pool.attributes?.price_change_percentage?.m30),
+    buys5m: pool.attributes?.transactions?.m5?.buys ?? pool.attributes?.transactions?.m15?.buys ?? pool.attributes?.transactions?.m30?.buys ?? null,
+    sells5m: pool.attributes?.transactions?.m5?.sells ?? pool.attributes?.transactions?.m15?.sells ?? pool.attributes?.transactions?.m30?.sells ?? null,
     liquidityGrowthPct: null,
     freezeAuthority: 'UNKNOWN',
     mintAuthority: 'UNKNOWN',
@@ -170,12 +195,12 @@ export function normalizeGeckoTerminalPool(pool: GeckoTerminalPool, observedAt =
         dexId: pool.relationships?.dex?.data?.id ?? null,
         pairCreatedAt: poolCreatedAt,
         liquidityUsd: toNumber(pool.attributes?.reserve_in_usd),
-        volume5mUsd: toNumber(pool.attributes?.volume_usd?.m5),
-        volume1hUsd: toNumber(pool.attributes?.volume_usd?.h1),
-        volume24hUsd: toNumber(pool.attributes?.volume_usd?.h24),
-        priceChange5mPct: toNumber(pool.attributes?.price_change_percentage?.m5),
-        priceChange1hPct: toNumber(pool.attributes?.price_change_percentage?.h1),
-        priceChange24hPct: toNumber(pool.attributes?.price_change_percentage?.h24)
+        volume5mUsd: pickFirstNumber(pool.attributes?.volume_usd?.m5, pool.attributes?.volume_usd?.m15, pool.attributes?.volume_usd?.m30),
+        volume1hUsd: pickFirstNumber(pool.attributes?.volume_usd?.h1, pool.attributes?.volume_usd?.m30),
+        volume24hUsd: pickFirstNumber(pool.attributes?.volume_usd?.h24, pool.attributes?.volume_usd?.h6, pool.attributes?.volume_usd?.h1),
+        priceChange5mPct: pickFirstNumber(pool.attributes?.price_change_percentage?.m5, pool.attributes?.price_change_percentage?.m15, pool.attributes?.price_change_percentage?.m30),
+        priceChange1hPct: pickFirstNumber(pool.attributes?.price_change_percentage?.h1, pool.attributes?.price_change_percentage?.m30),
+        priceChange24hPct: pickFirstNumber(pool.attributes?.price_change_percentage?.h24, pool.attributes?.price_change_percentage?.h6, pool.attributes?.price_change_percentage?.h1)
       },
       discovery: {
         discoveryLane: 'geckoterminal-new-pools',
@@ -188,11 +213,18 @@ export function normalizeGeckoTerminalPool(pool: GeckoTerminalPool, observedAt =
   };
 }
 
+function extractPoolAddress(candidate: TokenCandidate): string | null {
+  const selectedPair = (candidate.raw?.selectedPair as Record<string, unknown> | undefined)
+    ?? ((candidate.raw as any)?.selectedPair as Record<string, unknown> | undefined);
+  return typeof selectedPair?.pairAddress === 'string' ? selectedPair.pairAddress : null;
+}
+
 export class GeckoTerminalTokenSource implements TokenSource {
   readonly name = 'geckoterminal';
 
   private readonly fetchImpl: FetchImpl;
   private readonly newPoolsUrl: string;
+  private readonly poolsBaseUrl: string;
   private readonly maxPoolAgeMinutes: number;
   private readonly maxDataAgeMinutes: number;
   private readonly minReserveUsd: number;
@@ -202,6 +234,7 @@ export class GeckoTerminalTokenSource implements TokenSource {
   constructor(options: GeckoTerminalSourceOptions = {}) {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.newPoolsUrl = options.newPoolsUrl ?? DEFAULT_NEW_POOLS_URL;
+    this.poolsBaseUrl = this.newPoolsUrl.replace(/\/new_pools$/, '/pools');
     this.maxPoolAgeMinutes = options.maxPoolAgeMinutes ?? DEFAULT_MAX_POOL_AGE_MINUTES;
     this.maxDataAgeMinutes = options.maxDataAgeMinutes ?? DEFAULT_MAX_DATA_AGE_MINUTES;
     this.minReserveUsd = options.minReserveUsd ?? DEFAULT_MIN_RESERVE_USD;
@@ -283,6 +316,67 @@ export class GeckoTerminalTokenSource implements TokenSource {
       this.lastFetchSummary = null;
       return [];
     }
+  }
+
+  async refreshCandidatesByPoolAddresses(candidates: TokenCandidate[], maxCandidateAgeMinutes = 60, maxCount = 20): Promise<GeckoTerminalPoolRefreshResult> {
+    const observedAt = new Date().toISOString();
+    const summary: GeckoTerminalRefreshSummary = {
+      geckoRefreshAttempted: 0,
+      geckoRefreshSucceeded: 0,
+      geckoRefreshMissingPoolAddress: 0,
+      geckoRefreshFailed: 0,
+      geckoRefreshSkippedOld: 0
+    };
+    const refreshed: TokenCandidate[] = [];
+
+    for (const candidate of candidates) {
+      if (refreshed.length >= maxCount) break;
+      const ageMinutes = minutesSince(candidate.tokenCreatedAt, observedAt);
+      if ((ageMinutes ?? Number.POSITIVE_INFINITY) > maxCandidateAgeMinutes) {
+        summary.geckoRefreshSkippedOld += 1;
+        continue;
+      }
+      const poolAddress = extractPoolAddress(candidate);
+      if (!poolAddress) {
+        summary.geckoRefreshMissingPoolAddress += 1;
+        continue;
+      }
+
+      summary.geckoRefreshAttempted += 1;
+      try {
+        const response = await this.fetchImpl(`${this.poolsBaseUrl}/${poolAddress}`, {
+          headers: {
+            accept: 'application/json',
+            'user-agent': 'goose-token-autopilot/1.0'
+          }
+        });
+        if (response.status === 429 || !response.ok) {
+          summary.geckoRefreshFailed += 1;
+          continue;
+        }
+        const body = (await response.json()) as GeckoTerminalPoolResponse;
+        if (!body?.data) {
+          summary.geckoRefreshFailed += 1;
+          continue;
+        }
+        const refreshedCandidate = normalizeGeckoTerminalPool(body.data, observedAt);
+        if (!refreshedCandidate) {
+          summary.geckoRefreshFailed += 1;
+          continue;
+        }
+        refreshed.push({
+          ...refreshedCandidate,
+          mint: candidate.mint,
+          source: candidate.source,
+          sourceUrl: candidate.sourceUrl ?? refreshedCandidate.sourceUrl
+        });
+        summary.geckoRefreshSucceeded += 1;
+      } catch {
+        summary.geckoRefreshFailed += 1;
+      }
+    }
+
+    return { refreshed, summary };
   }
 }
 
