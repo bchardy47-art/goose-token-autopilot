@@ -4,7 +4,7 @@ import { createDb } from '../src/db';
 import { makeTestConfig } from './helpers';
 import { normalizeDexScreenerCandidate } from '../src/scanner/dexscreenerSource';
 import { classifyWatchOnlyCandidate, runWatchAnalysis, summarizeWatchOnlySignalAnalysis } from '../src/watchAnalysis';
-import { buildWatchOnlyReport, renderWatchAutopsy } from '../src/watchOnly';
+import { buildWatchOnlyReport, classifyWatchRunnerProfile, renderWatchAutopsy } from '../src/watchOnly';
 import { buildDailyReport } from '../src/paper/dailyReport';
 import { verifySafety } from '../src/verifySafety';
 
@@ -49,6 +49,65 @@ function makeLiveCandidate(overrides: Record<string, unknown> = {}) {
 }
 
 describe('watch-only signal analysis', () => {
+  it('classifier assigns RUNNER_PROFILE for high momentum/high volume/high liquidity', () => {
+    expect(classifyWatchRunnerProfile({
+      momentumScore: 20,
+      safetyScore: 15,
+      volume1hUsd: 150000,
+      liquidityUsd: 15000,
+      priceChange5mPct: 10,
+      priceChange1hPct: 20,
+      holderConcentration: 'SAFE',
+      priceUsd: 1
+    })).toBe('RUNNER_PROFILE');
+  });
+
+  it('classifier assigns DUMP_PROFILE for sharp negative action or risky low-safety high-volume setup', () => {
+    expect(classifyWatchRunnerProfile({
+      momentumScore: 8,
+      safetyScore: 12,
+      volume1hUsd: 120000,
+      liquidityUsd: 15000,
+      priceChange5mPct: -30,
+      priceChange1hPct: -10,
+      holderConcentration: 'SAFE',
+      priceUsd: 1
+    })).toBe('DUMP_PROFILE');
+    expect(classifyWatchRunnerProfile({
+      momentumScore: 8,
+      safetyScore: 5,
+      volume1hUsd: 120000,
+      liquidityUsd: 15000,
+      priceChange5mPct: 0,
+      priceChange1hPct: 0,
+      holderConcentration: 'RISKY',
+      priceUsd: 1
+    })).toBe('DUMP_PROFILE');
+  });
+
+  it('classifier assigns NOISE_PROFILE for low liquidity/low volume/missing data and fallback UNKNOWN_PROFILE otherwise', () => {
+    expect(classifyWatchRunnerProfile({
+      momentumScore: 12,
+      safetyScore: 12,
+      volume1hUsd: 40000,
+      liquidityUsd: 9000,
+      priceChange5mPct: 0,
+      priceChange1hPct: 0,
+      holderConcentration: 'SAFE',
+      priceUsd: 1
+    })).toBe('NOISE_PROFILE');
+    expect(classifyWatchRunnerProfile({
+      momentumScore: 12,
+      safetyScore: 12,
+      volume1hUsd: 80000,
+      liquidityUsd: 10000,
+      priceChange5mPct: 0,
+      priceChange1hPct: 0,
+      holderConcentration: 'SAFE',
+      priceUsd: 1
+    })).toBe('UNKNOWN_PROFILE');
+  });
+
   it('+30% post-discovery gain with low movedBeforeDiscoveryPct => EARLY_RUNNER', () => {
     const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener' });
     cleanup.push(dir);
@@ -180,37 +239,40 @@ describe('watch-only signal analysis', () => {
     db.close();
   });
 
-  it('watch-report includes signal class summary', async () => {
+  it('watch-report includes signal class summary and profile counts', async () => {
     const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener' });
     cleanup.push(dir);
     const db = createDb(config);
-    const tokenId = db.upsertToken(makeLiveCandidate({ movedBeforeDiscoveryPct: 20 }));
-    db.upsertWatchOnlyCandidate(tokenId, 'WATCH_ONLY', 'interesting enough to track, unsafe to trade', 1, 1.35, 12000, 7000, 25000, { snapshot: makeLiveCandidate({ movedBeforeDiscoveryPct: 20 }) });
+    const tokenId = db.upsertToken(makeLiveCandidate({ movedBeforeDiscoveryPct: 20, liquidityUsd: 15000, volume1hUsd: 150000 }));
+    db.saveScore({ tokenId, scoredAt: new Date().toISOString(), momentumScore: 25, safetyScore: 20, socialScore: 10, totalScore: 55, verdict: 'WATCH', reasons: [], redFlags: [], autopilotBlocked: true, autopilotBlockers: [] });
+    db.upsertWatchOnlyCandidate(tokenId, 'WATCH_ONLY', 'interesting enough to track, unsafe to trade', 1, 1.35, 15000, 7000, 150000, { snapshot: makeLiveCandidate({ movedBeforeDiscoveryPct: 20, liquidityUsd: 15000, volume1hUsd: 150000 }) });
     await runWatchAnalysis(db, config);
-    const report = buildWatchOnlyReport(db, config);
+    const report = buildWatchOnlyReport(db, config) as any;
     expect(report).toHaveProperty('watchOnlySignalClassCounts');
+    expect(report).toHaveProperty('watchRunnerProfileCounts');
+    expect(report).toHaveProperty('watchRunnerProfileSummary');
     expect(report).toHaveProperty('analysisSummaryLine', 'Watch-only analysis is research only.');
     db.close();
   });
 
-  it('watch-autopsy renders runner and dump sections, aggregate comparison, red flag comparisons, and safety footer', async () => {
+  it('watch-autopsy renders runner and dump sections, aggregate comparison, red flag comparisons, profile counts, and safety footer', async () => {
     const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener' });
     cleanup.push(dir);
     const db = createDb(config);
 
-    const runnerTokenId = db.upsertToken(makeLiveCandidate({ mint: 'RunnerMint111', symbol: 'RUN', movedBeforeDiscoveryPct: 20, sellQuoteAvailable: 'YES', holderConcentration: 'SAFE', mintAuthority: 'SAFE', freezeAuthority: 'SAFE' }));
+    const runnerTokenId = db.upsertToken(makeLiveCandidate({ mint: 'RunnerMint111', symbol: 'RUN', movedBeforeDiscoveryPct: 20, sellQuoteAvailable: 'YES', holderConcentration: 'SAFE', mintAuthority: 'SAFE', freezeAuthority: 'SAFE', liquidityUsd: 15000, volume1hUsd: 150000, priceChange1hPct: 20 }));
     db.saveScore({ tokenId: runnerTokenId, scoredAt: new Date().toISOString(), momentumScore: 30, safetyScore: 25, socialScore: 10, totalScore: 65, verdict: 'WATCH', reasons: ['runner signal'], redFlags: ['creator status unknown'], autopilotBlocked: true, autopilotBlockers: [] });
-    db.upsertWatchOnlyCandidate(runnerTokenId, 'WATCH_ONLY', 'runner', 1, 1.8, 15000, 9000, 30000, { snapshot: makeLiveCandidate({ mint: 'RunnerMint111', symbol: 'RUN', movedBeforeDiscoveryPct: 20, sellQuoteAvailable: 'YES', holderConcentration: 'SAFE', mintAuthority: 'SAFE', freezeAuthority: 'SAFE' }) });
+    db.upsertWatchOnlyCandidate(runnerTokenId, 'WATCH_ONLY', 'runner', 1, 1.8, 15000, 9000, 150000, { snapshot: makeLiveCandidate({ mint: 'RunnerMint111', symbol: 'RUN', movedBeforeDiscoveryPct: 20, sellQuoteAvailable: 'YES', holderConcentration: 'SAFE', mintAuthority: 'SAFE', freezeAuthority: 'SAFE', liquidityUsd: 15000, volume1hUsd: 150000, priceChange1hPct: 20 }) });
     db.sqlite.prepare(`UPDATE watch_only_candidates
       SET latest_price_usd = ?, best_price_usd = ?, worst_price_usd = ?, best_gain_pct = ?, worst_drawdown_pct = ?, liquidity_usd = ?, volume_5m_usd = ?, volume_1h_usd = ?
-      WHERE token_id = ?`).run(1.8, 1.8, 0.95, 80, -5, 15000, 9000, 30000, runnerTokenId);
+      WHERE token_id = ?`).run(1.8, 1.8, 0.95, 80, -5, 15000, 9000, 150000, runnerTokenId);
 
-    const dumpTokenId = db.upsertToken(makeLiveCandidate({ mint: 'DumpMint111', symbol: 'DMP', movedBeforeDiscoveryPct: 10, sellQuoteAvailable: 'UNKNOWN', holderConcentration: 'RISKY', mintAuthority: 'SAFE', freezeAuthority: 'SAFE' }));
-    db.saveScore({ tokenId: dumpTokenId, scoredAt: new Date().toISOString(), momentumScore: 12, safetyScore: 14, socialScore: 5, totalScore: 31, verdict: 'AVOID', reasons: ['dump signal'], redFlags: ['sell quote unknown', 'holder concentration risky'], autopilotBlocked: true, autopilotBlockers: [] });
-    db.upsertWatchOnlyCandidate(dumpTokenId, 'WATCH_ONLY', 'dump', 1, 0.7, 8000, 4000, 12000, { snapshot: makeLiveCandidate({ mint: 'DumpMint111', symbol: 'DMP', movedBeforeDiscoveryPct: 10, sellQuoteAvailable: 'UNKNOWN', holderConcentration: 'RISKY', mintAuthority: 'SAFE', freezeAuthority: 'SAFE' }) });
+    const dumpTokenId = db.upsertToken(makeLiveCandidate({ mint: 'DumpMint111', symbol: 'DMP', movedBeforeDiscoveryPct: 10, sellQuoteAvailable: 'UNKNOWN', holderConcentration: 'RISKY', mintAuthority: 'SAFE', freezeAuthority: 'SAFE', liquidityUsd: 9000, volume1hUsd: 120000, priceChange5mPct: -30 }));
+    db.saveScore({ tokenId: dumpTokenId, scoredAt: new Date().toISOString(), momentumScore: 12, safetyScore: 8, socialScore: 5, totalScore: 31, verdict: 'AVOID', reasons: ['dump signal'], redFlags: ['sell quote unknown', 'holder concentration risky'], autopilotBlocked: true, autopilotBlockers: [] });
+    db.upsertWatchOnlyCandidate(dumpTokenId, 'WATCH_ONLY', 'dump', 1, 0.7, 9000, 4000, 120000, { snapshot: makeLiveCandidate({ mint: 'DumpMint111', symbol: 'DMP', movedBeforeDiscoveryPct: 10, sellQuoteAvailable: 'UNKNOWN', holderConcentration: 'RISKY', mintAuthority: 'SAFE', freezeAuthority: 'SAFE', liquidityUsd: 9000, volume1hUsd: 120000, priceChange5mPct: -30 }) });
     db.sqlite.prepare(`UPDATE watch_only_candidates
       SET latest_price_usd = ?, best_price_usd = ?, worst_price_usd = ?, best_gain_pct = ?, worst_drawdown_pct = ?, liquidity_usd = ?, volume_5m_usd = ?, volume_1h_usd = ?
-      WHERE token_id = ?`).run(0.7, 1.05, 0.3, 5, -70, 8000, 4000, 12000, dumpTokenId);
+      WHERE token_id = ?`).run(0.7, 1.05, 0.3, 5, -70, 9000, 4000, 120000, dumpTokenId);
 
     await runWatchAnalysis(db, config);
     const autopsy = renderWatchAutopsy(db, config);
@@ -218,6 +280,8 @@ describe('watch-only signal analysis', () => {
     expect(autopsy).toContain('Top Runners');
     expect(autopsy).toContain('Top Dumps');
     expect(autopsy).toContain('Runner vs Dump Comparison');
+    expect(autopsy).toContain('RUNNER_PROFILE');
+    expect(autopsy).toContain('DUMP_PROFILE');
     expect(autopsy).toContain('common red flags among runners');
     expect(autopsy).toContain('common red flags among dumps');
     expect(autopsy).toContain('Watch-only analysis is research only.');

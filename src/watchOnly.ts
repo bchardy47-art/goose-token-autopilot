@@ -86,6 +86,8 @@ export async function runWatchOnly(db: AppDb, config: AppConfig, logger = new Ap
   }
 }
 
+export type WatchRunnerProfile = 'RUNNER_PROFILE' | 'DUMP_PROFILE' | 'NOISE_PROFILE' | 'UNKNOWN_PROFILE';
+
 function fmtPct(value: number | null | undefined): string {
   return value === null || value === undefined ? '-' : `${value.toFixed(2)}%`;
 }
@@ -107,6 +109,41 @@ function countItems(items: string[], limit = 10): Array<{ value: string; count: 
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([value, count]) => ({ value, count }));
 }
 
+export function classifyWatchRunnerProfile(input: {
+  momentumScore: number | null;
+  safetyScore: number | null;
+  volume1hUsd: number | null;
+  liquidityUsd: number | null;
+  priceChange5mPct: number | null;
+  priceChange1hPct: number | null;
+  holderConcentration: string | null;
+  priceUsd: number | null;
+}): WatchRunnerProfile {
+  const hasPriceLiquidity = input.priceUsd !== null && input.liquidityUsd !== null;
+  if (!hasPriceLiquidity || input.volume1hUsd === null || input.liquidityUsd === null) {
+    return 'NOISE_PROFILE';
+  }
+  if (
+    (input.momentumScore ?? -Infinity) >= 18 &&
+    input.volume1hUsd >= 100000 &&
+    input.liquidityUsd >= 12000
+  ) {
+    return 'RUNNER_PROFILE';
+  }
+  if (
+    (input.priceChange5mPct ?? 0) <= -25 ||
+    (input.priceChange1hPct ?? 0) <= -50 ||
+    (input.liquidityUsd < 10000 && input.volume1hUsd >= 100000) ||
+    (input.holderConcentration === 'RISKY' && (input.safetyScore ?? 999) < 10)
+  ) {
+    return 'DUMP_PROFILE';
+  }
+  if (input.volume1hUsd < 50000 || input.liquidityUsd < 8000) {
+    return 'NOISE_PROFILE';
+  }
+  return 'UNKNOWN_PROFILE';
+}
+
 export function renderWatchAutopsy(db: AppDb, config: AppConfig): string {
   const candidates = db.listWatchOnlyCandidates();
   const analyses = db.listWatchOnlySignalAnalyses();
@@ -121,10 +158,21 @@ export function renderWatchAutopsy(db: AppDb, config: AppConfig): string {
     const score = state?.score;
     const snapshot = state?.snapshot;
     const signalClass = analysisByTokenId.get(candidate.tokenId)?.signalClass ?? 'UNCLASSIFIED';
+    const profile = classifyWatchRunnerProfile({
+      momentumScore: score?.momentumScore ?? null,
+      safetyScore: score?.safetyScore ?? null,
+      volume1hUsd: candidate.volume1hUsd ?? snapshot?.volume1hUsd ?? null,
+      liquidityUsd: candidate.liquidityUsd ?? snapshot?.liquidityUsd ?? null,
+      priceChange5mPct: snapshot?.priceChange5mPct ?? null,
+      priceChange1hPct: snapshot?.priceChange1hPct ?? null,
+      holderConcentration: snapshot?.holderConcentration ?? null,
+      priceUsd: snapshot?.priceUsd ?? candidate.latestPriceUsd ?? null
+    });
     return {
       symbol: state?.symbol ?? JSON.parse(candidate.rawJson || '{}')?.snapshot?.symbol ?? `T${candidate.tokenId}`,
       tokenId: candidate.tokenId,
       signalClass,
+      profile,
       bestGainPct: candidate.bestGainPct,
       worstDrawdownPct: candidate.worstDrawdownPct,
       entryPriceUsd: candidate.entryPriceUsd,
@@ -151,6 +199,12 @@ export function renderWatchAutopsy(db: AppDb, config: AppConfig): string {
 
   const runners = rows.filter((row) => row.signalClass === 'EARLY_RUNNER' || row.signalClass === 'LATE_RUNNER');
   const dumps = rows.filter((row) => row.signalClass === 'INSTANT_DUMP' || row.signalClass === 'DEAD_NOISE');
+  const profileGroups = {
+    RUNNER_PROFILE: rows.filter((row) => row.profile === 'RUNNER_PROFILE'),
+    DUMP_PROFILE: rows.filter((row) => row.profile === 'DUMP_PROFILE'),
+    NOISE_PROFILE: rows.filter((row) => row.profile === 'NOISE_PROFILE'),
+    UNKNOWN_PROFILE: rows.filter((row) => row.profile === 'UNKNOWN_PROFILE')
+  };
   const topRunners = [...rows].sort((a, b) => (b.bestGainPct ?? Number.NEGATIVE_INFINITY) - (a.bestGainPct ?? Number.NEGATIVE_INFINITY)).slice(0, 10);
   const topDumps = [...rows].sort((a, b) => (a.worstDrawdownPct ?? Number.POSITIVE_INFINITY) - (b.worstDrawdownPct ?? Number.POSITIVE_INFINITY)).slice(0, 10);
   const runnerFlags = runners.flatMap((row) => row.redFlags);
@@ -178,10 +232,19 @@ export function renderWatchAutopsy(db: AppDb, config: AppConfig): string {
   lines.push(`- INSTANT_DUMP: ${classCounts.INSTANT_DUMP ?? 0}`);
   lines.push(`- DEAD_NOISE: ${classCounts.DEAD_NOISE ?? 0}`);
   lines.push(`- TOO_DANGEROUS: ${classCounts.TOO_DANGEROUS ?? 0}`);
+  lines.push(`- RUNNER_PROFILE: ${profileGroups.RUNNER_PROFILE.length}`);
+  lines.push(`- DUMP_PROFILE: ${profileGroups.DUMP_PROFILE.length}`);
+  lines.push(`- NOISE_PROFILE: ${profileGroups.NOISE_PROFILE.length}`);
+  lines.push(`- UNKNOWN_PROFILE: ${profileGroups.UNKNOWN_PROFILE.length}`);
   if (outcomeSummary.averageReturnByWindow) lines.push(`- average return by window: ${JSON.stringify(outcomeSummary.averageReturnByWindow)}`);
   if (outcomeSummary.medianReturnByWindow) lines.push(`- median return by window: ${JSON.stringify(outcomeSummary.medianReturnByWindow)}`);
   if (outcomeSummary.takeProfitHitPctByWindow) lines.push(`- take-profit hit % by window: ${JSON.stringify(outcomeSummary.takeProfitHitPctByWindow)}`);
   if (outcomeSummary.stopLossHitPctByWindow) lines.push(`- stop-loss hit % by window: ${JSON.stringify(outcomeSummary.stopLossHitPctByWindow)}`);
+  const profileAverage = Object.fromEntries(Object.entries(profileGroups).map(([key, group]) => [key, {
+    averageBestGainPct: group.length > 0 ? Number((group.reduce((sum, row) => sum + (row.bestGainPct ?? 0), 0) / group.length).toFixed(4)) : 0,
+    averageWorstDrawdownPct: group.length > 0 ? Number((group.reduce((sum, row) => sum + (row.worstDrawdownPct ?? 0), 0) / group.length).toFixed(4)) : 0
+  }]));
+  lines.push(`- profile averages: ${JSON.stringify(profileAverage)}`);
   lines.push('');
   lines.push('Top Runners');
   for (const row of topRunners) lines.push(`- ${row.symbol} tokenId=${row.tokenId} best=${fmtPct(row.bestGainPct)} worst=${fmtPct(row.worstDrawdownPct)} liq=${fmtNum(row.liquidityUsd)} v1h=${fmtNum(row.volume1hUsd)} total=${fmtNum(row.totalScore)} safety=${fmtNum(row.safetyScore)} momentum=${fmtNum(row.momentumScore)} verdict=${row.verdict ?? '-'} redFlags=${row.redFlags.join(', ') || '-'} mint=${row.mintAuthority ?? '-'} freeze=${row.freezeAuthority ?? '-'} holder=${row.holderConcentration ?? '-'} creator=${row.creatorStatus ?? '-'} sellQuote=${row.sellQuoteAvailable ?? '-'} slip=${row.estimatedSlippageBps ?? '-'} movedBefore=${fmtNum(row.movedBeforeDiscoveryPct)} updated=${row.dataUpdatedAt ?? '-'}`);
@@ -190,6 +253,8 @@ export function renderWatchAutopsy(db: AppDb, config: AppConfig): string {
   for (const row of topDumps) lines.push(`- ${row.symbol} tokenId=${row.tokenId} best=${fmtPct(row.bestGainPct)} worst=${fmtPct(row.worstDrawdownPct)} liq=${fmtNum(row.liquidityUsd)} v1h=${fmtNum(row.volume1hUsd)} total=${fmtNum(row.totalScore)} safety=${fmtNum(row.safetyScore)} momentum=${fmtNum(row.momentumScore)} verdict=${row.verdict ?? '-'} redFlags=${row.redFlags.join(', ') || '-'} mint=${row.mintAuthority ?? '-'} freeze=${row.freezeAuthority ?? '-'} holder=${row.holderConcentration ?? '-'} creator=${row.creatorStatus ?? '-'} sellQuote=${row.sellQuoteAvailable ?? '-'} slip=${row.estimatedSlippageBps ?? '-'} movedBefore=${fmtNum(row.movedBeforeDiscoveryPct)} updated=${row.dataUpdatedAt ?? '-'}`);
   lines.push('');
   lines.push('Runner vs Dump Comparison');
+  lines.push(`- top RUNNER_PROFILE candidates: ${profileGroups.RUNNER_PROFILE.slice(0, 5).map((row) => `${row.symbol} ${fmtPct(row.bestGainPct)}`).join(', ') || 'none'}`);
+  lines.push(`- top DUMP_PROFILE candidates: ${profileGroups.DUMP_PROFILE.slice(0, 5).map((row) => `${row.symbol} ${fmtPct(row.worstDrawdownPct)}`).join(', ') || 'none'}`);
   lines.push(`- common red flags among runners: ${countItems(runnerFlags).map((x) => `${x.value} (${x.count})`).join(', ') || 'none'}`);
   lines.push(`- common red flags among dumps: ${countItems(dumpFlags).map((x) => `${x.value} (${x.count})`).join(', ') || 'none'}`);
   lines.push(`- runner-heavy signals: ${runnerSignals.map((x) => `${x.value} (${x.count})`).join(', ') || 'none'}`);
@@ -232,6 +297,30 @@ export function buildWatchOnlyReport(db: AppDb, config?: AppConfig): Record<stri
   })();
   const outcomeSummary = config ? summarizeWatchOutcomes(db, config) : {};
   const signalAnalysisSummary = summarizeWatchOnlySignalAnalysis(db);
+  const profileRows = candidates.map((candidate) => {
+    const state = db.listLatestTokenStates(200).find((item) => item.tokenId === candidate.tokenId);
+    const score = state?.score;
+    const snapshot = state?.snapshot;
+    const profile = classifyWatchRunnerProfile({
+      momentumScore: score?.momentumScore ?? null,
+      safetyScore: score?.safetyScore ?? null,
+      volume1hUsd: candidate.volume1hUsd ?? snapshot?.volume1hUsd ?? null,
+      liquidityUsd: candidate.liquidityUsd ?? snapshot?.liquidityUsd ?? null,
+      priceChange5mPct: snapshot?.priceChange5mPct ?? null,
+      priceChange1hPct: snapshot?.priceChange1hPct ?? null,
+      holderConcentration: snapshot?.holderConcentration ?? null,
+      priceUsd: snapshot?.priceUsd ?? candidate.latestPriceUsd ?? null
+    });
+    return { candidate, profile };
+  });
+  const profileSummary = Object.fromEntries((['RUNNER_PROFILE', 'DUMP_PROFILE', 'NOISE_PROFILE', 'UNKNOWN_PROFILE'] as WatchRunnerProfile[]).map((profile) => {
+    const group = profileRows.filter((row) => row.profile === profile).map((row) => row.candidate);
+    return [profile, {
+      count: group.length,
+      averageBestGainPct: group.length > 0 ? Number((group.reduce((sum, row) => sum + (row.bestGainPct ?? 0), 0) / group.length).toFixed(4)) : 0,
+      averageWorstDrawdownPct: group.length > 0 ? Number((group.reduce((sum, row) => sum + (row.worstDrawdownPct ?? 0), 0) / group.length).toFixed(4)) : 0
+    }];
+  }));
 
   return {
     totalWatchOnlyCandidates: candidates.length,
@@ -246,6 +335,8 @@ export function buildWatchOnlyReport(db: AppDb, config?: AppConfig): Record<stri
     topRedFlagsBlockingPaperBuy: topRedFlags,
     ...outcomeSummary,
     ...signalAnalysisSummary,
+    watchRunnerProfileCounts: Object.fromEntries(Object.entries(profileSummary).map(([key, value]) => [key, value.count])),
+    watchRunnerProfileSummary: profileSummary,
     finalSafetyStatus: 'Real trading remains locked.'
   };
 }
