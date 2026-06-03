@@ -12,6 +12,7 @@ import { buildPaperEligibilityDiagnostics, runAutoPaper } from './paper/autoPape
 import { renderFreshCandidateWatchlist } from './paper/freshWatchlist';
 import { renderFreshRejectionAnalytics } from './paper/freshRejections';
 import { renderTooEarlyWatchReport } from './paper/tooEarlyWatch';
+import { renderTokenSessionSummary } from './paper/sessionSummary';
 import { runPaperReview, runPaperReviewLoop, type PaperReviewLoopCycleSummary } from './paper/review';
 import { buildPaperPerformanceReport } from './paper/performance';
 import { buildDailyReport, renderPaperAutopsy, renderPaperDashboard } from './paper/dailyReport';
@@ -109,6 +110,11 @@ async function main(): Promise<void> {
         const maxAgeMinutes = parseNumberArg('--max-age-minutes', 15, { min: 0 });
         const limit = parseNumberArg('--limit', 10, { integer: true, min: 1 });
         console.log(renderTooEarlyWatchReport(db, config, { maxAgeMinutes, limit }));
+        break;
+      }
+      case 'token:session-summary': {
+        const windowMinutes = parseNumberArg('--window-minutes', 60, { min: 0 });
+        console.log(renderTokenSessionSummary(db, config, { windowMinutes }));
         break;
       }
       case 'token:paper-review':

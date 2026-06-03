@@ -5,6 +5,7 @@ import { makeTestConfig, seedScoredDb } from './helpers';
 import { applyLatestQuoteResultToSnapshot, buildPaperEligibilityDiagnostics, isPaperQuoteReady, isPaperResearchBlocked, runAutoPaper } from '../src/paper/autoPaper';
 import { buildFreshCandidateWatchlist, renderFreshCandidateWatchlist } from '../src/paper/freshWatchlist';
 import { buildTooEarlyWatchReport, renderTooEarlyWatchReport } from '../src/paper/tooEarlyWatch';
+import { buildTokenSessionSummary, renderTokenSessionSummary } from '../src/paper/sessionSummary';
 import { paperBuy } from '../src/trading/paper';
 import { runPaperReview, runPaperReviewLoop } from '../src/paper/review';
 import { buildPaperPerformanceReport } from '../src/paper/performance';
@@ -953,6 +954,22 @@ describe('live paper loop', () => {
     expect(output).toContain('Too-Early Watch Lane');
     expect(output).toContain('No paper buys opened.');
     expect(output).toContain('Real trading remains locked.');
+    expect(db.getOpenPositionCount('PAPER')).toBe(0);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
+    db.close();
+  });
+
+  it('session-summary stays read-only and includes recommendation without raw json', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const report = buildTokenSessionSummary(db, config, { windowMinutes: 60 });
+    const output = renderTokenSessionSummary(db, config, { windowMinutes: 60 });
+    expect(['KEEP_WATCHING', 'INVESTIGATE_NOW', 'SAFE_TO_STOP', 'DO_NOT_BUY']).toContain(report.recommendation);
+    expect(output).toContain('Token Session Summary');
+    expect(output).toContain('Recommendation:');
+    expect(output).toContain('No paper buys opened.');
+    expect(output).toContain('Real trading remains locked.');
+    expect(output).not.toMatch(/rawJson/i);
     expect(db.getOpenPositionCount('PAPER')).toBe(0);
     expect(db.getBlockedRealTradeAttempts()).toBe(0);
     db.close();
