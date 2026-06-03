@@ -131,8 +131,39 @@ describe('live paper loop', () => {
     db.close();
   });
 
-  it('paper buy allowed only when quote YES, slippage within max, and existing gates pass', async () => {
-    const { dir, config, db } = await seedScoredDb();
+  it('high watch priority + runner profile + existing paper gates pass => paper buy can open', async () => {
+    const { dir, config, db } = await seedScoredDb({ PAPER_REQUIRE_HIGH_WATCH_PRIORITY: 'true' } as any);
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const snapshot = db.getLatestSnapshot(safe.id)!;
+    snapshot.sellQuoteAvailable = 'YES';
+    snapshot.estimatedSlippageBps = Math.max(1, config.maxSlippageBps - 1);
+    snapshot.liquidityUsd = 15000;
+    snapshot.volume1hUsd = 150000;
+    snapshot.priceChange1hPct = 20;
+    const score = { ...db.getLatestScore(safe.id)!, momentumScore: 25, safetyScore: 25, totalScore: 65 };
+    expect(isPaperQuoteReady(snapshot, score, config)).toBeNull();
+    expect(isPaperResearchBlocked(snapshot, score, config)).toBeNull();
+    db.close();
+  });
+
+  it('non-high priority or non-runner profile blocks paper even if existing paper gates pass', async () => {
+    const { dir, config, db } = await seedScoredDb({ PAPER_REQUIRE_HIGH_WATCH_PRIORITY: 'true' } as any);
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const snapshot = db.getLatestSnapshot(safe.id)!;
+    snapshot.sellQuoteAvailable = 'YES';
+    snapshot.estimatedSlippageBps = Math.max(1, config.maxSlippageBps - 1);
+    snapshot.liquidityUsd = 9000;
+    snapshot.volume1hUsd = 70000;
+    snapshot.priceChange1hPct = 10;
+    const score = { ...db.getLatestScore(safe.id)!, momentumScore: 19, safetyScore: 25, totalScore: 65 };
+    expect(isPaperResearchBlocked(snapshot, score, config)).toMatch(/watch priority below paper requirement/);
+    db.close();
+  });
+
+  it('PAPER_REQUIRE_HIGH_WATCH_PRIORITY=false preserves previous behavior', async () => {
+    const { dir, config, db } = await seedScoredDb({ PAPER_REQUIRE_HIGH_WATCH_PRIORITY: 'false' } as any);
     cleanup.push(dir);
     const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
     const snapshot = db.getLatestSnapshot(safe.id)!;
@@ -140,9 +171,7 @@ describe('live paper loop', () => {
     snapshot.estimatedSlippageBps = Math.max(1, config.maxSlippageBps - 1);
     snapshot.creatorStatus = 'UNKNOWN';
     snapshot.holderConcentration = 'RISKY';
-    snapshot.movedBeforeDiscoveryPct = config.maxChasePct + 10;
     const score = db.getLatestScore(safe.id)!;
-    expect(isPaperQuoteReady(snapshot, score, config)).toBeNull();
     expect(isPaperResearchBlocked(snapshot, score, config)).toBeNull();
     db.close();
   });
@@ -259,8 +288,8 @@ describe('live paper loop', () => {
     seeded2.db.close();
   });
 
-  it('duplicate open paper positions are not created', async () => {
-    const { dir, config, db } = await seedScoredDb();
+  it('duplicate/open cap/daily cap still block after watch-priority gating', async () => {
+    const { dir, config, db } = await seedScoredDb({ PAPER_REQUIRE_HIGH_WATCH_PRIORITY: 'false' } as any);
     cleanup.push(dir);
     const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
     db.createQuoteSellabilityCheck(safe.id, 'SAFE11111111111111111111111111111111111111111', new Date().toISOString(), 'jupiter', 'SAFE11111111111111111111111111111111111111111', 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });

@@ -293,6 +293,20 @@ describe('watch-only signal analysis', () => {
     db.close();
   });
 
+  it('watch priority helpers remain research-only and do not open paper positions or record real trade attempts', async () => {
+    const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener' });
+    cleanup.push(dir);
+    const db = createDb(config);
+    const tokenId = db.upsertToken(makeLiveCandidate({ movedBeforeDiscoveryPct: 20, liquidityUsd: 15000, volume1hUsd: 150000 }));
+    db.saveScore({ tokenId, scoredAt: new Date().toISOString(), momentumScore: 25, safetyScore: 20, socialScore: 10, totalScore: 55, verdict: 'WATCH', reasons: [], redFlags: [], autopilotBlocked: true, autopilotBlockers: [] });
+    db.upsertWatchOnlyCandidate(tokenId, 'WATCH_ONLY', 'interesting enough to track, unsafe to trade', 1, 1.35, 15000, 7000, 150000, { snapshot: makeLiveCandidate({ movedBeforeDiscoveryPct: 20, liquidityUsd: 15000, volume1hUsd: 150000 }) });
+    const report = buildWatchOnlyReport(db, config) as any;
+    expect(report).toHaveProperty('watchPriorityCounts');
+    expect(db.getOpenPositionCount('PAPER')).toBe(0);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
+    db.close();
+  });
+
   it('watch-report includes signal class summary, profile counts, and priority counts', async () => {
     const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener' });
     cleanup.push(dir);

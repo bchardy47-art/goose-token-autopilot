@@ -182,6 +182,20 @@ export function classifyWatchPriority(input: {
   return 'LOW_WATCH_PRIORITY';
 }
 
+export function deriveWatchResearchSignals(input: {
+  profile: WatchRunnerProfile;
+  liquidityUsd: number | null;
+  volume1hUsd: number | null;
+  momentumScore: number | null;
+  worstDrawdownPct: number | null;
+  priceChange5mPct: number | null;
+  priceChange1hPct: number | null;
+}): { profile: WatchRunnerProfile; priority: WatchPriority } {
+  const profile = input.profile;
+  const priority = classifyWatchPriority(input);
+  return { profile, priority };
+}
+
 export function renderWatchAutopsy(db: AppDb, config: AppConfig): string {
   const candidates = db.listWatchOnlyCandidates();
   const analyses = db.listWatchOnlySignalAnalyses();

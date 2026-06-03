@@ -347,6 +347,7 @@ export interface AppConfig {
   paperEarlyFadeMinHoldMinutes: number;
   paperEarlyFadeMaxBestGainPct: number;
   paperEarlyFadeExitBelowPnlPct: number;
+  paperRequireHighWatchPriority: boolean;
   maxSlippageBps: number;
   minLiquidityUsd: number;
   maxChasePct: number;

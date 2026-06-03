@@ -64,7 +64,7 @@ describe('safety scoring penalties', () => {
     expect(riskyScore.safetyScore).toBeLessThan(safeScore.safetyScore);
     expect(riskyScore.reasons).toContain('holder concentration risky');
     expect(qualifiesForWatchOnly(riskyCandidate, riskyScore).ok).toBe(true);
-    expect(isPaperResearchBlocked({ ...riskyCandidate, sellQuoteAvailable: 'YES', estimatedSlippageBps: 120 }, riskyScore, config)).toBeNull();
+    expect(isPaperResearchBlocked({ ...riskyCandidate, sellQuoteAvailable: 'YES', estimatedSlippageBps: 120 }, riskyScore, config)).toBe('watch priority below paper requirement');
   });
 
   it('verify-safety still says real trading locked', () => {

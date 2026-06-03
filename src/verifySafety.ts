@@ -25,6 +25,7 @@ export function verifySafety(config: AppConfig): Record<string, unknown> {
     paperEarlyFadeMinHoldMinutes: config.paperEarlyFadeMinHoldMinutes,
     paperEarlyFadeMaxBestGainPct: config.paperEarlyFadeMaxBestGainPct,
     paperEarlyFadeExitBelowPnlPct: config.paperEarlyFadeExitBelowPnlPct,
+    paperRequireHighWatchPriority: config.paperRequireHighWatchPriority,
     paperTradingSimulatedOnly: true,
     watchOnlyResearchOnly: true,
     walletSigningConfigured: false,

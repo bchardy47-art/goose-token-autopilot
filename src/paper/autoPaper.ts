@@ -4,6 +4,7 @@ import type { AppDb } from '../db';
 import type { AppConfig, AutoPaperDecision, PaperEligibilityDiagnosticRow, QuoteSellabilityCheckRow, TokenCandidate, TokenScoreResult } from '../types';
 import { paperBuy } from '../trading/paper';
 import { AppLogger } from '../logger';
+import { classifyWatchPriority, classifyWatchRunnerProfile } from '../watchOnly';
 
 function tokenAgeMinutes(candidate: TokenCandidate): number {
   return (Date.now() - new Date(candidate.tokenCreatedAt).getTime()) / 60_000;
@@ -74,6 +75,28 @@ export function isPaperResearchBlocked(snapshot: TokenCandidate | null, score: T
   if (score.totalScore < config.paperMinTotalScore) return 'total score below paper minimum';
   if (score.safetyScore < config.paperMinSafetyScore) return 'safety score below paper minimum';
   if (score.momentumScore < config.paperMinMomentumScore) return 'momentum score below paper minimum';
+  if (config.paperRequireHighWatchPriority) {
+    const profile = classifyWatchRunnerProfile({
+      momentumScore: score.momentumScore,
+      safetyScore: score.safetyScore,
+      volume1hUsd: snapshot.volume1hUsd,
+      liquidityUsd: snapshot.liquidityUsd,
+      priceChange5mPct: snapshot.priceChange5mPct,
+      priceChange1hPct: snapshot.priceChange1hPct,
+      holderConcentration: snapshot.holderConcentration,
+      priceUsd: snapshot.priceUsd
+    });
+    const priority = classifyWatchPriority({
+      profile,
+      liquidityUsd: snapshot.liquidityUsd,
+      volume1hUsd: snapshot.volume1hUsd,
+      momentumScore: score.momentumScore,
+      worstDrawdownPct: null,
+      priceChange5mPct: snapshot.priceChange5mPct,
+      priceChange1hPct: snapshot.priceChange1hPct
+    });
+    if (profile !== 'RUNNER_PROFILE' || priority !== 'HIGH_WATCH_PRIORITY') return 'watch priority below paper requirement';
+  }
   return null;
 }
 
