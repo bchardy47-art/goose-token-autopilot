@@ -4,6 +4,7 @@ import { createDb } from '../src/db';
 import { makeTestConfig, seedScoredDb } from './helpers';
 import { applyLatestQuoteResultToSnapshot, buildPaperEligibilityDiagnostics, isPaperQuoteReady, isPaperResearchBlocked, runAutoPaper } from '../src/paper/autoPaper';
 import { buildFreshCandidateWatchlist, renderFreshCandidateWatchlist } from '../src/paper/freshWatchlist';
+import { buildTooEarlyWatchReport, renderTooEarlyWatchReport } from '../src/paper/tooEarlyWatch';
 import { paperBuy } from '../src/trading/paper';
 import { runPaperReview, runPaperReviewLoop } from '../src/paper/review';
 import { buildPaperPerformanceReport } from '../src/paper/performance';
@@ -925,6 +926,31 @@ describe('live paper loop', () => {
     cleanup.push(dir);
     const output = renderFreshCandidateWatchlist(db, config, { maxAgeMinutes: 30, limit: 5 });
     expect(output).toContain('Fresh Candidate Watchlist');
+    expect(output).toContain('No paper buys opened.');
+    expect(output).toContain('Real trading remains locked.');
+    expect(db.getOpenPositionCount('PAPER')).toBe(0);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
+    db.close();
+  });
+
+  it('too-early-watch stays read-only and classifies early candidates', async () => {
+    const { dir, config, db } = await seedScoredDb({ PAPER_REQUIRE_HIGH_WATCH_PRIORITY: 'false' } as any);
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const snapshot = db.getLatestSnapshot(safe.id)!;
+    snapshot.dataUpdatedAt = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    snapshot.tokenCreatedAt = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    snapshot.sellQuoteAvailable = 'YES';
+    snapshot.estimatedSlippageBps = 100;
+    snapshot.holderConcentration = 'SAFE';
+    db.insertSnapshot(safe.id, snapshot);
+
+    const report = buildTooEarlyWatchReport(db, config, { maxAgeMinutes: 15, limit: 10 });
+    const output = renderTooEarlyWatchReport(db, config, { maxAgeMinutes: 15, limit: 10 });
+    const row = report.candidates.find((candidate) => candidate.tokenId === safe.id);
+
+    expect(row?.recommendation).toBe('RECHECK_SOON');
+    expect(output).toContain('Too-Early Watch Lane');
     expect(output).toContain('No paper buys opened.');
     expect(output).toContain('Real trading remains locked.');
     expect(db.getOpenPositionCount('PAPER')).toBe(0);

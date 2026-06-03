@@ -11,6 +11,7 @@ import { runAutopilot } from './autopilot/runAutopilot';
 import { buildPaperEligibilityDiagnostics, runAutoPaper } from './paper/autoPaper';
 import { renderFreshCandidateWatchlist } from './paper/freshWatchlist';
 import { renderFreshRejectionAnalytics } from './paper/freshRejections';
+import { renderTooEarlyWatchReport } from './paper/tooEarlyWatch';
 import { runPaperReview, runPaperReviewLoop, type PaperReviewLoopCycleSummary } from './paper/review';
 import { buildPaperPerformanceReport } from './paper/performance';
 import { buildDailyReport, renderPaperAutopsy, renderPaperDashboard } from './paper/dailyReport';
@@ -102,6 +103,12 @@ async function main(): Promise<void> {
         const maxAgeMinutes = parseNumberArg('--max-age-minutes', 60, { min: 0 });
         const limit = parseNumberArg('--limit', 5, { integer: true, min: 1 });
         console.log(renderFreshRejectionAnalytics(db, config, { maxAgeMinutes, limit }));
+        break;
+      }
+      case 'token:too-early-watch': {
+        const maxAgeMinutes = parseNumberArg('--max-age-minutes', 15, { min: 0 });
+        const limit = parseNumberArg('--limit', 10, { integer: true, min: 1 });
+        console.log(renderTooEarlyWatchReport(db, config, { maxAgeMinutes, limit }));
         break;
       }
       case 'token:paper-review':
