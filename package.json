@@ -14,6 +14,7 @@
     "token:auto-paper": "tsx src/cli.ts token:auto-paper",
     "token:paper-eligibility": "tsx src/cli.ts token:paper-eligibility",
     "token:fresh-watchlist": "tsx src/cli.ts token:fresh-watchlist",
+    "token:fresh-rejections": "tsx src/cli.ts token:fresh-rejections",
     "token:paper-review": "tsx src/cli.ts token:paper-review",
     "token:paper-review-loop": "tsx src/cli.ts token:paper-review-loop",
     "token:paper-performance": "tsx src/cli.ts token:paper-performance",

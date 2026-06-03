@@ -10,6 +10,7 @@ import { activateKillSwitch } from './kill';
 import { runAutopilot } from './autopilot/runAutopilot';
 import { buildPaperEligibilityDiagnostics, runAutoPaper } from './paper/autoPaper';
 import { renderFreshCandidateWatchlist } from './paper/freshWatchlist';
+import { renderFreshRejectionAnalytics } from './paper/freshRejections';
 import { runPaperReview, runPaperReviewLoop, type PaperReviewLoopCycleSummary } from './paper/review';
 import { buildPaperPerformanceReport } from './paper/performance';
 import { buildDailyReport, renderPaperAutopsy, renderPaperDashboard } from './paper/dailyReport';
@@ -95,6 +96,12 @@ async function main(): Promise<void> {
         const maxAgeMinutes = parseNumberArg('--max-age-minutes', 30, { min: 0 });
         const limit = parseNumberArg('--limit', 10, { integer: true, min: 1 });
         console.log(renderFreshCandidateWatchlist(db, config, { maxAgeMinutes, limit }));
+        break;
+      }
+      case 'token:fresh-rejections': {
+        const maxAgeMinutes = parseNumberArg('--max-age-minutes', 60, { min: 0 });
+        const limit = parseNumberArg('--limit', 5, { integer: true, min: 1 });
+        console.log(renderFreshRejectionAnalytics(db, config, { maxAgeMinutes, limit }));
         break;
       }
       case 'token:paper-review':
