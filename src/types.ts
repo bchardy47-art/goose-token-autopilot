@@ -343,6 +343,10 @@ export interface AppConfig {
   paperTrailingStopEnabled: boolean;
   paperTrailingActivationPct: number;
   paperTrailingStopPct: number;
+  paperEarlyFadeExitEnabled: boolean;
+  paperEarlyFadeMinHoldMinutes: number;
+  paperEarlyFadeMaxBestGainPct: number;
+  paperEarlyFadeExitBelowPnlPct: number;
   maxSlippageBps: number;
   minLiquidityUsd: number;
   maxChasePct: number;

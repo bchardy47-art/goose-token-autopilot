@@ -91,12 +91,18 @@ export async function runPaperReview(db: AppDb, config: AppConfig): Promise<Pape
 
       if (pnlPct >= config.paperTakeProfitPct) reason = 'take_profit';
       else if (pnlPct <= config.paperStopLossPct) reason = 'stop_loss';
-      else if (minutesHeld >= config.paperMaxHoldMinutes) reason = 'max_hold_time';
       else if (
         config.paperTrailingStopEnabled &&
         bestGainPct >= config.paperTrailingActivationPct &&
         pullbackFromPeakPct >= config.paperTrailingStopPct
       ) reason = 'trailing_stop';
+      else if (
+        config.paperEarlyFadeExitEnabled &&
+        minutesHeld >= config.paperEarlyFadeMinHoldMinutes &&
+        bestGainPct < config.paperEarlyFadeMaxBestGainPct &&
+        pnlPct <= config.paperEarlyFadeExitBelowPnlPct
+      ) reason = 'early_fade';
+      else if (minutesHeld >= config.paperMaxHoldMinutes) reason = 'max_hold_time';
 
       const refreshMeta = {
         priceRefreshed: (oldSnapshot?.priceUsd ?? null) !== (newSnapshot?.priceUsd ?? null),
@@ -104,6 +110,9 @@ export async function runPaperReview(db: AppDb, config: AppConfig): Promise<Pape
         newPriceUsd: newSnapshot?.priceUsd ?? null,
         pullbackFromPeakPct,
         bestGainPct,
+        earlyFadeMinHoldMinutes: config.paperEarlyFadeMinHoldMinutes,
+        earlyFadeMaxBestGainPct: config.paperEarlyFadeMaxBestGainPct,
+        earlyFadeExitBelowPnlPct: config.paperEarlyFadeExitBelowPnlPct,
         refreshError: newSnapshot ? null : 'refresh_failed_or_missing_snapshot'
       };
 

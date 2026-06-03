@@ -358,6 +358,68 @@ describe('live paper loop', () => {
     db.close();
   });
 
+  it('early fade does not trigger before min hold time', async () => {
+    const { dir, config, db } = await seedScoredDb({ PAPER_EARLY_FADE_EXIT_ENABLED: 'true', PAPER_EARLY_FADE_MIN_HOLD_MINUTES: '30', PAPER_EARLY_FADE_MAX_BEST_GAIN_PCT: '15', PAPER_EARLY_FADE_EXIT_BELOW_PNL_PCT: '-8' } as any);
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    db.createQuoteSellabilityCheck(safe.id, 'SAFE11111111111111111111111111111111111111111', new Date().toISOString(), 'jupiter', 'SAFE11111111111111111111111111111111111111111', 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
+    await runAutoPaper(db, config);
+    const open = db.listPositions('PAPER').find((position) => position.status === 'OPEN')!;
+    vi.spyOn(scanner, 'refreshSnapshotsForTokenAddresses').mockImplementation(async () => {
+      const refreshed = db.getLatestSnapshot(open.tokenId)!;
+      refreshed.priceUsd = open.entryPriceUsd * 0.9;
+      db.insertSnapshot(open.tokenId, refreshed);
+      return { refreshed: 1, tokenIds: [open.tokenId] };
+    });
+    const review = await runPaperReview(db, config);
+    expect(review.decisions.some((decision) => decision.reason === 'early_fade')).toBe(false);
+    db.close();
+  });
+
+  it('early fade does not trigger if bestGainPct reached activation threshold', async () => {
+    const { dir, config, db } = await seedScoredDb({ PAPER_EARLY_FADE_EXIT_ENABLED: 'true', PAPER_EARLY_FADE_MIN_HOLD_MINUTES: '30', PAPER_EARLY_FADE_MAX_BEST_GAIN_PCT: '15', PAPER_EARLY_FADE_EXIT_BELOW_PNL_PCT: '-8' } as any);
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    db.createQuoteSellabilityCheck(safe.id, 'SAFE11111111111111111111111111111111111111111', new Date().toISOString(), 'jupiter', 'SAFE11111111111111111111111111111111111111111', 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
+    await runAutoPaper(db, config);
+    const open = db.listPositions('PAPER').find((position) => position.status === 'OPEN')!;
+    const rise = db.getLatestSnapshot(open.tokenId)!;
+    rise.priceUsd = open.entryPriceUsd * 1.2;
+    db.insertSnapshot(open.tokenId, rise);
+    db.sqlite.prepare("UPDATE positions SET opened_at = ? WHERE id = ?").run(new Date(Date.now() - 40 * 60 * 1000).toISOString(), open.id);
+    vi.spyOn(scanner, 'refreshSnapshotsForTokenAddresses').mockImplementation(async () => {
+      const refreshed = db.getLatestSnapshot(open.tokenId)!;
+      refreshed.priceUsd = open.entryPriceUsd * 0.9;
+      db.insertSnapshot(open.tokenId, refreshed);
+      return { refreshed: 1, tokenIds: [open.tokenId] };
+    });
+    const review = await runPaperReview(db, config);
+    expect(review.decisions.some((decision) => decision.reason === 'early_fade')).toBe(false);
+    db.close();
+  });
+
+  it('early fade closes weak/choppy position after min hold and pnl below threshold', async () => {
+    const { dir, config, db } = await seedScoredDb({ PAPER_EARLY_FADE_EXIT_ENABLED: 'true', PAPER_EARLY_FADE_MIN_HOLD_MINUTES: '30', PAPER_EARLY_FADE_MAX_BEST_GAIN_PCT: '15', PAPER_EARLY_FADE_EXIT_BELOW_PNL_PCT: '-8' } as any);
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    db.createQuoteSellabilityCheck(safe.id, 'SAFE11111111111111111111111111111111111111111', new Date().toISOString(), 'jupiter', 'SAFE11111111111111111111111111111111111111111', 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
+    await runAutoPaper(db, config);
+    const open = db.listPositions('PAPER').find((position) => position.status === 'OPEN')!;
+    const rise = db.getLatestSnapshot(open.tokenId)!;
+    rise.priceUsd = open.entryPriceUsd * 1.08;
+    db.insertSnapshot(open.tokenId, rise);
+    db.sqlite.prepare("UPDATE positions SET opened_at = ? WHERE id = ?").run(new Date(Date.now() - 40 * 60 * 1000).toISOString(), open.id);
+    vi.spyOn(scanner, 'refreshSnapshotsForTokenAddresses').mockImplementation(async () => {
+      const refreshed = db.getLatestSnapshot(open.tokenId)!;
+      refreshed.priceUsd = open.entryPriceUsd * 0.89;
+      db.insertSnapshot(open.tokenId, refreshed);
+      return { refreshed: 1, tokenIds: [open.tokenId] };
+    });
+    const review = await runPaperReview(db, config);
+    expect(review.decisions.some((decision) => decision.reason === 'early_fade')).toBe(true);
+    db.close();
+  });
+
   it('if refresh fails, paper-review holds/reviews using existing snapshot and does not crash', async () => {
     const { dir, config, db } = await seedScoredDb({ PAPER_MAX_HOLD_MINUTES: '60' });
     cleanup.push(dir);
@@ -478,6 +540,10 @@ describe('live paper loop', () => {
     expect(status).toHaveProperty('paperTrailingStopEnabled');
     expect(status).toHaveProperty('paperTrailingActivationPct');
     expect(status).toHaveProperty('paperTrailingStopPct');
+    expect(status).toHaveProperty('paperEarlyFadeExitEnabled');
+    expect(status).toHaveProperty('paperEarlyFadeMinHoldMinutes');
+    expect(status).toHaveProperty('paperEarlyFadeMaxBestGainPct');
+    expect(status).toHaveProperty('paperEarlyFadeExitBelowPnlPct');
   });
 
   it('paper-dashboard renders open positions, closed positions, summary totals, and safety footer', async () => {
