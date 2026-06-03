@@ -2,12 +2,12 @@ import { AppLogger } from '../logger';
 import type { AppDb } from '../db';
 import type { AppConfig, TokenCandidate } from '../types';
 import { enrichCandidate } from '../enrichment/enrichCandidate';
-import { DexScreenerTokenSource } from './dexscreenerSource';
+import { DexScreenerTokenSource, createDexScreenerSourceFromConfig } from './dexscreenerSource';
 import { FixtureTokenSource } from './fixtureSource';
 import type { TokenSource } from './source';
 
 export function createTokenSource(config: AppConfig): TokenSource {
-  return config.tokenSource === 'dexscreener' ? new DexScreenerTokenSource() : new FixtureTokenSource();
+  return config.tokenSource === 'dexscreener' ? createDexScreenerSourceFromConfig(config) : new FixtureTokenSource();
 }
 
 async function persistCandidates(db: AppDb, config: AppConfig, candidates: TokenCandidate[]): Promise<number[]> {
@@ -33,14 +33,15 @@ export async function refreshSnapshotsForTokenAddresses(db: AppDb, config: AppCo
   return summary;
 }
 
-export async function runScan(db: AppDb, config: AppConfig, logger = new AppLogger()): Promise<{ scanned: number; source: string; tokenIds: number[] }> {
+export async function runScan(db: AppDb, config: AppConfig, logger = new AppLogger()): Promise<{ scanned: number; source: string; tokenIds: number[]; sourceSummary?: Record<string, unknown> | null }> {
   const runLogId = db.createRunLog('token:scan');
   try {
     const source = createTokenSource(config);
     const candidates = await source.fetchCandidates();
     const tokenIds = await persistCandidates(db, config, candidates);
+    const sourceSummary = source instanceof DexScreenerTokenSource ? source.getLastFetchSummary() : null;
 
-    const summary = { scanned: candidates.length, source: source.name, tokenIds };
+    const summary = { scanned: candidates.length, source: source.name, tokenIds, sourceSummary };
     db.finishRunLog(runLogId, 'SUCCESS', summary);
     logger.info('Token scan completed', summary);
     return summary;

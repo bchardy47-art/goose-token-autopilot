@@ -411,6 +411,10 @@ export interface AppConfig {
   maxChasePct: number;
   minTokenAgeMin: number;
   maxTokenAgeHours: number;
+  dexScreenerMaxPairAgeMinutes: number;
+  dexScreenerMaxDataAgeMinutes: number;
+  dexScreenerMaxMovedBeforeDiscoveryPct: number;
+  dexScreenerFreshDiscoveryLimit: number;
   minSafetyScoreForAutopilot: number;
   minMomentumScoreForAutopilot: number;
   minTotalScoreForAutopilot: number;
