@@ -105,6 +105,26 @@ CREATE TABLE IF NOT EXISTS paper_performance_snapshots (
   FOREIGN KEY(token_id) REFERENCES tokens(id)
 );
 
+CREATE TABLE IF NOT EXISTS paper_entry_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  position_id INTEGER NOT NULL,
+  token_id INTEGER NOT NULL,
+  captured_at TEXT NOT NULL,
+  profile TEXT,
+  priority TEXT,
+  score_total REAL,
+  score_safety REAL,
+  score_momentum REAL,
+  verdict TEXT,
+  data_age_minutes REAL,
+  token_age_minutes REAL,
+  moved_before_discovery_pct REAL,
+  raw_json TEXT NOT NULL,
+  UNIQUE(position_id),
+  FOREIGN KEY(position_id) REFERENCES positions(id),
+  FOREIGN KEY(token_id) REFERENCES tokens(id)
+);
+
 CREATE TABLE IF NOT EXISTS watch_only_candidates (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   token_id INTEGER NOT NULL,

@@ -48,14 +48,19 @@ describe('functionality', () => {
     db.close();
   });
 
-  it('paper buy opens a position', async () => {
+  it('paper buy opens a position and persists an immutable entry snapshot', async () => {
     const { dir, config, db } = await seedScoredDb();
     cleanup.push(dir);
     const proposal = createTopProposal(db, config)!;
     const result = paperBuy(db, config, { proposalId: proposal.id });
     const openPositions = db.listPositions('PAPER').filter((item) => item.status === 'OPEN');
+    const entry = db.getPaperEntrySnapshot(result.positionId);
     expect(result.positionId).toBeGreaterThan(0);
     expect(openPositions.length).toBe(1);
+    expect(entry).not.toBeNull();
+    expect(entry?.profile).toBeTruthy();
+    expect(entry?.priority).toBeTruthy();
+    expect(entry?.scoreTotal).toBeGreaterThan(0);
     db.close();
   });
 

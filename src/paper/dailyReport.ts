@@ -31,6 +31,12 @@ function renderClosedPosition(position: PaperPositionView): string {
   return `${position.symbol.padEnd(10)} pnl=${fmtPct(position.realizedPnlPct)} usd=${fmtMoney(position.realizedPnlUsd)} best=${fmtPct(position.bestGainPct)} worst=${fmtPct(position.worstDrawdownPct)}`;
 }
 
+function renderEntrySnapshotSummary(db: AppDb, positionId: number): string | null {
+  const entry = db.getPaperEntrySummary(positionId);
+  if (!entry) return null;
+  return `entryProfile=${entry.profile ?? '-'} entryPriority=${entry.priority ?? '-'} score=${entry.scoreTotal ?? '-'} safety=${entry.scoreSafety ?? '-'} momentum=${entry.scoreMomentum ?? '-'} sellQuote=${entry.snapshotSellQuoteAvailable ?? '-'} holder=${entry.snapshotHolderConcentration ?? '-'} movedBeforeDiscovery=${fmtPct(entry.movedBeforeDiscoveryPct)} dataAgeMin=${entry.dataAgeMinutes ?? '-'}`;
+}
+
 export function renderPaperDashboard(db: AppDb, _config: AppConfig): string {
   const report = buildPaperPerformanceReport(db) as any;
   const openPositions = report.openPositions as PaperPositionView[];
@@ -43,11 +49,19 @@ export function renderPaperDashboard(db: AppDb, _config: AppConfig): string {
   lines.push('Paper Trading Dashboard');
   lines.push('');
   lines.push(`Open Positions (${openPositions.length})`);
-  for (const position of openPositions) lines.push(`- ${renderOpenPosition(position)}`);
+  for (const position of openPositions) {
+    lines.push(`- ${renderOpenPosition(position)}`);
+    const entrySummary = renderEntrySnapshotSummary(db, position.id);
+    if (entrySummary) lines.push(`  ${entrySummary}`);
+  }
   if (openPositions.length === 0) lines.push('- none');
   lines.push('');
   lines.push(`Closed Positions (${closedPositions.length})`);
-  for (const position of closedPositions) lines.push(`- ${renderClosedPosition(position)}`);
+  for (const position of closedPositions) {
+    lines.push(`- ${renderClosedPosition(position)}`);
+    const entrySummary = renderEntrySnapshotSummary(db, position.id);
+    if (entrySummary) lines.push(`  ${entrySummary}`);
+  }
   if (closedPositions.length === 0) lines.push('- none');
   lines.push('');
   lines.push('Summary');
@@ -73,17 +87,24 @@ export function renderPaperAutopsy(db: AppDb, _config: AppConfig): string {
   const avgLoserPct = losers.length > 0 ? losers.reduce((sum, position) => sum + (position.realizedPnlPct ?? 0), 0) / losers.length : 0;
   const bestWinner = [...winners].sort((a, b) => (b.realizedPnlUsd ?? 0) - (a.realizedPnlUsd ?? 0))[0] ?? null;
   const worstLoser = [...losers].sort((a, b) => (a.realizedPnlUsd ?? 0) - (b.realizedPnlUsd ?? 0))[0] ?? null;
-  const loserRedFlags = losers.flatMap((position) => db.getLatestScore(position.tokenId)?.redFlags ?? []);
+  const loserEntryRows = losers.map((position) => db.getPaperEntrySummary(position.id)).filter((row): row is NonNullable<ReturnType<AppDb['getPaperEntrySummary']>> => Boolean(row));
+  const loserRedFlags = loserEntryRows.flatMap((row) => row.scoreRedFlags ?? []);
   const lines: string[] = [];
 
   lines.push('Paper Trade Autopsy');
   lines.push('');
   for (const position of closedPositions) {
-    const score = db.getLatestScore(position.tokenId);
-    const snapshot = db.getLatestSnapshot(position.tokenId);
+    const entry = db.getPaperEntrySummary(position.id);
+    const snapshotLabel = entry
+      ? `snapshot liq=${fmtMoney(entry.snapshotLiquidityUsd)} sellQuote=${entry.snapshotSellQuoteAvailable ?? '-'} slip=${entry.snapshotEstimatedSlippageBps ?? '-'} holder=${entry.snapshotHolderConcentration ?? '-'} mintAuth=${entry.snapshotMintAuthority ?? '-'} freezeAuth=${entry.snapshotFreezeAuthority ?? '-'} movedBeforeDiscovery=${fmtPct(entry.movedBeforeDiscoveryPct)} dataAgeMin=${entry.dataAgeMinutes ?? '-'} profile=${entry.profile ?? '-'} priority=${entry.priority ?? '-'}`
+      : 'snapshot unavailable';
+    const scoreLabel = entry
+      ? `score total=${entry.scoreTotal ?? '-'} safety=${entry.scoreSafety ?? '-'} momentum=${entry.scoreMomentum ?? '-'} verdict=${entry.verdict ?? '-'} redFlags=${entry.scoreRedFlags.join(', ') || '-'} reasons=${entry.scoreReasons.slice(0, 3).join(', ') || '-'}`
+      : 'score unavailable';
+
     lines.push(`- ${position.symbol} pnl=${fmtPct(position.realizedPnlPct)} usd=${fmtMoney(position.realizedPnlUsd)} entry=${position.openedAt} exit=${position.closedAt ?? '-'} reason=${position.notes ?? 'unknown'} best=${fmtPct(position.bestGainPct)} worst=${fmtPct(position.worstDrawdownPct)} entryPx=${fmtMoney(position.entryPriceUsd)} exitPx=${fmtMoney(position.exitPriceUsd)}`);
-    lines.push(`  score total=${score?.totalScore ?? '-'} safety=${score?.safetyScore ?? '-'} momentum=${score?.momentumScore ?? '-'} verdict=${score?.verdict ?? '-'} redFlags=${(score?.redFlags ?? []).join(', ') || '-'}`);
-    lines.push(`  snapshot liq=${fmtMoney(snapshot?.liquidityUsd)} sellQuote=${snapshot?.sellQuoteAvailable ?? '-'} slip=${snapshot?.estimatedSlippageBps ?? '-'} holder=${snapshot?.holderConcentration ?? '-'} mintAuth=${snapshot?.mintAuthority ?? '-'} freezeAuth=${snapshot?.freezeAuthority ?? '-'}`);
+    lines.push(`  ${scoreLabel}`);
+    lines.push(`  ${snapshotLabel}`);
   }
   if (closedPositions.length === 0) lines.push('- none');
   lines.push('');

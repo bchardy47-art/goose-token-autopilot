@@ -1,5 +1,6 @@
-import type { AppConfig, PaperPositionView } from '../types';
+import type { AppConfig, PaperEntryContext, PaperPositionView, TokenCandidate, TokenScoreResult } from '../types';
 import type { AppDb } from '../db';
+import { buildPaperEntryContext, getPaperEntryBlocker } from '../paper/entryIntegrity';
 
 function latestPriceOrThrow(db: AppDb, tokenId: number): number {
   const snapshot = db.getLatestSnapshot(tokenId);
@@ -31,26 +32,68 @@ function resolveTokenId(db: AppDb, input: { proposalId?: number; mint?: string; 
   throw new Error('Must provide proposal id, mint, or position id');
 }
 
-function recordEntrySnapshot(db: AppDb, positionId: number, tokenId: number): void {
+function recordEntrySnapshot(db: AppDb, positionId: number, tokenId: number, context: PaperEntryContext): void {
   const position = db.listPositions('PAPER').find((item) => item.id === positionId);
-  const snapshot = db.getLatestSnapshot(tokenId);
   if (!position) return;
   db.createPaperPerformanceSnapshot(
     positionId,
     tokenId,
     new Date().toISOString(),
-    snapshot?.priceUsd ?? null,
+    context.snapshot.priceUsd ?? null,
     0,
     0,
-    snapshot?.liquidityUsd ?? null,
-    snapshot?.marketCapUsd ?? null,
-    snapshot?.volume5mUsd ?? null,
-    snapshot?.volume1hUsd ?? null,
-    { milestone: 'entry' }
+    context.snapshot.liquidityUsd ?? null,
+    context.snapshot.marketCapUsd ?? null,
+    context.snapshot.volume5mUsd ?? null,
+    context.snapshot.volume1hUsd ?? null,
+    { milestone: 'entry', entrySnapshotCapturedAt: context.capturedAt }
   );
+  db.createPaperEntrySnapshot(positionId, tokenId, context);
 }
 
-export function paperBuy(db: AppDb, config: AppConfig, input: { proposalId?: number; mint?: string; amountUsd?: number; paperApproved?: boolean }): { tradeId: number; positionId: number } {
+function resolveEntryContext(
+  db: AppDb,
+  config: AppConfig,
+  tokenId: number,
+  proposalId: number | null,
+  input: { snapshot?: TokenCandidate; score?: TokenScoreResult }
+): PaperEntryContext {
+  const proposal = proposalId ? db.getProposal(proposalId) : null;
+  const snapshot = input.snapshot ?? db.getLatestSnapshot(tokenId);
+  const score = input.score ?? db.getLatestScore(tokenId);
+
+  if (!snapshot) {
+    db.logSafetyEvent(tokenId, 'WARN', 'paper_buy_blocked', 'Paper buy blocked because entry snapshot price is unavailable', { tokenId, proposalId });
+    throw new Error('Latest token snapshot price is unavailable');
+  }
+
+  if (!score) {
+    db.logSafetyEvent(tokenId, 'WARN', 'paper_buy_blocked', 'Paper buy blocked because entry context is missing score or snapshot', { tokenId, proposalId });
+    throw new Error('missing score or snapshot');
+  }
+
+  const blocker = getPaperEntryBlocker(snapshot, score, config);
+  if (blocker) {
+    db.logSafetyEvent(tokenId, 'WARN', 'paper_buy_blocked', `Paper buy blocked because ${blocker}`, {
+      tokenId,
+      proposalId,
+      blocker,
+      sellQuoteAvailable: snapshot.sellQuoteAvailable,
+      estimatedSlippageBps: snapshot.estimatedSlippageBps,
+      movedBeforeDiscoveryPct: snapshot.movedBeforeDiscoveryPct,
+      dataUpdatedAt: snapshot.dataUpdatedAt
+    });
+    throw new Error(blocker);
+  }
+
+  return buildPaperEntryContext(snapshot, score, proposalId, proposal ? JSON.parse(proposal.safety_snapshot_json) as Record<string, unknown> : null);
+}
+
+export function paperBuy(
+  db: AppDb,
+  config: AppConfig,
+  input: { proposalId?: number; mint?: string; amountUsd?: number; paperApproved?: boolean; snapshot?: TokenCandidate; score?: TokenScoreResult }
+): { tradeId: number; positionId: number } {
   const { tokenId, proposalId } = resolveTokenId(db, input);
   const score = db.getLatestScore(tokenId);
 
@@ -75,7 +118,13 @@ export function paperBuy(db: AppDb, config: AppConfig, input: { proposalId?: num
     throw new Error('Daily paper buy cap reached');
   }
 
-  const priceUsd = latestPriceOrThrow(db, tokenId);
+  const entryContext = resolveEntryContext(db, config, tokenId, proposalId, input);
+  const priceUsd = entryContext.snapshot.priceUsd;
+  if (!priceUsd || priceUsd <= 0) {
+    db.logSafetyEvent(tokenId, 'WARN', 'paper_buy_blocked', 'Paper buy blocked because entry snapshot price is unavailable', { tokenId, proposalId, priceUsd });
+    throw new Error('Latest token snapshot price is unavailable');
+  }
+
   const requestedAmount = input.amountUsd ?? Math.min(config.maxBuyUsd, config.maxAutoPaperBuyUsd);
   const amountUsd = Math.min(requestedAmount, config.maxBuyUsd, config.maxBankrollUsd - db.getOpenExposureUsd('PAPER'));
   if (amountUsd <= 0) {
@@ -86,7 +135,7 @@ export function paperBuy(db: AppDb, config: AppConfig, input: { proposalId?: num
   const quantity = amountUsd / priceUsd;
   const tradeId = db.createPaperTrade(tokenId, proposalId, 'BUY', amountUsd, priceUsd, quantity, 'paper buy executed');
   const positionId = db.createPosition(tokenId, 'PAPER', 'OPEN', priceUsd, quantity, amountUsd, 'entry');
-  recordEntrySnapshot(db, positionId, tokenId);
+  recordEntrySnapshot(db, positionId, tokenId, entryContext);
   if (proposalId) db.updateProposalStatus(proposalId, 'EXECUTED');
   return { tradeId, positionId };
 }

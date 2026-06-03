@@ -141,6 +141,36 @@ export interface PaperPositionView {
   notes: string | null;
 }
 
+export interface PaperEntryContext {
+  capturedAt: string;
+  proposalId: number | null;
+  profile: string | null;
+  priority: string | null;
+  snapshot: TokenCandidate;
+  score: TokenScoreResult;
+  proposalSafetySnapshot: Record<string, unknown> | null;
+  tokenAgeMinutes: number;
+  dataAgeMinutes: number;
+  movedBeforeDiscoveryPct: number | null;
+}
+
+export interface PaperEntrySnapshot {
+  id: number;
+  positionId: number;
+  tokenId: number;
+  capturedAt: string;
+  profile: string | null;
+  priority: string | null;
+  scoreTotal: number | null;
+  scoreSafety: number | null;
+  scoreMomentum: number | null;
+  verdict: Verdict | null;
+  dataAgeMinutes: number | null;
+  tokenAgeMinutes: number | null;
+  movedBeforeDiscoveryPct: number | null;
+  rawJson: string;
+}
+
 export interface ReportData {
   latestScanTime: string | null;
   tokensSeen: number;
@@ -214,6 +244,34 @@ export interface PaperPerformanceSnapshot {
   marketCapUsd: number | null;
   volume5mUsd: number | null;
   volume1hUsd: number | null;
+  rawJson: string;
+}
+
+export interface PaperEntrySummaryRow {
+  positionId: number;
+  tokenId: number;
+  symbol: string;
+  mint: string;
+  capturedAt: string;
+  profile: string | null;
+  priority: string | null;
+  scoreTotal: number | null;
+  scoreSafety: number | null;
+  scoreMomentum: number | null;
+  verdict: Verdict | null;
+  dataAgeMinutes: number | null;
+  tokenAgeMinutes: number | null;
+  movedBeforeDiscoveryPct: number | null;
+  snapshotSellQuoteAvailable: AvailabilityStatus | null;
+  snapshotEstimatedSlippageBps: number | null;
+  snapshotHolderConcentration: ConcentrationStatus | null;
+  snapshotMintAuthority: AuthorityStatus | null;
+  snapshotFreezeAuthority: AuthorityStatus | null;
+  snapshotLiquidityUsd: number | null;
+  snapshotPriceUsd: number | null;
+  snapshotDataUpdatedAt: string | null;
+  scoreRedFlags: string[];
+  scoreReasons: string[];
   rawJson: string;
 }
 

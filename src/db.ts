@@ -4,6 +4,9 @@ import Database from 'better-sqlite3';
 import { schemaSql } from './schema';
 import type {
   AppConfig,
+  PaperEntryContext,
+  PaperEntrySnapshot,
+  PaperEntrySummaryRow,
   PaperPerformanceSnapshot,
   PaperPositionView,
   PositionMode,
@@ -38,6 +41,14 @@ function parseJsonArray(value: string): string[] {
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
+  }
+}
+
+function parseJsonObject<T>(value: string): T | null {
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
   }
 }
 
@@ -210,6 +221,29 @@ export class AppDb {
         'INSERT INTO paper_performance_snapshots (position_id, token_id, observed_at, price_usd, unrealized_pnl_usd, unrealized_pnl_pct, liquidity_usd, market_cap_usd, volume_5m_usd, volume_1h_usd, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .run(positionId, tokenId, observedAt, priceUsd, unrealizedPnlUsd, unrealizedPnlPct, liquidityUsd, marketCapUsd, volume5mUsd, volume1hUsd, JSON.stringify(raw));
+    return Number(result.lastInsertRowid);
+  }
+
+  createPaperEntrySnapshot(positionId: number, tokenId: number, context: PaperEntryContext): number {
+    const result = this.sqlite
+      .prepare(
+        'INSERT INTO paper_entry_snapshots (position_id, token_id, captured_at, profile, priority, score_total, score_safety, score_momentum, verdict, data_age_minutes, token_age_minutes, moved_before_discovery_pct, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      )
+      .run(
+        positionId,
+        tokenId,
+        context.capturedAt,
+        context.profile,
+        context.priority,
+        context.score.totalScore,
+        context.score.safetyScore,
+        context.score.momentumScore,
+        context.score.verdict,
+        context.dataAgeMinutes,
+        context.tokenAgeMinutes,
+        context.movedBeforeDiscoveryPct,
+        JSON.stringify(context)
+      );
     return Number(result.lastInsertRowid);
   }
 
@@ -703,7 +737,7 @@ export class AppDb {
 
   getLatestSnapshot(tokenId: number): TokenCandidate | null {
     const row = this.sqlite
-      .prepare('SELECT raw_json FROM token_snapshots WHERE token_id = ? ORDER BY observed_at DESC, id DESC LIMIT 1')
+      .prepare('SELECT raw_json FROM token_snapshots WHERE token_id = ? ORDER BY id DESC LIMIT 1')
       .get(tokenId) as { raw_json: string } | undefined;
     return row ? (JSON.parse(row.raw_json) as TokenCandidate) : null;
   }
@@ -749,7 +783,7 @@ export class AppDb {
            SELECT id FROM token_scores WHERE token_id = t.id ORDER BY scored_at DESC, id DESC LIMIT 1
          )
          LEFT JOIN token_snapshots snap ON snap.id = (
-           SELECT id FROM token_snapshots WHERE token_id = t.id ORDER BY observed_at DESC, id DESC LIMIT 1
+           SELECT id FROM token_snapshots WHERE token_id = t.id ORDER BY id DESC LIMIT 1
          )
          ORDER BY s.total_score DESC, t.last_seen_at DESC
          LIMIT ?`
@@ -774,7 +808,7 @@ export class AppDb {
            SELECT id FROM token_scores WHERE token_id = t.id ORDER BY scored_at DESC, id DESC LIMIT 1
          )
          LEFT JOIN token_snapshots snap ON snap.id = (
-           SELECT id FROM token_snapshots WHERE token_id = t.id ORDER BY observed_at DESC, id DESC LIMIT 1
+           SELECT id FROM token_snapshots WHERE token_id = t.id ORDER BY id DESC LIMIT 1
          )
          ORDER BY COALESCE(s.total_score, 0) DESC, t.last_seen_at DESC
          LIMIT ?`
@@ -878,6 +912,73 @@ export class AppDb {
       }));
   }
 
+  getPaperEntrySnapshot(positionId: number): PaperEntrySnapshot | null {
+    const row = this.sqlite.prepare('SELECT * FROM paper_entry_snapshots WHERE position_id = ? ORDER BY captured_at DESC, id DESC LIMIT 1').get(positionId) as any;
+    if (!row) return null;
+    return {
+      id: row.id,
+      positionId: row.position_id,
+      tokenId: row.token_id,
+      capturedAt: row.captured_at,
+      profile: row.profile,
+      priority: row.priority,
+      scoreTotal: row.score_total,
+      scoreSafety: row.score_safety,
+      scoreMomentum: row.score_momentum,
+      verdict: row.verdict,
+      dataAgeMinutes: row.data_age_minutes,
+      tokenAgeMinutes: row.token_age_minutes,
+      movedBeforeDiscoveryPct: row.moved_before_discovery_pct,
+      rawJson: row.raw_json
+    };
+  }
+
+  getPaperEntrySummary(positionId: number): PaperEntrySummaryRow | null {
+    return this.listPaperEntrySnapshots().find((row) => row.positionId === positionId) ?? null;
+  }
+
+  listPaperEntrySnapshots(): PaperEntrySummaryRow[] {
+    const rows = this.sqlite
+      .prepare(
+        `SELECT pes.*, t.symbol, t.mint
+         FROM paper_entry_snapshots pes
+         JOIN tokens t ON t.id = pes.token_id
+         ORDER BY pes.captured_at DESC, pes.id DESC`
+      )
+      .all() as any[];
+
+    return rows.map((row) => {
+      const raw = parseJsonObject<PaperEntryContext>(row.raw_json);
+      return {
+        positionId: row.position_id,
+        tokenId: row.token_id,
+        symbol: row.symbol,
+        mint: row.mint,
+        capturedAt: row.captured_at,
+        profile: row.profile,
+        priority: row.priority,
+        scoreTotal: row.score_total,
+        scoreSafety: row.score_safety,
+        scoreMomentum: row.score_momentum,
+        verdict: row.verdict,
+        dataAgeMinutes: row.data_age_minutes,
+        tokenAgeMinutes: row.token_age_minutes,
+        movedBeforeDiscoveryPct: row.moved_before_discovery_pct,
+        snapshotSellQuoteAvailable: raw?.snapshot.sellQuoteAvailable ?? null,
+        snapshotEstimatedSlippageBps: raw?.snapshot.estimatedSlippageBps ?? null,
+        snapshotHolderConcentration: raw?.snapshot.holderConcentration ?? null,
+        snapshotMintAuthority: raw?.snapshot.mintAuthority ?? null,
+        snapshotFreezeAuthority: raw?.snapshot.freezeAuthority ?? null,
+        snapshotLiquidityUsd: raw?.snapshot.liquidityUsd ?? null,
+        snapshotPriceUsd: raw?.snapshot.priceUsd ?? null,
+        snapshotDataUpdatedAt: raw?.snapshot.dataUpdatedAt ?? null,
+        scoreRedFlags: raw?.score.redFlags ?? [],
+        scoreReasons: raw?.score.reasons ?? [],
+        rawJson: row.raw_json
+      } satisfies PaperEntrySummaryRow;
+    });
+  }
+
   listPositions(mode: PositionMode = 'PAPER'): PaperPositionView[] {
     const rows = this.sqlite
       .prepare(
@@ -885,7 +986,7 @@ export class AppDb {
          FROM positions p
          JOIN tokens t ON t.id = p.token_id
          LEFT JOIN token_snapshots snap ON snap.id = (
-           SELECT id FROM token_snapshots WHERE token_id = p.token_id ORDER BY observed_at DESC, id DESC LIMIT 1
+           SELECT id FROM token_snapshots WHERE token_id = p.token_id ORDER BY id DESC LIMIT 1
          )
          WHERE p.mode = ?
          ORDER BY p.status ASC, p.opened_at DESC`

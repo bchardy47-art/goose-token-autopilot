@@ -200,7 +200,7 @@ describe('live paper loop', () => {
     db.close();
   });
 
-  it('MAX_CHASE alone does not block simulated paper if score/quote gates pass', async () => {
+  it('MAX_CHASE now blocks paper entries that are already too late', async () => {
     const { dir, config, db } = await seedScoredDb();
     cleanup.push(dir);
     const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
@@ -208,7 +208,7 @@ describe('live paper loop', () => {
     snapshot.sellQuoteAvailable = 'YES';
     snapshot.estimatedSlippageBps = 100;
     snapshot.movedBeforeDiscoveryPct = config.maxChasePct + 50;
-    expect(isPaperResearchBlocked(snapshot, db.getLatestScore(safe.id)!, config)).toBeNull();
+    expect(isPaperResearchBlocked(snapshot, db.getLatestScore(safe.id)!, config)).toMatch(/MAX_CHASE_PCT/);
     db.close();
   });
 
@@ -575,7 +575,7 @@ describe('live paper loop', () => {
     expect(status).toHaveProperty('paperEarlyFadeExitBelowPnlPct');
   });
 
-  it('paper-dashboard renders open positions, closed positions, summary totals, and safety footer', async () => {
+  it('paper-dashboard renders entry snapshot summary alongside positions and safety footer', async () => {
     const { dir, config, db } = await seedScoredDb();
     cleanup.push(dir);
     const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
@@ -591,6 +591,8 @@ describe('live paper loop', () => {
     expect(dashboard).toContain('Open Positions');
     expect(dashboard).toContain('Closed Positions');
     expect(dashboard).toContain('Summary');
+    expect(dashboard).toContain('entryProfile=');
+    expect(dashboard).toContain('entryPriority=');
     expect(dashboard).toContain('Real trading remains locked.');
     expect(dashboard).toContain('Paper only.');
     expect(db.getOpenPositionCount('PAPER')).toBeGreaterThanOrEqual(0);
@@ -598,15 +600,18 @@ describe('live paper loop', () => {
     db.close();
   });
 
-  it('paper-autopsy renders closed winners and losers with score/snapshot fields, summary counts, and safety footer', async () => {
+  it('paper-autopsy renders immutable entry-time score/snapshot/profile/priority fields with summary counts and safety footer', async () => {
     const { dir, config, db } = await seedScoredDb();
     cleanup.push(dir);
     const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
     db.createQuoteSellabilityCheck(safe.id, 'SAFE11111111111111111111111111111111111111111', new Date().toISOString(), 'jupiter', 'SAFE11111111111111111111111111111111111111111', 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
     await runAutoPaper(db, config);
     const open = db.listPositions('PAPER').find((position) => position.status === 'OPEN')!;
+    const originalEntry = db.getPaperEntrySummary(open.id)!;
     const snap = db.getLatestSnapshot(open.tokenId)!;
     snap.priceUsd = open.entryPriceUsd * 1.6;
+    snap.sellQuoteAvailable = 'UNKNOWN';
+    snap.holderConcentration = 'RISKY';
     db.insertSnapshot(open.tokenId, snap);
     await runPaperReview(db, config);
     const autopsy = renderPaperAutopsy(db, config);
@@ -616,6 +621,9 @@ describe('live paper loop', () => {
     expect(autopsy).toContain('losers count');
     expect(autopsy).toContain('score total=');
     expect(autopsy).toContain('snapshot liq=');
+    expect(autopsy).toContain(`sellQuote=${originalEntry.snapshotSellQuoteAvailable}`);
+    expect(autopsy).toContain(`profile=${originalEntry.profile}`);
+    expect(autopsy).toContain(`priority=${originalEntry.priority}`);
     expect(autopsy).toContain('Real trading remains locked. Paper only.');
     expect(db.getOpenPositionCount('PAPER')).toBeGreaterThanOrEqual(0);
     expect(db.getBlockedRealTradeAttempts()).toBe(0);
@@ -647,7 +655,7 @@ describe('live paper loop', () => {
     db.close();
   });
 
-  it('paper-eligibility blockers do not include creator status unknown, data stale, or MAX_CHASE when paper gates pass', async () => {
+  it('paper-eligibility blockers now include stale entry data and already-moved MAX_CHASE entries', async () => {
     const { dir, config, db } = await seedScoredDb();
     cleanup.push(dir);
     const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
@@ -660,12 +668,12 @@ describe('live paper loop', () => {
     const report = buildPaperEligibilityDiagnostics(db, config) as any;
     const candidate = report.topClosestCandidates.find((row: any) => row.tokenId === safe.id);
     expect(candidate).toBeTruthy();
-    expect(JSON.stringify(candidate.blockers)).not.toMatch(/creator status unknown|data stale|MAX_CHASE/);
-    expect(JSON.stringify(report.topWarnings)).toMatch(/creator status unknown|data stale|MAX_CHASE|token moved above MAX_CHASE_PCT before discovery/);
+    expect(JSON.stringify(candidate.blockers)).toMatch(/entry data stale blocks paper eligibility|moved before discovery blocks paper eligibility/);
+    expect(JSON.stringify(report.topWarnings)).toMatch(/creator status unknown|token moved above MAX_CHASE_PCT before discovery/);
     db.close();
   });
 
-  it('eligibleForPaperCount uses blockers, not warnings and topSkipReasons counts blockers only', async () => {
+  it('eligibleForPaperCount still uses blockers, not warnings, and creator UNKNOWN remains warning-only', async () => {
     const { dir, config, db } = await seedScoredDb();
     cleanup.push(dir);
     const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
@@ -675,8 +683,8 @@ describe('live paper loop', () => {
     db.insertSnapshot(safe.id, safeSnapshot);
     const report = buildPaperEligibilityDiagnostics(db, config) as any;
     expect(report.eligibleForPaperCount).toBeGreaterThanOrEqual(1);
-    expect(JSON.stringify(report.topSkipReasons)).not.toMatch(/creator status unknown|data stale|MAX_CHASE/);
-    expect(JSON.stringify(report.topWarnings)).toMatch(/creator status unknown|data stale|MAX_CHASE|holder concentration/);
+    expect(JSON.stringify(report.topSkipReasons)).not.toMatch(/creator status unknown/);
+    expect(JSON.stringify(report.topWarnings)).toMatch(/creator status unknown|holder concentration/);
     db.close();
   });
 
@@ -708,15 +716,16 @@ describe('live paper loop', () => {
     db.close();
   });
 
-  it('daily-report works', async () => {
+  it('daily-report works and includes new paper entry integrity counters', async () => {
     const { dir, config, db } = await seedScoredDb();
     cleanup.push(dir);
     await runAutoPaper(db, config);
-    const report = buildDailyReport(db, config);
+    const report = buildDailyReport(db, config) as any;
     expect(report).toHaveProperty('tokensScannedToday');
     expect(report).toHaveProperty('topRedFlags');
     expect(report).toHaveProperty('paperEligibilitySummary');
     expect(report).toHaveProperty('finalSafetyStatus');
+    expect(report.paperEligibilitySummary).toHaveProperty('topSkipReasons');
     db.close();
   });
 
