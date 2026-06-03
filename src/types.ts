@@ -221,6 +221,7 @@ export interface PaperEligibilityDiagnosticRow {
   holderConcentration: ConcentrationStatus | null;
   verdict: Verdict | null;
   blockers: string[];
+  warnings: string[];
   distanceToPaperScore: number | null;
   dataAgeMinutes: number | null;
   isEntryStale: boolean;
@@ -229,6 +230,9 @@ export interface PaperEligibilityDiagnosticRow {
   blockerCount: number;
   warningCount: number;
   usefulRankReason: string;
+  sourceUrl: string | null;
+  watchProfile: string | null;
+  watchPriority: string | null;
 }
 
 export interface PaperReviewDecision {

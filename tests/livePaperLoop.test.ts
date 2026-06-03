@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDb } from '../src/db';
 import { makeTestConfig, seedScoredDb } from './helpers';
 import { applyLatestQuoteResultToSnapshot, buildPaperEligibilityDiagnostics, isPaperQuoteReady, isPaperResearchBlocked, runAutoPaper } from '../src/paper/autoPaper';
+import { buildFreshCandidateWatchlist, renderFreshCandidateWatchlist } from '../src/paper/freshWatchlist';
 import { paperBuy } from '../src/trading/paper';
 import { runPaperReview, runPaperReviewLoop } from '../src/paper/review';
 import { buildPaperPerformanceReport } from '../src/paper/performance';
@@ -866,6 +867,66 @@ describe('live paper loop', () => {
     expect(ids.indexOf(blockedId)).toBeGreaterThanOrEqual(0);
     expect(ids.indexOf(safe.id)).toBeLessThan(ids.indexOf(blockedId));
     expect(after.topClosestCandidates.find((row: any) => row.tokenId === safe.id)?.usefulRankReason).toBe('eligible now');
+    expect(db.getOpenPositionCount('PAPER')).toBe(0);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
+    db.close();
+  });
+
+  it('fresh-watchlist filters out stale candidates above max age and stays read-only', async () => {
+    const { dir, config, db } = await seedScoredDb({ PAPER_REQUIRE_HIGH_WATCH_PRIORITY: 'false' } as any);
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const staleSnapshot = { ...db.getLatestSnapshot(safe.id)!, dataUpdatedAt: new Date(Date.now() - 90 * 60 * 1000).toISOString() };
+    db.insertSnapshot(safe.id, staleSnapshot);
+
+    const report = buildFreshCandidateWatchlist(db, config, { maxAgeMinutes: 30, limit: 10 });
+    expect(report.candidates.every((row) => (row.dataAgeMinutes ?? Number.POSITIVE_INFINITY) <= 30)).toBe(true);
+    expect(db.getOpenPositionCount('PAPER')).toBe(0);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
+    db.close();
+  });
+
+  it('fresh-watchlist shows fresh blocked candidates and ranks no-blocker fresh candidates first', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const safeSnapshot = db.getLatestSnapshot(safe.id)!;
+    db.createQuoteSellabilityCheck(safe.id, safeSnapshot.mint, new Date().toISOString(), 'jupiter', safeSnapshot.mint, 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
+
+    const blockedCandidate = {
+      ...safeSnapshot,
+      mint: 'FWBLOCK111111111111111111111111111111111111',
+      symbol: 'FWBLK',
+      name: 'Fresh Watch Blocked',
+      dataUpdatedAt: new Date().toISOString(),
+      sellQuoteAvailable: 'UNKNOWN' as const,
+      estimatedSlippageBps: null,
+      sourceUrl: 'fixture://fresh-watch-blocked'
+    };
+    const blockedId = db.upsertToken(blockedCandidate);
+    db.insertSnapshot(blockedId, blockedCandidate);
+
+    const report = buildFreshCandidateWatchlist(db, config, { maxAgeMinutes: 30, limit: 10 });
+    const blockedRow = report.candidates.find((row) => row.tokenId === blockedId);
+    const ids = report.candidates.map((row) => row.tokenId);
+
+    expect(blockedRow).toBeTruthy();
+    expect(blockedRow?.blockers.join(' ')).toMatch(/sell quote unknown|watch priority|score/);
+    expect(ids.indexOf(safe.id)).toBeGreaterThanOrEqual(0);
+    expect(ids.indexOf(blockedId)).toBeGreaterThanOrEqual(0);
+    expect(ids.indexOf(safe.id)).toBeLessThan(ids.indexOf(blockedId));
+    expect(db.getOpenPositionCount('PAPER')).toBe(0);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
+    db.close();
+  });
+
+  it('fresh-watchlist render includes no paper buys opened and real trading locked', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const output = renderFreshCandidateWatchlist(db, config, { maxAgeMinutes: 30, limit: 5 });
+    expect(output).toContain('Fresh Candidate Watchlist');
+    expect(output).toContain('No paper buys opened.');
+    expect(output).toContain('Real trading remains locked.');
     expect(db.getOpenPositionCount('PAPER')).toBe(0);
     expect(db.getBlockedRealTradeAttempts()).toBe(0);
     db.close();

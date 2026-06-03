@@ -9,6 +9,7 @@ import { verifySafety } from './verifySafety';
 import { activateKillSwitch } from './kill';
 import { runAutopilot } from './autopilot/runAutopilot';
 import { buildPaperEligibilityDiagnostics, runAutoPaper } from './paper/autoPaper';
+import { renderFreshCandidateWatchlist } from './paper/freshWatchlist';
 import { runPaperReview, runPaperReviewLoop, type PaperReviewLoopCycleSummary } from './paper/review';
 import { buildPaperPerformanceReport } from './paper/performance';
 import { buildDailyReport, renderPaperAutopsy, renderPaperDashboard } from './paper/dailyReport';
@@ -90,6 +91,12 @@ async function main(): Promise<void> {
       case 'token:paper-eligibility':
         console.log(JSON.stringify(buildPaperEligibilityDiagnostics(db, config), null, 2));
         break;
+      case 'token:fresh-watchlist': {
+        const maxAgeMinutes = parseNumberArg('--max-age-minutes', 30, { min: 0 });
+        const limit = parseNumberArg('--limit', 10, { integer: true, min: 1 });
+        console.log(renderFreshCandidateWatchlist(db, config, { maxAgeMinutes, limit }));
+        break;
+      }
       case 'token:paper-review':
         console.log(JSON.stringify(await runPaperReview(db, config), null, 2));
         break;

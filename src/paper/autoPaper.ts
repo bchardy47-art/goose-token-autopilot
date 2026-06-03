@@ -4,7 +4,7 @@ import type { AppDb } from '../db';
 import type { AppConfig, AutoPaperDecision, PaperEligibilityDiagnosticRow } from '../types';
 import { paperBuy } from '../trading/paper';
 import { AppLogger } from '../logger';
-import { applyLatestQuoteResultToSnapshot, buildPaperEntryContext, getPaperEntryBlockers, isAutoPaperResearchBlocked, isPaperQuoteReady, minutesSince } from './entryIntegrity';
+import { applyLatestQuoteResultToSnapshot, buildPaperEntryContext, derivePaperEntryWatchSignals, getPaperEntryBlockers, isAutoPaperResearchBlocked, isPaperQuoteReady, minutesSince } from './entryIntegrity';
 
 export { applyLatestQuoteResultToSnapshot, isPaperQuoteReady } from './entryIntegrity';
 export const isPaperResearchBlocked = isAutoPaperResearchBlocked;
@@ -28,7 +28,7 @@ function buildUsefulRankReason(row: PaperEligibilityDiagnosticRow, config: AppCo
   return `closest by blocker count=${row.blockerCount} distance=${row.distanceToPaperScore ?? 'n/a'} score=${row.totalScore ?? 'n/a'}`;
 }
 
-function rankPaperEligibilityRows(left: PaperEligibilityDiagnosticRow, right: PaperEligibilityDiagnosticRow, config: AppConfig): number {
+export function rankPaperEligibilityRows(left: PaperEligibilityDiagnosticRow, right: PaperEligibilityDiagnosticRow, config: AppConfig): number {
   const eligibleDelta = Number(left.blockerCount !== 0) - Number(right.blockerCount !== 0);
   if (eligibleDelta !== 0) return eligibleDelta;
 
@@ -84,7 +84,8 @@ export function buildPaperEligibilityDiagnostics(db: AppDb, config: AppConfig): 
     const dataAgeMinutes = diagnosticSnapshot?.dataUpdatedAt ? Number(minutesSince(diagnosticSnapshot.dataUpdatedAt).toFixed(4)) : null;
     const movedBeforeDiscoveryPct = diagnosticSnapshot?.movedBeforeDiscoveryPct ?? preparedSnapshot?.movedBeforeDiscoveryPct ?? null;
 
-    const row: PaperEligibilityDiagnosticRow & { warnings: string[] } = {
+    const watchSignals = derivePaperEntryWatchSignals(diagnosticSnapshot, preparedScore);
+    const row: PaperEligibilityDiagnosticRow = {
       tokenId: state.tokenId,
       symbol: state.symbol,
       mint: state.mint,
@@ -107,7 +108,10 @@ export function buildPaperEligibilityDiagnostics(db: AppDb, config: AppConfig): 
       isMovedBeforeDiscoveryBlocked: uniqueBlockers.includes('moved before discovery blocks paper eligibility'),
       blockerCount: uniqueBlockers.length,
       warningCount: warnings.length,
-      usefulRankReason: ''
+      usefulRankReason: '',
+      sourceUrl: diagnosticSnapshot?.sourceUrl ?? preparedSnapshot?.sourceUrl ?? null,
+      watchProfile: watchSignals.profile,
+      watchPriority: watchSignals.priority
     };
     row.usefulRankReason = buildUsefulRankReason(row, config);
     return row;
@@ -148,6 +152,7 @@ export function buildPaperEligibilityDiagnostics(db: AppDb, config: AppConfig): 
     topSkipReasons: topItems(rows.flatMap((row) => row.blockers)),
     topWarnings: topItems(rows.flatMap((row) => row.warnings)),
     topClosestCandidates: closest,
+    allCandidates: rows,
     finalSafetyStatus: 'Real trading remains locked.'
   };
 }
