@@ -12,7 +12,7 @@ import { buildPaperEligibilityDiagnostics, runAutoPaper } from './paper/autoPape
 import { runPaperReview, runPaperReviewLoop, type PaperReviewLoopCycleSummary } from './paper/review';
 import { buildPaperPerformanceReport } from './paper/performance';
 import { buildDailyReport, renderPaperAutopsy, renderPaperDashboard } from './paper/dailyReport';
-import { buildWatchOnlyReport, runWatchOnly } from './watchOnly';
+import { buildWatchOnlyReport, renderWatchAutopsy, runWatchOnly } from './watchOnly';
 import { runWatchOutcomes } from './watchOutcomes';
 import { runWatchAnalysis } from './watchAnalysis';
 import { runWatchCycle, runWatchLoop } from './watchLoop';
@@ -151,6 +151,9 @@ async function main(): Promise<void> {
         break;
       case 'token:watch-report':
         console.log(JSON.stringify(buildWatchOnlyReport(db, config), null, 2));
+        break;
+      case 'token:watch-autopsy':
+        console.log(renderWatchAutopsy(db, config));
         break;
       case 'token:verify-safety':
         console.log(JSON.stringify(verifySafety(config), null, 2));

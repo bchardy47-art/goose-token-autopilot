@@ -21,6 +21,7 @@
     "token:daily-report": "tsx src/cli.ts token:daily-report",
     "token:watch-only": "tsx src/cli.ts token:watch-only",
     "token:watch-report": "tsx src/cli.ts token:watch-report",
+    "token:watch-autopsy": "tsx src/cli.ts token:watch-autopsy",
     "token:watch-outcomes": "tsx src/cli.ts token:watch-outcomes",
     "token:watch-analysis": "tsx src/cli.ts token:watch-analysis",
     "token:watch-cycle": "tsx src/cli.ts token:watch-cycle",

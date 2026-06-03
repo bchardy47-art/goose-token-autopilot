@@ -4,7 +4,7 @@ import { createDb } from '../src/db';
 import { makeTestConfig } from './helpers';
 import { normalizeDexScreenerCandidate } from '../src/scanner/dexscreenerSource';
 import { classifyWatchOnlyCandidate, runWatchAnalysis, summarizeWatchOnlySignalAnalysis } from '../src/watchAnalysis';
-import { buildWatchOnlyReport } from '../src/watchOnly';
+import { buildWatchOnlyReport, renderWatchAutopsy } from '../src/watchOnly';
 import { buildDailyReport } from '../src/paper/dailyReport';
 import { verifySafety } from '../src/verifySafety';
 
@@ -190,6 +190,40 @@ describe('watch-only signal analysis', () => {
     const report = buildWatchOnlyReport(db, config);
     expect(report).toHaveProperty('watchOnlySignalClassCounts');
     expect(report).toHaveProperty('analysisSummaryLine', 'Watch-only analysis is research only.');
+    db.close();
+  });
+
+  it('watch-autopsy renders runner and dump sections, aggregate comparison, red flag comparisons, and safety footer', async () => {
+    const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'dexscreener' });
+    cleanup.push(dir);
+    const db = createDb(config);
+
+    const runnerTokenId = db.upsertToken(makeLiveCandidate({ mint: 'RunnerMint111', symbol: 'RUN', movedBeforeDiscoveryPct: 20, sellQuoteAvailable: 'YES', holderConcentration: 'SAFE', mintAuthority: 'SAFE', freezeAuthority: 'SAFE' }));
+    db.saveScore({ tokenId: runnerTokenId, scoredAt: new Date().toISOString(), momentumScore: 30, safetyScore: 25, socialScore: 10, totalScore: 65, verdict: 'WATCH', reasons: ['runner signal'], redFlags: ['creator status unknown'], autopilotBlocked: true, autopilotBlockers: [] });
+    db.upsertWatchOnlyCandidate(runnerTokenId, 'WATCH_ONLY', 'runner', 1, 1.8, 15000, 9000, 30000, { snapshot: makeLiveCandidate({ mint: 'RunnerMint111', symbol: 'RUN', movedBeforeDiscoveryPct: 20, sellQuoteAvailable: 'YES', holderConcentration: 'SAFE', mintAuthority: 'SAFE', freezeAuthority: 'SAFE' }) });
+    db.sqlite.prepare(`UPDATE watch_only_candidates
+      SET latest_price_usd = ?, best_price_usd = ?, worst_price_usd = ?, best_gain_pct = ?, worst_drawdown_pct = ?, liquidity_usd = ?, volume_5m_usd = ?, volume_1h_usd = ?
+      WHERE token_id = ?`).run(1.8, 1.8, 0.95, 80, -5, 15000, 9000, 30000, runnerTokenId);
+
+    const dumpTokenId = db.upsertToken(makeLiveCandidate({ mint: 'DumpMint111', symbol: 'DMP', movedBeforeDiscoveryPct: 10, sellQuoteAvailable: 'UNKNOWN', holderConcentration: 'RISKY', mintAuthority: 'SAFE', freezeAuthority: 'SAFE' }));
+    db.saveScore({ tokenId: dumpTokenId, scoredAt: new Date().toISOString(), momentumScore: 12, safetyScore: 14, socialScore: 5, totalScore: 31, verdict: 'AVOID', reasons: ['dump signal'], redFlags: ['sell quote unknown', 'holder concentration risky'], autopilotBlocked: true, autopilotBlockers: [] });
+    db.upsertWatchOnlyCandidate(dumpTokenId, 'WATCH_ONLY', 'dump', 1, 0.7, 8000, 4000, 12000, { snapshot: makeLiveCandidate({ mint: 'DumpMint111', symbol: 'DMP', movedBeforeDiscoveryPct: 10, sellQuoteAvailable: 'UNKNOWN', holderConcentration: 'RISKY', mintAuthority: 'SAFE', freezeAuthority: 'SAFE' }) });
+    db.sqlite.prepare(`UPDATE watch_only_candidates
+      SET latest_price_usd = ?, best_price_usd = ?, worst_price_usd = ?, best_gain_pct = ?, worst_drawdown_pct = ?, liquidity_usd = ?, volume_5m_usd = ?, volume_1h_usd = ?
+      WHERE token_id = ?`).run(0.7, 1.05, 0.3, 5, -70, 8000, 4000, 12000, dumpTokenId);
+
+    await runWatchAnalysis(db, config);
+    const autopsy = renderWatchAutopsy(db, config);
+    expect(autopsy).toContain('Watch-Only Winner Autopsy');
+    expect(autopsy).toContain('Top Runners');
+    expect(autopsy).toContain('Top Dumps');
+    expect(autopsy).toContain('Runner vs Dump Comparison');
+    expect(autopsy).toContain('common red flags among runners');
+    expect(autopsy).toContain('common red flags among dumps');
+    expect(autopsy).toContain('Watch-only analysis is research only.');
+    expect(autopsy).toContain('Real trading remains locked.');
+    expect(db.getOpenPositionCount('PAPER')).toBe(0);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
     db.close();
   });
 

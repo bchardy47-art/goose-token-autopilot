@@ -86,6 +86,129 @@ export async function runWatchOnly(db: AppDb, config: AppConfig, logger = new Ap
   }
 }
 
+function fmtPct(value: number | null | undefined): string {
+  return value === null || value === undefined ? '-' : `${value.toFixed(2)}%`;
+}
+
+function fmtNum(value: number | null | undefined): string {
+  return value === null || value === undefined ? '-' : value.toFixed(2);
+}
+
+function median(values: number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+function countItems(items: string[], limit = 10): Array<{ value: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const item of items) counts.set(item, (counts.get(item) ?? 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([value, count]) => ({ value, count }));
+}
+
+export function renderWatchAutopsy(db: AppDb, config: AppConfig): string {
+  const candidates = db.listWatchOnlyCandidates();
+  const analyses = db.listWatchOnlySignalAnalyses();
+  const states = db.listLatestTokenStates(200);
+  const stateByTokenId = new Map(states.map((state) => [state.tokenId, state]));
+  const analysisByTokenId = new Map(analyses.map((analysis) => [analysis.tokenId, analysis]));
+  const outcomeSummary = summarizeWatchOutcomes(db, config) as any;
+  const classCounts = summarizeWatchOnlySignalAnalysis(db).watchOnlySignalClassCounts as Record<string, number>;
+
+  const rows = candidates.map((candidate) => {
+    const state = stateByTokenId.get(candidate.tokenId);
+    const score = state?.score;
+    const snapshot = state?.snapshot;
+    const signalClass = analysisByTokenId.get(candidate.tokenId)?.signalClass ?? 'UNCLASSIFIED';
+    return {
+      symbol: state?.symbol ?? JSON.parse(candidate.rawJson || '{}')?.snapshot?.symbol ?? `T${candidate.tokenId}`,
+      tokenId: candidate.tokenId,
+      signalClass,
+      bestGainPct: candidate.bestGainPct,
+      worstDrawdownPct: candidate.worstDrawdownPct,
+      entryPriceUsd: candidate.entryPriceUsd,
+      latestPriceUsd: candidate.latestPriceUsd,
+      bestPriceUsd: candidate.bestPriceUsd,
+      liquidityUsd: candidate.liquidityUsd ?? snapshot?.liquidityUsd ?? null,
+      volume5mUsd: candidate.volume5mUsd ?? snapshot?.volume5mUsd ?? null,
+      volume1hUsd: candidate.volume1hUsd ?? snapshot?.volume1hUsd ?? null,
+      totalScore: score?.totalScore ?? null,
+      safetyScore: score?.safetyScore ?? null,
+      momentumScore: score?.momentumScore ?? null,
+      verdict: score?.verdict ?? null,
+      redFlags: score?.redFlags ?? [],
+      mintAuthority: snapshot?.mintAuthority ?? null,
+      freezeAuthority: snapshot?.freezeAuthority ?? null,
+      holderConcentration: snapshot?.holderConcentration ?? null,
+      creatorStatus: snapshot?.creatorStatus ?? null,
+      sellQuoteAvailable: snapshot?.sellQuoteAvailable ?? null,
+      estimatedSlippageBps: snapshot?.estimatedSlippageBps ?? null,
+      movedBeforeDiscoveryPct: snapshot?.movedBeforeDiscoveryPct ?? null,
+      dataUpdatedAt: snapshot?.dataUpdatedAt ?? null
+    };
+  });
+
+  const runners = rows.filter((row) => row.signalClass === 'EARLY_RUNNER' || row.signalClass === 'LATE_RUNNER');
+  const dumps = rows.filter((row) => row.signalClass === 'INSTANT_DUMP' || row.signalClass === 'DEAD_NOISE');
+  const topRunners = [...rows].sort((a, b) => (b.bestGainPct ?? Number.NEGATIVE_INFINITY) - (a.bestGainPct ?? Number.NEGATIVE_INFINITY)).slice(0, 10);
+  const topDumps = [...rows].sort((a, b) => (a.worstDrawdownPct ?? Number.POSITIVE_INFINITY) - (b.worstDrawdownPct ?? Number.POSITIVE_INFINITY)).slice(0, 10);
+  const runnerFlags = runners.flatMap((row) => row.redFlags);
+  const dumpFlags = dumps.flatMap((row) => row.redFlags);
+  const runnerSignals = countItems(runnerFlags.filter((flag) => !dumpFlags.includes(flag)));
+  const dumpSignals = countItems(dumpFlags.filter((flag) => !runnerFlags.includes(flag)));
+  const runnerLiquidity = median(runners.map((row) => row.liquidityUsd).filter((v): v is number => v !== null));
+  const dumpLiquidity = median(dumps.map((row) => row.liquidityUsd).filter((v): v is number => v !== null));
+  const runnerVol1h = median(runners.map((row) => row.volume1hUsd).filter((v): v is number => v !== null));
+  const dumpVol1h = median(dumps.map((row) => row.volume1hUsd).filter((v): v is number => v !== null));
+  const runnerMomentum = median(runners.map((row) => row.momentumScore).filter((v): v is number => v !== null));
+  const dumpMomentum = median(dumps.map((row) => row.momentumScore).filter((v): v is number => v !== null));
+  const runnerSafety = median(runners.map((row) => row.safetyScore).filter((v): v is number => v !== null));
+  const dumpSafety = median(dumps.map((row) => row.safetyScore).filter((v): v is number => v !== null));
+  const sellBreakdown = (group: typeof rows) => countItems(group.map((row) => row.sellQuoteAvailable ?? 'UNKNOWN'));
+  const holderBreakdown = (group: typeof rows) => countItems(group.map((row) => row.holderConcentration ?? 'UNKNOWN'));
+
+  const lines: string[] = [];
+  lines.push('Watch-Only Winner Autopsy');
+  lines.push('');
+  lines.push('Summary');
+  lines.push(`- total watch-only candidates: ${candidates.length}`);
+  lines.push(`- EARLY_RUNNER: ${classCounts.EARLY_RUNNER ?? 0}`);
+  lines.push(`- LATE_RUNNER: ${classCounts.LATE_RUNNER ?? 0}`);
+  lines.push(`- INSTANT_DUMP: ${classCounts.INSTANT_DUMP ?? 0}`);
+  lines.push(`- DEAD_NOISE: ${classCounts.DEAD_NOISE ?? 0}`);
+  lines.push(`- TOO_DANGEROUS: ${classCounts.TOO_DANGEROUS ?? 0}`);
+  if (outcomeSummary.averageReturnByWindow) lines.push(`- average return by window: ${JSON.stringify(outcomeSummary.averageReturnByWindow)}`);
+  if (outcomeSummary.medianReturnByWindow) lines.push(`- median return by window: ${JSON.stringify(outcomeSummary.medianReturnByWindow)}`);
+  if (outcomeSummary.takeProfitHitPctByWindow) lines.push(`- take-profit hit % by window: ${JSON.stringify(outcomeSummary.takeProfitHitPctByWindow)}`);
+  if (outcomeSummary.stopLossHitPctByWindow) lines.push(`- stop-loss hit % by window: ${JSON.stringify(outcomeSummary.stopLossHitPctByWindow)}`);
+  lines.push('');
+  lines.push('Top Runners');
+  for (const row of topRunners) lines.push(`- ${row.symbol} tokenId=${row.tokenId} best=${fmtPct(row.bestGainPct)} worst=${fmtPct(row.worstDrawdownPct)} liq=${fmtNum(row.liquidityUsd)} v1h=${fmtNum(row.volume1hUsd)} total=${fmtNum(row.totalScore)} safety=${fmtNum(row.safetyScore)} momentum=${fmtNum(row.momentumScore)} verdict=${row.verdict ?? '-'} redFlags=${row.redFlags.join(', ') || '-'} mint=${row.mintAuthority ?? '-'} freeze=${row.freezeAuthority ?? '-'} holder=${row.holderConcentration ?? '-'} creator=${row.creatorStatus ?? '-'} sellQuote=${row.sellQuoteAvailable ?? '-'} slip=${row.estimatedSlippageBps ?? '-'} movedBefore=${fmtNum(row.movedBeforeDiscoveryPct)} updated=${row.dataUpdatedAt ?? '-'}`);
+  lines.push('');
+  lines.push('Top Dumps');
+  for (const row of topDumps) lines.push(`- ${row.symbol} tokenId=${row.tokenId} best=${fmtPct(row.bestGainPct)} worst=${fmtPct(row.worstDrawdownPct)} liq=${fmtNum(row.liquidityUsd)} v1h=${fmtNum(row.volume1hUsd)} total=${fmtNum(row.totalScore)} safety=${fmtNum(row.safetyScore)} momentum=${fmtNum(row.momentumScore)} verdict=${row.verdict ?? '-'} redFlags=${row.redFlags.join(', ') || '-'} mint=${row.mintAuthority ?? '-'} freeze=${row.freezeAuthority ?? '-'} holder=${row.holderConcentration ?? '-'} creator=${row.creatorStatus ?? '-'} sellQuote=${row.sellQuoteAvailable ?? '-'} slip=${row.estimatedSlippageBps ?? '-'} movedBefore=${fmtNum(row.movedBeforeDiscoveryPct)} updated=${row.dataUpdatedAt ?? '-'}`);
+  lines.push('');
+  lines.push('Runner vs Dump Comparison');
+  lines.push(`- common red flags among runners: ${countItems(runnerFlags).map((x) => `${x.value} (${x.count})`).join(', ') || 'none'}`);
+  lines.push(`- common red flags among dumps: ${countItems(dumpFlags).map((x) => `${x.value} (${x.count})`).join(', ') || 'none'}`);
+  lines.push(`- runner-heavy signals: ${runnerSignals.map((x) => `${x.value} (${x.count})`).join(', ') || 'none'}`);
+  lines.push(`- dump-heavy signals: ${dumpSignals.map((x) => `${x.value} (${x.count})`).join(', ') || 'none'}`);
+  lines.push(`- median liquidity runners vs dumps: ${fmtNum(runnerLiquidity)} vs ${fmtNum(dumpLiquidity)}`);
+  lines.push(`- median volume1h runners vs dumps: ${fmtNum(runnerVol1h)} vs ${fmtNum(dumpVol1h)}`);
+  lines.push(`- median momentum runners vs dumps: ${fmtNum(runnerMomentum)} vs ${fmtNum(dumpMomentum)}`);
+  lines.push(`- median safety runners vs dumps: ${fmtNum(runnerSafety)} vs ${fmtNum(dumpSafety)}`);
+  lines.push(`- sellQuoteAvailable runners: ${JSON.stringify(sellBreakdown(runners))}`);
+  lines.push(`- sellQuoteAvailable dumps: ${JSON.stringify(sellBreakdown(dumps))}`);
+  lines.push(`- holderConcentration runners: ${JSON.stringify(holderBreakdown(runners))}`);
+  lines.push(`- holderConcentration dumps: ${JSON.stringify(holderBreakdown(dumps))}`);
+  lines.push('');
+  lines.push('Watch-only analysis is research only.');
+  lines.push('Real trading remains locked.');
+  lines.push('Paper only unless explicitly running paper commands.');
+  return lines.join('\n');
+}
+
 export function buildWatchOnlyReport(db: AppDb, config?: AppConfig): Record<string, unknown> {
   const candidates = db.listWatchOnlyCandidates();
   const today = new Date().toISOString().slice(0, 10);
