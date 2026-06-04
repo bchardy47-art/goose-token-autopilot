@@ -20,6 +20,7 @@
     "token:near-miss": "tsx src/cli.ts token:near-miss",
     "token:study-winners": "tsx src/cli.ts token:study-winners",
     "token:winner-profile": "tsx src/cli.ts token:winner-profile",
+    "token:early-signal-filter": "tsx src/cli.ts token:early-signal-filter",
     "token:watch-refresh": "tsx src/cli.ts token:watch-refresh",
     "token:paper-review": "tsx src/cli.ts token:paper-review",
     "token:paper-review-loop": "tsx src/cli.ts token:paper-review-loop",
