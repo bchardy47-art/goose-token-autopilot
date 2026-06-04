@@ -38,6 +38,7 @@ import { runSafetyEnrich } from './safetyEnrich';
 import { buildSafetyEnrichDebugReport, renderSafetyEnrichDebug } from './safetyEnrichDebug';
 import { buildSafetyRpcProofReport, renderSafetyRpcProof } from './safetyRpcProof';
 import { runQuoteCheck } from './quoteCheck';
+import { renderHistoricalWinnerAutopsy } from './paper/historicalWinnerAutopsy';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -315,6 +316,13 @@ async function main(): Promise<void> {
       case 'token:autopilot':
         console.log(JSON.stringify(await runAutopilot(db, config), null, 2));
         break;
+      case 'token:historical-winner-autopsy': {
+        const minGain = parseNumberArg('--min-gain', 100, { min: 0 });
+        const limit = parseNumberArg('--limit', 50, { integer: true, min: 1 });
+        const top = parseNumberArg('--top', 20, { integer: true, min: 1 });
+        console.log(renderHistoricalWinnerAutopsy(db, config, { minGain, limit, top }));
+        break;
+      }
       default:
         throw new Error(`Unknown command: ${command}`);
     }
