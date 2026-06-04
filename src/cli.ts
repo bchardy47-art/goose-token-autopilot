@@ -40,6 +40,7 @@ import { buildSafetyRpcProofReport, renderSafetyRpcProof } from './safetyRpcProo
 import { runQuoteCheck } from './quoteCheck';
 import { renderHistoricalWinnerAutopsy } from './paper/historicalWinnerAutopsy';
 import { buildShadowCandidateReport, renderShadowCandidateReport } from './paper/shadowCandidateReport';
+import { runEarlyRefreshLoop, renderEarlyRefreshLoopResult } from './paper/earlyRefreshLoop';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -317,6 +318,27 @@ async function main(): Promise<void> {
       case 'token:autopilot':
         console.log(JSON.stringify(await runAutopilot(db, config), null, 2));
         break;
+      case 'token:early-refresh-loop': {
+        const windowHours = parseNumberArg('--window-hours', 6, { min: 0 });
+        const limit = parseNumberArg('--limit', 20, { integer: true, min: 1 });
+        const cycles = parseNumberArg('--cycles', 4, { integer: true, min: 1 });
+        const intervalMinutes = parseNumberArg('--interval-minutes', 15, { min: 0 });
+        const dryRun = process.argv.includes('--dry-run');
+        const result = await runEarlyRefreshLoop(db, config, {
+          windowHours,
+          limit,
+          maxCycles: cycles,
+          intervalMs: intervalMinutes * 60_000,
+          dryRun,
+          onCycle: (s) => {
+            console.log(
+              `[early-refresh-loop] cycle ${s.cycleNumber}: due=${s.dueWindows} refreshRan=${s.refreshRan} snapshots=${s.snapshotsInserted}`
+            );
+          },
+        });
+        console.log(renderEarlyRefreshLoopResult(result));
+        break;
+      }
       case 'token:shadow-candidate-report': {
         const hours = parseNumberArg('--hours', 6, { min: 0 });
         const limit = parseNumberArg('--limit', 50, { integer: true, min: 1 });
