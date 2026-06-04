@@ -24,6 +24,7 @@
     "token:profile-match-outcomes": "tsx src/cli.ts token:profile-match-outcomes",
     "token:dump-risk-profile": "tsx src/cli.ts token:dump-risk-profile",
     "token:dump-risk-forward-validation": "tsx src/cli.ts token:dump-risk-forward-validation",
+    "token:dump-risk-subtypes": "tsx src/cli.ts token:dump-risk-subtypes",
     "token:watch-refresh": "tsx src/cli.ts token:watch-refresh",
     "token:paper-review": "tsx src/cli.ts token:paper-review",
     "token:paper-review-loop": "tsx src/cli.ts token:paper-review-loop",
