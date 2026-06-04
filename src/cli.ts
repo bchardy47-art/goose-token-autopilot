@@ -16,6 +16,7 @@ import { renderTokenSessionSummary } from './paper/sessionSummary';
 import { renderNearMissShadowReport } from './paper/nearMiss';
 import { renderWinnerStudyReport } from './paper/studyWinners';
 import { renderWinnerProfileReport } from './paper/winnerProfile';
+import { renderEarlySignalFilterReport } from './paper/earlySignalFilter';
 import { runWatchRefresh, renderWatchRefreshReport } from './paper/watchRefresh';
 import { runPaperReview, runPaperReviewLoop, type PaperReviewLoopCycleSummary } from './paper/review';
 import { buildPaperPerformanceReport } from './paper/performance';
@@ -133,6 +134,15 @@ async function main(): Promise<void> {
         const minGain = parseNumberArg('--min-gain', 50, { min: 0 });
         const topN = parseNumberArg('--top', 10, { integer: true, min: 1 });
         console.log(renderWinnerProfileReport(db, config, { minGainPct: minGain, top: topN }));
+        break;
+      }
+      case 'token:early-signal-filter': {
+        const limit = parseNumberArg('--limit', 25, { integer: true, min: 1 });
+        const windowHours = parseNumberArg('--window-hours', 72, { min: 0 });
+        const minBsr = parseNumberArg('--min-bsr', 1.5, { min: 0 });
+        const maxMoved = parseNumberArg('--max-moved', 100, { min: 0 });
+        const minPc5m = parseNumberArg('--min-pc5m', 40, { min: 0 });
+        console.log(renderEarlySignalFilterReport(db, config, { limit, windowHours, minBsr, maxMoved, minPc5m }));
         break;
       }
       case 'token:watch-refresh': {
