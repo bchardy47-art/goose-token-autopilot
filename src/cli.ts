@@ -23,6 +23,7 @@ import { renderDumpRiskForwardValidationReport } from './paper/dumpRiskForwardVa
 import { renderDumpRiskSubtypesReport } from './paper/dumpRiskSubtypes';
 import { renderDecayRateReport } from './paper/decayRate';
 import { buildEarlyRefreshPlan, renderEarlyRefreshPlan } from './paper/earlyRefreshPlan';
+import { buildScanRejectionReport, renderScanRejectionReport } from './paper/scanRejectionReport';
 import { runWatchRefresh, renderWatchRefreshReport } from './paper/watchRefresh';
 import { runPaperReview, runPaperReviewLoop, type PaperReviewLoopCycleSummary } from './paper/review';
 import { buildPaperPerformanceReport } from './paper/performance';
@@ -166,6 +167,13 @@ async function main(): Promise<void> {
         const limit = parseNumberArg('--limit', 121, { integer: true, min: 1 });
         const top = parseNumberArg('--top', 10, { integer: true, min: 1 });
         console.log(renderDecayRateReport(db, config, { limit, top }));
+        break;
+      }
+      case 'token:scan-rejection-report': {
+        const hours = parseNumberArg('--hours', 6, { min: 0 });
+        const limit = parseNumberArg('--limit', 50, { integer: true, min: 1 });
+        const top = parseNumberArg('--top', 20, { integer: true, min: 1 });
+        console.log(renderScanRejectionReport(buildScanRejectionReport(db, config, { hours, limit, top })));
         break;
       }
       case 'token:early-refresh-plan': {
