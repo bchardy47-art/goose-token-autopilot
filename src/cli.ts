@@ -39,6 +39,7 @@ import { buildSafetyEnrichDebugReport, renderSafetyEnrichDebug } from './safetyE
 import { buildSafetyRpcProofReport, renderSafetyRpcProof } from './safetyRpcProof';
 import { runQuoteCheck } from './quoteCheck';
 import { renderHistoricalWinnerAutopsy } from './paper/historicalWinnerAutopsy';
+import { buildShadowCandidateReport, renderShadowCandidateReport } from './paper/shadowCandidateReport';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -316,6 +317,25 @@ async function main(): Promise<void> {
       case 'token:autopilot':
         console.log(JSON.stringify(await runAutopilot(db, config), null, 2));
         break;
+      case 'token:shadow-candidate-report': {
+        const hours = parseNumberArg('--hours', 6, { min: 0 });
+        const limit = parseNumberArg('--limit', 50, { integer: true, min: 1 });
+        const top = parseNumberArg('--top', 20, { integer: true, min: 1 });
+        const minLiquidity = parseNumberArg('--min-liquidity', 50_000, { min: 0 });
+        const maxMoved = parseNumberArg('--max-moved', 25, { min: 0 });
+        const minBsr = parseNumberArg('--min-bsr', 2.0, { min: 0 });
+        const minPc5m = parseNumberArg('--min-pc5m', 3, { min: 0 });
+        const maxPc5m = parseNumberArg('--max-pc5m', 75, { min: 0 });
+        const maxSlippageBps = parseNumberArg('--max-slippage-bps', 200, { min: 0 });
+        console.log(
+          renderShadowCandidateReport(
+            buildShadowCandidateReport(db, config, {
+              hours, limit, top, minLiquidity, maxMoved, minBsr, minPc5m, maxPc5m, maxSlippageBps,
+            })
+          )
+        );
+        break;
+      }
       case 'token:historical-winner-autopsy': {
         const minGain = parseNumberArg('--min-gain', 100, { min: 0 });
         const limit = parseNumberArg('--limit', 50, { integer: true, min: 1 });

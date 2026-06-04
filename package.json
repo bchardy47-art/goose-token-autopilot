@@ -52,6 +52,7 @@
     "token:kill": "tsx src/cli.ts token:kill",
     "token:autopilot": "tsx src/cli.ts token:autopilot",
     "token:historical-winner-autopsy": "tsx src/cli.ts token:historical-winner-autopsy",
+    "token:shadow-candidate-report": "tsx src/cli.ts token:shadow-candidate-report",
     "test": "vitest run"
   },
   "dependencies": {
