@@ -13,7 +13,7 @@ function parsePoolDetails(candidate: TokenCandidate): { lpOrPoolAddress: string 
 }
 
 export async function enrichCandidate(db: AppDb, config: AppConfig, candidate: TokenCandidate): Promise<{ candidate: TokenCandidate; enrichment: SolanaSafetyEnrichment | null }> {
-  if (!config.enableSolanaSafetyEnrichment || candidate.chain !== 'solana' || candidate.source !== 'dexscreener') {
+  if (!config.enableSolanaSafetyEnrichment || candidate.chain !== 'solana' || !['dexscreener', 'geckoterminal'].includes(candidate.source)) {
     return { candidate, enrichment: null };
   }
 

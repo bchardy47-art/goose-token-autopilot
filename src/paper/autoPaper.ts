@@ -4,7 +4,7 @@ import type { AppDb } from '../db';
 import type { AppConfig, AutoPaperDecision, PaperEligibilityDiagnosticRow } from '../types';
 import { paperBuy } from '../trading/paper';
 import { AppLogger } from '../logger';
-import { applyLatestQuoteResultToSnapshot, buildPaperEntryContext, getPaperEntryBlockers, isAutoPaperResearchBlocked, isPaperQuoteReady } from './entryIntegrity';
+import { applyLatestQuoteResultToSnapshot, buildPaperEntryContext, derivePaperEntryWatchSignals, getPaperEntryBlockers, isAutoPaperResearchBlocked, isPaperQuoteReady, minutesSince } from './entryIntegrity';
 
 export { applyLatestQuoteResultToSnapshot, isPaperQuoteReady } from './entryIntegrity';
 export const isPaperResearchBlocked = isAutoPaperResearchBlocked;
@@ -16,6 +16,54 @@ function getSkipReason(db: AppDb, config: AppConfig, tokenId: number, snapshot: 
   if (db.getOpenPositionCount('PAPER') >= config.maxOpenPositions) return 'max open paper positions reached';
   if (db.getDailyPaperBuyCount() >= config.maxDailyPaperBuys) return 'daily paper buy cap reached';
   return null;
+}
+
+function buildUsefulRankReason(row: PaperEligibilityDiagnosticRow, config: AppConfig): string {
+  if (row.blockerCount === 0) return 'eligible now';
+  if (row.isEntryStale) return `demoted: entry data stale (${row.dataAgeMinutes ?? 'n/a'}m)`;
+  if (row.isMovedBeforeDiscoveryBlocked) return `demoted: moved before discovery (${row.movedBeforeDiscoveryPct ?? 'n/a'}% > ${config.maxChasePct}%)`;
+  if (row.sellQuoteAvailable !== 'YES') return `demoted: sell quote ${String(row.sellQuoteAvailable ?? 'UNKNOWN').toLowerCase()}`;
+  if (row.estimatedSlippageBps === null || row.estimatedSlippageBps === undefined) return 'demoted: slippage missing';
+  if (row.estimatedSlippageBps > config.maxSlippageBps) return `demoted: slippage high (${row.estimatedSlippageBps}bps > ${config.maxSlippageBps}bps)`;
+  return `closest by blocker count=${row.blockerCount} distance=${row.distanceToPaperScore ?? 'n/a'} score=${row.totalScore ?? 'n/a'}`;
+}
+
+export function rankPaperEligibilityRows(left: PaperEligibilityDiagnosticRow, right: PaperEligibilityDiagnosticRow, config: AppConfig): number {
+  const eligibleDelta = Number(left.blockerCount !== 0) - Number(right.blockerCount !== 0);
+  if (eligibleDelta !== 0) return eligibleDelta;
+
+  const blockerDelta = left.blockerCount - right.blockerCount;
+  if (blockerDelta !== 0) return blockerDelta;
+
+  const staleDelta = Number(left.isEntryStale) - Number(right.isEntryStale);
+  if (staleDelta !== 0) return staleDelta;
+
+  const movedDelta = Number(left.isMovedBeforeDiscoveryBlocked) - Number(right.isMovedBeforeDiscoveryBlocked);
+  if (movedDelta !== 0) return movedDelta;
+
+  const quoteReadyDelta = Number(left.sellQuoteAvailable !== 'YES') - Number(right.sellQuoteAvailable !== 'YES');
+  if (quoteReadyDelta !== 0) return quoteReadyDelta;
+
+  const slippageMissingDelta = Number(left.estimatedSlippageBps == null) - Number(right.estimatedSlippageBps == null);
+  if (slippageMissingDelta !== 0) return slippageMissingDelta;
+
+  const leftHighSlippage = (left.estimatedSlippageBps ?? Number.POSITIVE_INFINITY) > config.maxSlippageBps;
+  const rightHighSlippage = (right.estimatedSlippageBps ?? Number.POSITIVE_INFINITY) > config.maxSlippageBps;
+  const highSlippageDelta = Number(leftHighSlippage) - Number(rightHighSlippage);
+  if (highSlippageDelta !== 0) return highSlippageDelta;
+
+  const leftDataAge = left.dataAgeMinutes ?? Number.POSITIVE_INFINITY;
+  const rightDataAge = right.dataAgeMinutes ?? Number.POSITIVE_INFINITY;
+  if (leftDataAge !== rightDataAge) return leftDataAge - rightDataAge;
+
+  const leftMoved = left.movedBeforeDiscoveryPct ?? Number.POSITIVE_INFINITY;
+  const rightMoved = right.movedBeforeDiscoveryPct ?? Number.POSITIVE_INFINITY;
+  if (leftMoved !== rightMoved) return leftMoved - rightMoved;
+
+  const distanceDelta = (left.distanceToPaperScore ?? Number.POSITIVE_INFINITY) - (right.distanceToPaperScore ?? Number.POSITIVE_INFINITY);
+  if (distanceDelta !== 0) return distanceDelta;
+
+  return (right.totalScore ?? Number.NEGATIVE_INFINITY) - (left.totalScore ?? Number.NEGATIVE_INFINITY);
 }
 
 export function buildPaperEligibilityDiagnostics(db: AppDb, config: AppConfig): Record<string, unknown> {
@@ -32,8 +80,12 @@ export function buildPaperEligibilityDiagnostics(db: AppDb, config: AppConfig): 
       db.getDailyPaperBuyCount() >= config.maxDailyPaperBuys ? 'daily paper buy cap reached' : null
     ].filter((value): value is string => Boolean(value));
     const warnings = [...new Set(preparedScore?.redFlags ?? [])];
+    const uniqueBlockers = [...new Set(blockers)];
+    const dataAgeMinutes = diagnosticSnapshot?.dataUpdatedAt ? Number(minutesSince(diagnosticSnapshot.dataUpdatedAt).toFixed(4)) : null;
+    const movedBeforeDiscoveryPct = diagnosticSnapshot?.movedBeforeDiscoveryPct ?? preparedSnapshot?.movedBeforeDiscoveryPct ?? null;
 
-    return {
+    const watchSignals = derivePaperEntryWatchSignals(diagnosticSnapshot, preparedScore);
+    const row: PaperEligibilityDiagnosticRow = {
       tokenId: state.tokenId,
       symbol: state.symbol,
       mint: state.mint,
@@ -47,10 +99,22 @@ export function buildPaperEligibilityDiagnostics(db: AppDb, config: AppConfig): 
       freezeAuthority: preparedSnapshot?.freezeAuthority ?? null,
       holderConcentration: preparedSnapshot?.holderConcentration ?? null,
       verdict: preparedScore?.verdict ?? null,
-      blockers: [...new Set(blockers)],
+      blockers: uniqueBlockers,
       warnings,
-      distanceToPaperScore: preparedScore ? Number(Math.max(0, config.paperMinTotalScore - preparedScore.totalScore).toFixed(2)) : null
+      distanceToPaperScore: preparedScore ? Number(Math.max(0, config.paperMinTotalScore - preparedScore.totalScore).toFixed(2)) : null,
+      dataAgeMinutes,
+      isEntryStale: uniqueBlockers.includes('entry data stale blocks paper eligibility'),
+      movedBeforeDiscoveryPct,
+      isMovedBeforeDiscoveryBlocked: uniqueBlockers.includes('moved before discovery blocks paper eligibility'),
+      blockerCount: uniqueBlockers.length,
+      warningCount: warnings.length,
+      usefulRankReason: '',
+      sourceUrl: diagnosticSnapshot?.sourceUrl ?? preparedSnapshot?.sourceUrl ?? null,
+      watchProfile: watchSignals.profile,
+      watchPriority: watchSignals.priority
     };
+    row.usefulRankReason = buildUsefulRankReason(row, config);
+    return row;
   });
 
   const topItems = (items: string[], limit = 10) => {
@@ -60,13 +124,7 @@ export function buildPaperEligibilityDiagnostics(db: AppDb, config: AppConfig): 
   };
 
   const eligibleForPaper = rows.filter((row) => row.blockers.length === 0);
-  const closest = [...rows]
-    .sort((a, b) => {
-      const blockerDelta = a.blockers.length - b.blockers.length;
-      if (blockerDelta !== 0) return blockerDelta;
-      return (a.distanceToPaperScore ?? Number.POSITIVE_INFINITY) - (b.distanceToPaperScore ?? Number.POSITIVE_INFINITY);
-    })
-    .slice(0, 10);
+  const closest = [...rows].sort((a, b) => rankPaperEligibilityRows(a, b, config)).slice(0, 10);
 
   return {
     totalCandidatesEvaluated: rows.length,
@@ -94,6 +152,7 @@ export function buildPaperEligibilityDiagnostics(db: AppDb, config: AppConfig): 
     topSkipReasons: topItems(rows.flatMap((row) => row.blockers)),
     topWarnings: topItems(rows.flatMap((row) => row.warnings)),
     topClosestCandidates: closest,
+    allCandidates: rows,
     finalSafetyStatus: 'Real trading remains locked.'
   };
 }

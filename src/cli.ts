@@ -9,6 +9,12 @@ import { verifySafety } from './verifySafety';
 import { activateKillSwitch } from './kill';
 import { runAutopilot } from './autopilot/runAutopilot';
 import { buildPaperEligibilityDiagnostics, runAutoPaper } from './paper/autoPaper';
+import { renderFreshCandidateWatchlist } from './paper/freshWatchlist';
+import { renderFreshRejectionAnalytics } from './paper/freshRejections';
+import { renderTooEarlyWatchReport } from './paper/tooEarlyWatch';
+import { renderTokenSessionSummary } from './paper/sessionSummary';
+import { renderNearMissShadowReport } from './paper/nearMiss';
+import { renderWinnerStudyReport } from './paper/studyWinners';
 import { runPaperReview, runPaperReviewLoop, type PaperReviewLoopCycleSummary } from './paper/review';
 import { buildPaperPerformanceReport } from './paper/performance';
 import { buildDailyReport, renderPaperAutopsy, renderPaperDashboard } from './paper/dailyReport';
@@ -89,6 +95,37 @@ async function main(): Promise<void> {
         break;
       case 'token:paper-eligibility':
         console.log(JSON.stringify(buildPaperEligibilityDiagnostics(db, config), null, 2));
+        break;
+      case 'token:fresh-watchlist': {
+        const maxAgeMinutes = parseNumberArg('--max-age-minutes', 30, { min: 0 });
+        const limit = parseNumberArg('--limit', 10, { integer: true, min: 1 });
+        console.log(renderFreshCandidateWatchlist(db, config, { maxAgeMinutes, limit }));
+        break;
+      }
+      case 'token:fresh-rejections': {
+        const maxAgeMinutes = parseNumberArg('--max-age-minutes', 60, { min: 0 });
+        const limit = parseNumberArg('--limit', 5, { integer: true, min: 1 });
+        console.log(renderFreshRejectionAnalytics(db, config, { maxAgeMinutes, limit }));
+        break;
+      }
+      case 'token:too-early-watch': {
+        const maxAgeMinutes = parseNumberArg('--max-age-minutes', 15, { min: 0 });
+        const limit = parseNumberArg('--limit', 10, { integer: true, min: 1 });
+        console.log(renderTooEarlyWatchReport(db, config, { maxAgeMinutes, limit }));
+        break;
+      }
+      case 'token:session-summary': {
+        const windowMinutes = parseNumberArg('--window-minutes', 60, { min: 0 });
+        console.log(renderTokenSessionSummary(db, config, { windowMinutes }));
+        break;
+      }
+      case 'token:near-miss': {
+        const windowMinutes = parseNumberArg('--window-minutes', 60, { min: 0 });
+        console.log(renderNearMissShadowReport(db, config, { windowMinutes }));
+        break;
+      }
+      case 'token:study-winners':
+        console.log(renderWinnerStudyReport(db, config));
         break;
       case 'token:paper-review':
         console.log(JSON.stringify(await runPaperReview(db, config), null, 2));

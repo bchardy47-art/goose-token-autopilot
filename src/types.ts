@@ -9,7 +9,7 @@ export type PositionMode = 'PAPER' | 'REAL';
 export type PositionStatus = 'OPEN' | 'CLOSED';
 export type ProposalStatus = 'PENDING' | 'EXECUTED' | 'BLOCKED' | 'CANCELLED';
 export type SafetySeverity = 'INFO' | 'WARN' | 'ERROR';
-export type TokenSourceName = 'fixture' | 'dexscreener';
+export type TokenSourceName = 'fixture' | 'dexscreener' | 'geckoterminal';
 export type ResearchStatus = 'IGNORE' | 'WATCH_ONLY' | 'PAPER_TRACKED' | 'CLOSED';
 export type WatchOnlySignalClass = 'EARLY_RUNNER' | 'LATE_RUNNER' | 'INSTANT_DUMP' | 'DEAD_NOISE' | 'TOO_DANGEROUS';
 export type HolderConcentrationLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'UNKNOWN';
@@ -221,7 +221,18 @@ export interface PaperEligibilityDiagnosticRow {
   holderConcentration: ConcentrationStatus | null;
   verdict: Verdict | null;
   blockers: string[];
+  warnings: string[];
   distanceToPaperScore: number | null;
+  dataAgeMinutes: number | null;
+  isEntryStale: boolean;
+  movedBeforeDiscoveryPct: number | null;
+  isMovedBeforeDiscoveryBlocked: boolean;
+  blockerCount: number;
+  warningCount: number;
+  usefulRankReason: string;
+  sourceUrl: string | null;
+  watchProfile: string | null;
+  watchPriority: string | null;
 }
 
 export interface PaperReviewDecision {
@@ -411,6 +422,22 @@ export interface AppConfig {
   maxChasePct: number;
   minTokenAgeMin: number;
   maxTokenAgeHours: number;
+  dexScreenerRecentUpdatesUrl: string;
+  dexScreenerIncludeRecentUpdates: boolean;
+  dexScreenerSearchUrl: string;
+  dexScreenerIncludeSearchProbes: boolean;
+  dexScreenerSearchProbes: string[];
+  dexScreenerSearchLimitPerQuery: number;
+  dexScreenerSearchMaxTotal: number;
+  geckoTerminalNewPoolsUrl: string;
+  geckoTerminalMaxPoolAgeMinutes: number;
+  geckoTerminalMaxDataAgeMinutes: number;
+  geckoTerminalMinReserveUsd: number;
+  geckoTerminalLimit: number;
+  dexScreenerMaxPairAgeMinutes: number;
+  dexScreenerMaxDataAgeMinutes: number;
+  dexScreenerMaxMovedBeforeDiscoveryPct: number;
+  dexScreenerFreshDiscoveryLimit: number;
   minSafetyScoreForAutopilot: number;
   minMomentumScoreForAutopilot: number;
   minTotalScoreForAutopilot: number;

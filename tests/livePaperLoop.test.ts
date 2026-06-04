@@ -3,6 +3,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDb } from '../src/db';
 import { makeTestConfig, seedScoredDb } from './helpers';
 import { applyLatestQuoteResultToSnapshot, buildPaperEligibilityDiagnostics, isPaperQuoteReady, isPaperResearchBlocked, runAutoPaper } from '../src/paper/autoPaper';
+import { buildFreshCandidateWatchlist, renderFreshCandidateWatchlist } from '../src/paper/freshWatchlist';
+import { buildTooEarlyWatchReport, renderTooEarlyWatchReport } from '../src/paper/tooEarlyWatch';
+import { buildTokenSessionSummary, renderTokenSessionSummary } from '../src/paper/sessionSummary';
+import { buildNearMissShadowReport, renderNearMissShadowReport } from '../src/paper/nearMiss';
 import { paperBuy } from '../src/trading/paper';
 import { runPaperReview, runPaperReviewLoop } from '../src/paper/review';
 import { buildPaperPerformanceReport } from '../src/paper/performance';
@@ -713,6 +717,278 @@ describe('live paper loop', () => {
     expect(report).toHaveProperty('failedMomentumScoreCount');
     expect(report).toHaveProperty('topWarnings');
     expect(JSON.stringify(report.topSkipReasons)).toMatch(/sell quote unknown|sell quote unavailable|slippage/);
+    db.close();
+  });
+
+  it('paper-eligibility ranks fresh lower-score candidates above stale high-score candidates when blocker counts tie', async () => {
+    const { dir, config, db } = await seedScoredDb({ PAPER_REQUIRE_HIGH_WATCH_PRIORITY: 'false' } as any);
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const base = db.getLatestSnapshot(safe.id)!;
+
+    const staleHigh = {
+      ...base,
+      mint: 'STALEHIGH111111111111111111111111111111111111',
+      symbol: 'STALEHI',
+      name: 'Stale High',
+      sourceUrl: 'fixture://stale-high',
+      discoveredAt: new Date().toISOString(),
+      dataUpdatedAt: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+      movedBeforeDiscoveryPct: 40
+    };
+    const freshLow = {
+      ...base,
+      mint: 'FRESHLOW111111111111111111111111111111111111',
+      symbol: 'FRESHLO',
+      name: 'Fresh Low',
+      sourceUrl: 'fixture://fresh-low',
+      discoveredAt: new Date().toISOString(),
+      dataUpdatedAt: new Date().toISOString(),
+      movedBeforeDiscoveryPct: 20,
+      metadataPresent: false,
+      websitePresent: false,
+      socialsPresent: false,
+      creatorStatus: 'SAFE',
+      liquidityUsd: 30000,
+      volume5mUsd: 200,
+      volume1hUsd: 3000,
+      volume24hUsd: 12000,
+      priceChange5mPct: 2,
+      priceChange1hPct: 12,
+      buys5m: 6,
+      sells5m: 4,
+      liquidityGrowthPct: 0
+    };
+
+    const staleId = db.upsertToken(staleHigh);
+    db.insertSnapshot(staleId, staleHigh);
+    const freshId = db.upsertToken(freshLow);
+    db.insertSnapshot(freshId, freshLow);
+
+    const report = buildPaperEligibilityDiagnostics(db, config) as any;
+    const ids = report.topClosestCandidates.map((row: any) => row.tokenId);
+    const staleRow = report.topClosestCandidates.find((row: any) => row.tokenId === staleId);
+    const freshRow = report.topClosestCandidates.find((row: any) => row.tokenId === freshId);
+
+    expect(staleRow.blockers).toContain('entry data stale blocks paper eligibility');
+    expect(freshRow.blockers).toContain('total score below paper minimum');
+    expect(ids.indexOf(freshId)).toBeGreaterThanOrEqual(0);
+    expect(ids.indexOf(staleId)).toBeGreaterThanOrEqual(0);
+    expect(ids.indexOf(freshId)).toBeLessThan(ids.indexOf(staleId));
+    expect(String(staleRow.usefulRankReason)).toContain('entry data stale');
+    expect(db.getOpenPositionCount('PAPER')).toBe(0);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
+    db.close();
+  });
+
+  it('paper-eligibility ranks not-moved candidates above moved-before-discovery candidates when blocker counts tie', async () => {
+    const { dir, config, db } = await seedScoredDb({ PAPER_REQUIRE_HIGH_WATCH_PRIORITY: 'false' } as any);
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const base = db.getLatestSnapshot(safe.id)!;
+
+    const movedCandidate = {
+      ...base,
+      mint: 'MOVEDRANK111111111111111111111111111111111111',
+      symbol: 'MOVED',
+      name: 'Moved Rank',
+      sourceUrl: 'fixture://moved-rank',
+      discoveredAt: new Date().toISOString(),
+      dataUpdatedAt: new Date().toISOString(),
+      movedBeforeDiscoveryPct: config.maxChasePct + 10
+    };
+    const notMovedCandidate = {
+      ...base,
+      mint: 'NOTMOVED111111111111111111111111111111111111',
+      symbol: 'NOTMOVE',
+      name: 'Not Moved',
+      sourceUrl: 'fixture://not-moved',
+      discoveredAt: new Date().toISOString(),
+      dataUpdatedAt: new Date().toISOString(),
+      movedBeforeDiscoveryPct: 20,
+      metadataPresent: false,
+      websitePresent: false,
+      socialsPresent: false,
+      creatorStatus: 'SAFE',
+      liquidityUsd: 30000,
+      volume5mUsd: 200,
+      volume1hUsd: 3000,
+      volume24hUsd: 12000,
+      priceChange5mPct: 2,
+      priceChange1hPct: 12,
+      buys5m: 6,
+      sells5m: 4,
+      liquidityGrowthPct: 0
+    };
+
+    const movedId = db.upsertToken(movedCandidate);
+    db.insertSnapshot(movedId, movedCandidate);
+    const notMovedId = db.upsertToken(notMovedCandidate);
+    db.insertSnapshot(notMovedId, notMovedCandidate);
+
+    const report = buildPaperEligibilityDiagnostics(db, config) as any;
+    const ids = report.topClosestCandidates.map((row: any) => row.tokenId);
+    const movedRow = report.topClosestCandidates.find((row: any) => row.tokenId === movedId);
+    const notMovedRow = report.topClosestCandidates.find((row: any) => row.tokenId === notMovedId);
+
+    expect(movedRow.blockers).toContain('moved before discovery blocks paper eligibility');
+    expect(notMovedRow.blockers).toContain('total score below paper minimum');
+    expect(ids.indexOf(notMovedId)).toBeLessThan(ids.indexOf(movedId));
+    expect(String(movedRow.usefulRankReason)).toContain('moved before discovery');
+    expect(db.getOpenPositionCount('PAPER')).toBe(0);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
+    db.close();
+  });
+
+  it('paper-eligibility keeps eligible counts unchanged while ranking no-blocker candidates above blocked ones', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const safeSnapshot = db.getLatestSnapshot(safe.id)!;
+    db.createQuoteSellabilityCheck(safe.id, safeSnapshot.mint, new Date().toISOString(), 'jupiter', safeSnapshot.mint, 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
+    const before = buildPaperEligibilityDiagnostics(db, config) as any;
+
+    const blockedCandidate = {
+      ...safeSnapshot,
+      mint: 'BLOCKEDRANK11111111111111111111111111111111111',
+      symbol: 'BLOCKED',
+      name: 'Blocked Rank',
+      sourceUrl: 'fixture://blocked-rank',
+      discoveredAt: new Date().toISOString(),
+      dataUpdatedAt: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+      movedBeforeDiscoveryPct: 20
+    };
+    const blockedId = db.upsertToken(blockedCandidate);
+    db.insertSnapshot(blockedId, blockedCandidate);
+
+    const after = buildPaperEligibilityDiagnostics(db, config) as any;
+    const ids = after.topClosestCandidates.map((row: any) => row.tokenId);
+
+    expect(after.eligibleForPaperCount).toBe(before.eligibleForPaperCount);
+    expect(after.paperBuysWouldOpenCount).toBe(before.paperBuysWouldOpenCount);
+    expect(ids.indexOf(safe.id)).toBeGreaterThanOrEqual(0);
+    expect(ids.indexOf(blockedId)).toBeGreaterThanOrEqual(0);
+    expect(ids.indexOf(safe.id)).toBeLessThan(ids.indexOf(blockedId));
+    expect(after.topClosestCandidates.find((row: any) => row.tokenId === safe.id)?.usefulRankReason).toBe('eligible now');
+    expect(db.getOpenPositionCount('PAPER')).toBe(0);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
+    db.close();
+  });
+
+  it('fresh-watchlist filters out stale candidates above max age and stays read-only', async () => {
+    const { dir, config, db } = await seedScoredDb({ PAPER_REQUIRE_HIGH_WATCH_PRIORITY: 'false' } as any);
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const staleSnapshot = { ...db.getLatestSnapshot(safe.id)!, dataUpdatedAt: new Date(Date.now() - 90 * 60 * 1000).toISOString() };
+    db.insertSnapshot(safe.id, staleSnapshot);
+
+    const report = buildFreshCandidateWatchlist(db, config, { maxAgeMinutes: 30, limit: 10 });
+    expect(report.candidates.every((row) => (row.dataAgeMinutes ?? Number.POSITIVE_INFINITY) <= 30)).toBe(true);
+    expect(db.getOpenPositionCount('PAPER')).toBe(0);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
+    db.close();
+  });
+
+  it('fresh-watchlist shows fresh blocked candidates and ranks no-blocker fresh candidates first', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const safeSnapshot = db.getLatestSnapshot(safe.id)!;
+    db.createQuoteSellabilityCheck(safe.id, safeSnapshot.mint, new Date().toISOString(), 'jupiter', safeSnapshot.mint, 'So11111111111111111111111111111111111111112', 2, '100', true, '1000', 100, 0.01, 'YES', 'SELLABLE_LOW_SLIPPAGE', null, { sample: true });
+
+    const blockedCandidate = {
+      ...safeSnapshot,
+      mint: 'FWBLOCK111111111111111111111111111111111111',
+      symbol: 'FWBLK',
+      name: 'Fresh Watch Blocked',
+      dataUpdatedAt: new Date().toISOString(),
+      sellQuoteAvailable: 'UNKNOWN' as const,
+      estimatedSlippageBps: null,
+      sourceUrl: 'fixture://fresh-watch-blocked'
+    };
+    const blockedId = db.upsertToken(blockedCandidate);
+    db.insertSnapshot(blockedId, blockedCandidate);
+
+    const report = buildFreshCandidateWatchlist(db, config, { maxAgeMinutes: 30, limit: 10 });
+    const blockedRow = report.candidates.find((row) => row.tokenId === blockedId);
+    const ids = report.candidates.map((row) => row.tokenId);
+
+    expect(blockedRow).toBeTruthy();
+    expect(blockedRow?.blockers.join(' ')).toMatch(/sell quote unknown|watch priority|score/);
+    expect(ids.indexOf(safe.id)).toBeGreaterThanOrEqual(0);
+    expect(ids.indexOf(blockedId)).toBeGreaterThanOrEqual(0);
+    expect(ids.indexOf(safe.id)).toBeLessThan(ids.indexOf(blockedId));
+    expect(db.getOpenPositionCount('PAPER')).toBe(0);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
+    db.close();
+  });
+
+  it('fresh-watchlist render includes no paper buys opened and real trading locked', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const output = renderFreshCandidateWatchlist(db, config, { maxAgeMinutes: 30, limit: 5 });
+    expect(output).toContain('Fresh Candidate Watchlist');
+    expect(output).toContain('No paper buys opened.');
+    expect(output).toContain('Real trading remains locked.');
+    expect(db.getOpenPositionCount('PAPER')).toBe(0);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
+    db.close();
+  });
+
+  it('too-early-watch stays read-only and classifies early candidates', async () => {
+    const { dir, config, db } = await seedScoredDb({ PAPER_REQUIRE_HIGH_WATCH_PRIORITY: 'false' } as any);
+    cleanup.push(dir);
+    const safe = db.findTokenByMint('SAFE11111111111111111111111111111111111111111')!;
+    const snapshot = db.getLatestSnapshot(safe.id)!;
+    snapshot.dataUpdatedAt = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    snapshot.tokenCreatedAt = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    snapshot.sellQuoteAvailable = 'YES';
+    snapshot.estimatedSlippageBps = 100;
+    snapshot.holderConcentration = 'SAFE';
+    db.insertSnapshot(safe.id, snapshot);
+
+    const report = buildTooEarlyWatchReport(db, config, { maxAgeMinutes: 15, limit: 10 });
+    const output = renderTooEarlyWatchReport(db, config, { maxAgeMinutes: 15, limit: 10 });
+    const row = report.candidates.find((candidate) => candidate.tokenId === safe.id);
+
+    expect(row?.recommendation).toBe('RECHECK_SOON');
+    expect(output).toContain('Too-Early Watch Lane');
+    expect(output).toContain('No paper buys opened.');
+    expect(output).toContain('Real trading remains locked.');
+    expect(db.getOpenPositionCount('PAPER')).toBe(0);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
+    db.close();
+  });
+
+  it('session-summary stays read-only and includes recommendation without raw json', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const report = buildTokenSessionSummary(db, config, { windowMinutes: 60 });
+    const output = renderTokenSessionSummary(db, config, { windowMinutes: 60 });
+    expect(['KEEP_WATCHING', 'INVESTIGATE_NOW', 'SAFE_TO_STOP', 'DO_NOT_BUY']).toContain(report.recommendation);
+    expect(output).toContain('Token Session Summary');
+    expect(output).toContain('Recommendation:');
+    expect(output).toContain('No paper buys opened.');
+    expect(output).toContain('Real trading remains locked.');
+    expect(output).not.toMatch(/rawJson/i);
+    expect(db.getOpenPositionCount('PAPER')).toBe(0);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
+    db.close();
+  });
+
+  it('near-miss shadow lane stays read-only and excludes raw json', async () => {
+    const { dir, config, db } = await seedScoredDb();
+    cleanup.push(dir);
+    const report = buildNearMissShadowReport(db, config, { windowMinutes: 60 });
+    const output = renderNearMissShadowReport(db, config, { windowMinutes: 60 });
+    expect(['DO_NOT_LOOSEN', 'CONSIDER_SHADOW_PAPER_RULE', 'RECHECK_SOON', 'INVESTIGATE_NOW']).toContain(report.recommendation);
+    expect(output).toContain('Near-Miss Shadow Lane');
+    expect(output).toContain('Recommendation:');
+    expect(output).toContain('No paper buys opened.');
+    expect(output).toContain('Real trading remains locked.');
+    expect(output).not.toMatch(/rawJson/i);
+    expect(db.getOpenPositionCount('PAPER')).toBe(0);
+    expect(db.getBlockedRealTradeAttempts()).toBe(0);
     db.close();
   });
 
