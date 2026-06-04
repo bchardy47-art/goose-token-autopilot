@@ -21,6 +21,7 @@ import { renderProfileMatchOutcomesReport } from './paper/profileMatchOutcomes';
 import { renderDumpRiskProfileReport } from './paper/dumpRiskProfile';
 import { renderDumpRiskForwardValidationReport } from './paper/dumpRiskForwardValidation';
 import { renderDumpRiskSubtypesReport } from './paper/dumpRiskSubtypes';
+import { renderDecayRateReport } from './paper/decayRate';
 import { runWatchRefresh, renderWatchRefreshReport } from './paper/watchRefresh';
 import { runPaperReview, runPaperReviewLoop, type PaperReviewLoopCycleSummary } from './paper/review';
 import { buildPaperPerformanceReport } from './paper/performance';
@@ -154,6 +155,12 @@ async function main(): Promise<void> {
         const top = parseNumberArg('--top', 10, { integer: true, min: 1 });
         const minGain = parseNumberArg('--min-gain', 50, { min: 0 });
         console.log(renderDumpRiskProfileReport(db, config, { limit, top, minGain }));
+        break;
+      }
+      case 'token:decay-rate': {
+        const limit = parseNumberArg('--limit', 121, { integer: true, min: 1 });
+        const top = parseNumberArg('--top', 10, { integer: true, min: 1 });
+        console.log(renderDecayRateReport(db, config, { limit, top }));
         break;
       }
       case 'token:dump-risk-subtypes': {
