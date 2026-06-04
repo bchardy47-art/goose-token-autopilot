@@ -19,6 +19,7 @@ import { renderWinnerProfileReport } from './paper/winnerProfile';
 import { renderEarlySignalFilterReport } from './paper/earlySignalFilter';
 import { renderProfileMatchOutcomesReport } from './paper/profileMatchOutcomes';
 import { renderDumpRiskProfileReport } from './paper/dumpRiskProfile';
+import { renderDumpRiskForwardValidationReport } from './paper/dumpRiskForwardValidation';
 import { runWatchRefresh, renderWatchRefreshReport } from './paper/watchRefresh';
 import { runPaperReview, runPaperReviewLoop, type PaperReviewLoopCycleSummary } from './paper/review';
 import { buildPaperPerformanceReport } from './paper/performance';
@@ -152,6 +153,16 @@ async function main(): Promise<void> {
         const top = parseNumberArg('--top', 10, { integer: true, min: 1 });
         const minGain = parseNumberArg('--min-gain', 50, { min: 0 });
         console.log(renderDumpRiskProfileReport(db, config, { limit, top, minGain }));
+        break;
+      }
+      case 'token:dump-risk-forward-validation': {
+        const limit = parseNumberArg('--limit', 121, { integer: true, min: 1 });
+        const windowHours = parseNumberArg('--window-hours', 72, { min: 0 });
+        const minBsr = parseNumberArg('--min-bsr', 1.5, { min: 0 });
+        const maxMoved = parseNumberArg('--max-moved', 100, { min: 0 });
+        const minPc5m = parseNumberArg('--min-pc5m', 40, { min: 0 });
+        const top = parseNumberArg('--top', 10, { integer: true, min: 1 });
+        console.log(renderDumpRiskForwardValidationReport(db, config, { limit, windowHours, minBsr, maxMoved, minPc5m, top }));
         break;
       }
       case 'token:profile-match-outcomes': {
