@@ -48,8 +48,8 @@ function analyzeRejections(snap: TokenCandidate | null): string[] {
 
   const reasons: string[] = [];
 
-  if (snap.source !== 'dexscreener') {
-    reasons.push(`source=${snap.source} — watch-only lane requires source=dexscreener`);
+  if (snap.source !== 'dexscreener' && snap.source !== 'geckoterminal') {
+    reasons.push(`source=${snap.source} — watch-only lane requires source=dexscreener or source=geckoterminal`);
   }
   if ((snap.priceUsd ?? 0) <= 0) reasons.push('missing price (priceUsd=0)');
   if ((snap.liquidityUsd ?? 0) < WATCH_LIQUIDITY_MIN) {
@@ -263,23 +263,11 @@ export function buildScanRejectionReport(
     );
   } else if (config.tokenSource === 'geckoterminal' && sourceGateCount > 0) {
     diagnosisPoints.push(
-      `MAIN BLOCKER: TOKEN_SOURCE=geckoterminal is active, but the watch-only lane only accepts source=dexscreener.`
+      `${sourceGateCount} token(s) rejected by source gate (watch-only requires dexscreener or geckoterminal).`
     );
     diagnosisPoints.push(
-      `${sourceGateCount} of ${notWatchlistedRows.length} non-watchlisted token(s) fail the source gate immediately.`
+      `GeckoTerminal tokens are now eligible for the watch-only lane when they meet all other criteria.`
     );
-    diagnosisPoints.push(
-      `This is expected, not a bug. The watch-only pathway was built for DexScreener. GeckoTerminal tokens bypass it entirely.`
-    );
-    if (nearMisses.length > 0) {
-      diagnosisPoints.push(
-        `${nearMisses.length} near-miss token(s) would pass all other criteria if the source gate allowed geckoterminal.`
-      );
-    } else {
-      diagnosisPoints.push(
-        `No near-misses: recent tokens also fail other criteria even ignoring the source gate.`
-      );
-    }
   } else if (sourceGateCount > 0) {
     diagnosisPoints.push(
       `${sourceGateCount} token(s) rejected by source gate (watch-only requires dexscreener).`
@@ -398,7 +386,7 @@ export function renderScanRejectionReport(report: ScanRejectionReport): string {
   // 5. Near misses
   lines.push('Near Misses');
   lines.push(sep);
-  lines.push('  (tokens blocked only by source gate; would qualify if source=dexscreener)');
+  lines.push('  (tokens blocked only by source gate; would qualify if source=dexscreener or source=geckoterminal)');
   if (report.nearMisses.length === 0) {
     lines.push('  (none in this window)');
   } else {

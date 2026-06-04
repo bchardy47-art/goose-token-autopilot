@@ -18,7 +18,7 @@ function buySellRatio(candidate: TokenCandidate): number {
 
 export function qualifiesForWatchOnly(snapshot: TokenCandidate | null, score: TokenScoreResult | null): { ok: boolean; reason: string } {
   if (!snapshot || !score) return { ok: false, reason: 'missing snapshot or score' };
-  if (snapshot.source !== 'dexscreener') return { ok: false, reason: 'watch-only lane is for live DexScreener tokens only' };
+  if (snapshot.source !== 'dexscreener' && snapshot.source !== 'geckoterminal') return { ok: false, reason: 'watch-only lane requires dexscreener or geckoterminal source' };
   if ((snapshot.priceUsd ?? 0) <= 0) return { ok: false, reason: 'missing price' };
   if ((snapshot.liquidityUsd ?? 0) < 5000) return { ok: false, reason: 'liquidity below watch-only threshold' };
   if ((snapshot.marketCapUsd ?? 0) <= 0) return { ok: false, reason: 'missing market cap/fdv' };
