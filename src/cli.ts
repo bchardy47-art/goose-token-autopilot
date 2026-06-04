@@ -15,6 +15,7 @@ import { renderTooEarlyWatchReport } from './paper/tooEarlyWatch';
 import { renderTokenSessionSummary } from './paper/sessionSummary';
 import { renderNearMissShadowReport } from './paper/nearMiss';
 import { renderWinnerStudyReport } from './paper/studyWinners';
+import { runWatchRefresh, renderWatchRefreshReport } from './paper/watchRefresh';
 import { runPaperReview, runPaperReviewLoop, type PaperReviewLoopCycleSummary } from './paper/review';
 import { buildPaperPerformanceReport } from './paper/performance';
 import { buildDailyReport, renderPaperAutopsy, renderPaperDashboard } from './paper/dailyReport';
@@ -127,6 +128,13 @@ async function main(): Promise<void> {
       case 'token:study-winners':
         console.log(renderWinnerStudyReport(db, config));
         break;
+      case 'token:watch-refresh': {
+        const limit = parseNumberArg('--limit', 25, { integer: true, min: 1 });
+        const windowHours = parseNumberArg('--window-hours', 24, { min: 0 });
+        const dryRun = process.argv.includes('--dry-run');
+        console.log(renderWatchRefreshReport(await runWatchRefresh(db, config, { limit, windowHours, dryRun })));
+        break;
+      }
       case 'token:paper-review':
         console.log(JSON.stringify(await runPaperReview(db, config), null, 2));
         break;
