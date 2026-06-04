@@ -26,6 +26,7 @@
     "token:dump-risk-forward-validation": "tsx src/cli.ts token:dump-risk-forward-validation",
     "token:dump-risk-subtypes": "tsx src/cli.ts token:dump-risk-subtypes",
     "token:decay-rate": "tsx src/cli.ts token:decay-rate",
+    "token:early-refresh-plan": "tsx src/cli.ts token:early-refresh-plan",
     "token:watch-refresh": "tsx src/cli.ts token:watch-refresh",
     "token:paper-review": "tsx src/cli.ts token:paper-review",
     "token:paper-review-loop": "tsx src/cli.ts token:paper-review-loop",

@@ -22,6 +22,7 @@ import { renderDumpRiskProfileReport } from './paper/dumpRiskProfile';
 import { renderDumpRiskForwardValidationReport } from './paper/dumpRiskForwardValidation';
 import { renderDumpRiskSubtypesReport } from './paper/dumpRiskSubtypes';
 import { renderDecayRateReport } from './paper/decayRate';
+import { buildEarlyRefreshPlan, renderEarlyRefreshPlan } from './paper/earlyRefreshPlan';
 import { runWatchRefresh, renderWatchRefreshReport } from './paper/watchRefresh';
 import { runPaperReview, runPaperReviewLoop, type PaperReviewLoopCycleSummary } from './paper/review';
 import { buildPaperPerformanceReport } from './paper/performance';
@@ -38,8 +39,12 @@ import { buildSafetyRpcProofReport, renderSafetyRpcProof } from './safetyRpcProo
 import { runQuoteCheck } from './quoteCheck';
 
 function getArgValue(flag: string): string | undefined {
-  const index = process.argv.indexOf(flag);
-  return index >= 0 ? process.argv[index + 1] : undefined;
+  for (let i = 0; i < process.argv.length; i++) {
+    const arg = process.argv[i];
+    if (arg === flag) return process.argv[i + 1];
+    if (arg.startsWith(`${flag}=`)) return arg.slice(flag.length + 1);
+  }
+  return undefined;
 }
 
 function parseNumberArg(flag: string, fallback: number, options: { integer?: boolean; min?: number } = {}): number {
@@ -161,6 +166,14 @@ async function main(): Promise<void> {
         const limit = parseNumberArg('--limit', 121, { integer: true, min: 1 });
         const top = parseNumberArg('--top', 10, { integer: true, min: 1 });
         console.log(renderDecayRateReport(db, config, { limit, top }));
+        break;
+      }
+      case 'token:early-refresh-plan': {
+        const windowHours = parseNumberArg('--window-hours', 2, { min: 0 });
+        const limit = parseNumberArg('--limit', 10, { integer: true, min: 1 });
+        const top = parseNumberArg('--top', 10, { integer: true, min: 1 });
+        const showRun = process.argv.includes('--run');
+        console.log(renderEarlyRefreshPlan(buildEarlyRefreshPlan(db, config, { windowHours, limit, top }), showRun));
         break;
       }
       case 'token:dump-risk-subtypes': {
