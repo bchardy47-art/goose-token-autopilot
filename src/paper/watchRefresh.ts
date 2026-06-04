@@ -158,9 +158,11 @@ export async function runWatchRefresh(
   const geckoSource = createGeckoTerminalSourceFromConfig(config);
   const snapshotsForRefresh = selected.map(({ candidate }) => db.getLatestSnapshot(candidate.tokenId)!);
 
-  // Pass windowMinutes as maxCandidateAgeMinutes so age filtering is based on our window, not token creation time
+  // Pass Infinity: runWatchRefresh already filtered candidates by candidate.createdAt (watch-only entry time).
+  // tokenCreatedAt is the on-chain pool creation time, which can be hours older than the watch-only entry,
+  // so re-filtering by tokenCreatedAt here would incorrectly skip fresh candidates.
   const { refreshed: refreshedCandidates, summary: geckoSummary } =
-    await geckoSource.refreshCandidatesByPoolAddresses(snapshotsForRefresh, windowMinutes, limit);
+    await geckoSource.refreshCandidatesByPoolAddresses(snapshotsForRefresh, Number.POSITIVE_INFINITY, limit);
 
   const refreshedByMint = new Map(refreshedCandidates.map((c) => [c.mint, c]));
 

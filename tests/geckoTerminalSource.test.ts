@@ -179,6 +179,45 @@ describe('GeckoTerminal source', () => {
     db.close();
   });
 
+  it('refreshCandidatesByPoolAddresses does not skip a pool whose tokenCreatedAt is old when maxCandidateAgeMinutes is Infinity', async () => {
+    // Regression: tokenCreatedAt is the on-chain pool creation time, which can be hours older than
+    // the watch-only entry. Passing Infinity bypasses the redundant age check so fresh watch-only
+    // candidates are not incorrectly skipped.
+    const oldCreatedAt = new Date(Date.now() - 20 * 60 * 60 * 1000).toISOString(); // 20h ago
+    const candidate = normalizeGeckoTerminalPool(
+      makePool('MintOldPool1111111111111111111111111111111111', { address: 'OldPool111', pool_created_at: oldCreatedAt }),
+      new Date().toISOString()
+    )!;
+
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/v2/networks/solana/pools/OldPool111')) {
+        return makeJsonResponse({ data: makePool('MintOldPool1111111111111111111111111111111111', { address: 'OldPool111', pool_created_at: oldCreatedAt }) });
+      }
+      return makeJsonResponse({});
+    });
+    const source = new GeckoTerminalTokenSource({ fetchImpl });
+    const result = await source.refreshCandidatesByPoolAddresses([candidate], Number.POSITIVE_INFINITY, 10);
+    expect(result.summary.geckoRefreshSkippedOld).toBe(0);
+    expect(result.summary.geckoRefreshAttempted).toBe(1);
+    expect(result.summary.geckoRefreshSucceeded).toBe(1);
+    expect(result.refreshed).toHaveLength(1);
+  });
+
+  it('refreshCandidatesByPoolAddresses skips old pool when age limit is finite', async () => {
+    const oldCreatedAt = new Date(Date.now() - 20 * 60 * 60 * 1000).toISOString(); // 20h ago
+    const candidate = normalizeGeckoTerminalPool(
+      makePool('MintOldPool2222222222222222222222222222222222', { address: 'OldPool222', pool_created_at: oldCreatedAt }),
+      new Date().toISOString()
+    )!;
+    const fetchImpl = vi.fn(async () => makeJsonResponse({}));
+    const source = new GeckoTerminalTokenSource({ fetchImpl });
+    const result = await source.refreshCandidatesByPoolAddresses([candidate], 120, 10);
+    expect(result.summary.geckoRefreshSkippedOld).toBe(1);
+    expect(result.summary.geckoRefreshAttempted).toBe(0);
+    expect(result.refreshed).toHaveLength(0);
+  });
+
   it('enrichCandidate runs safety enrichment for geckoterminal Solana candidate', async () => {
     const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'geckoterminal', ENABLE_SOLANA_SAFETY_ENRICHMENT: 'true' });
     cleanup.push(dir);
