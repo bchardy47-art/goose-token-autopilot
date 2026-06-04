@@ -177,7 +177,7 @@ export function buildEarlyRefreshPlan(
   };
 }
 
-export function renderEarlyRefreshPlan(plan: EarlyRefreshPlan, showRun = false): string {
+export function renderEarlyRefreshPlan(plan: EarlyRefreshPlan): string {
   const lines: string[] = [];
   const sep = '─'.repeat(60);
 
@@ -257,13 +257,6 @@ export function renderEarlyRefreshPlan(plan: EarlyRefreshPlan, showRun = false):
   } else {
     lines.push('  All windows covered or past tolerance. Run token:watch-refresh for general refresh.');
     lines.push(`  ${plan.suggestedCommand}`);
-  }
-  if (showRun) {
-    lines.push('');
-    lines.push('  --run was passed. Bounded auto-refresh is not automated in this planner.');
-    lines.push('  Targeting only due-window candidates via runWatchRefresh is not safe to automate here.');
-    lines.push('  To run a bounded refresh manually:');
-    lines.push(`  npm run token:watch-refresh -- --limit=${plan.limit}`);
   }
   lines.push('');
 
