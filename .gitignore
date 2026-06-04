@@ -10,3 +10,4 @@ coverage/
 *.sqlite-wal
 *.log
 .kill-switch
+.DS_Store
