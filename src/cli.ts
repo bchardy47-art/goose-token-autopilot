@@ -172,8 +172,29 @@ async function main(): Promise<void> {
         const windowHours = parseNumberArg('--window-hours', 2, { min: 0 });
         const limit = parseNumberArg('--limit', 10, { integer: true, min: 1 });
         const top = parseNumberArg('--top', 10, { integer: true, min: 1 });
-        const showRun = process.argv.includes('--run');
-        console.log(renderEarlyRefreshPlan(buildEarlyRefreshPlan(db, config, { windowHours, limit, top }), showRun));
+        const doRun = process.argv.includes('--run');
+        const sep = '─'.repeat(60);
+
+        const plan = buildEarlyRefreshPlan(db, config, { windowHours, limit, top });
+        console.log(renderEarlyRefreshPlan(plan));
+
+        if (doRun) {
+          console.log(sep);
+          console.log('Bounded Fallback Refresh [--run]');
+          console.log(sep);
+          console.log('Note: precise due-window targeting is not available; refreshing bounded recent pool.');
+          console.log(`Window: last ${windowHours}h | Limit: ${limit}`);
+          console.log('');
+          const refreshReport = await runWatchRefresh(db, config, { limit, windowHours, dryRun: false });
+          console.log(renderWatchRefreshReport(refreshReport));
+          console.log('');
+          console.log(sep);
+          console.log('Run Safety');
+          console.log(sep);
+          console.log('  One-shot manual run. No daemon. No schedule.');
+          console.log('  No trading behavior changed.');
+          console.log('  Real trading remains locked.');
+        }
         break;
       }
       case 'token:dump-risk-subtypes': {
