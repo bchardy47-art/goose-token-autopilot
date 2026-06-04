@@ -15,6 +15,10 @@ afterEach(() => {
   }
 });
 
+function makeGeckoCandidate(overrides: Record<string, unknown> = {}) {
+  return makeLiveCandidate({ source: 'geckoterminal', ...overrides });
+}
+
 function makeLiveCandidate(overrides: Record<string, unknown> = {}) {
   const candidate = normalizeDexScreenerCandidate(
     {
@@ -115,6 +119,25 @@ describe('watch-only lane', () => {
     expect(report).toHaveProperty('watchOnlyCandidateCount');
     expect(report).toHaveProperty('watchOnlyResearchOnly');
     db.close();
+  });
+
+  it('GeckoTerminal source qualifies for WATCH_ONLY when momentum criteria are met', () => {
+    const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'geckoterminal' });
+    cleanup.push(dir);
+    const candidate = makeGeckoCandidate();
+    const score = scoreToken(1, candidate, config);
+    const watch = qualifiesForWatchOnly(candidate, score);
+    expect(watch.ok).toBe(true);
+  });
+
+  it('GeckoTerminal candidate with no momentum is blocked by momentum gate, not source gate', () => {
+    const { dir, config } = makeTestConfig({ TOKEN_SOURCE: 'geckoterminal' });
+    cleanup.push(dir);
+    const candidate = makeGeckoCandidate({ priceChange5mPct: 1, priceChange1hPct: 2, volume5mUsd: 100, buys5m: 3, sells5m: 5 });
+    const score = scoreToken(1, candidate, config);
+    const watch = qualifiesForWatchOnly(candidate, score);
+    expect(watch.ok).toBe(false);
+    expect(watch.reason).toMatch(/momentum/);
   });
 
   it('WATCH_ONLY never opens paper positions and verify-safety remains locked', () => {
