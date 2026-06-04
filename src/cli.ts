@@ -41,6 +41,7 @@ import { runQuoteCheck } from './quoteCheck';
 import { renderHistoricalWinnerAutopsy } from './paper/historicalWinnerAutopsy';
 import { buildShadowCandidateReport, renderShadowCandidateReport } from './paper/shadowCandidateReport';
 import { runEarlyRefreshLoop, renderEarlyRefreshLoopResult } from './paper/earlyRefreshLoop';
+import { buildRefreshCoverageSummary, renderRefreshCoverageSummary } from './paper/refreshCoverageSummary';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -363,6 +364,13 @@ async function main(): Promise<void> {
         const limit = parseNumberArg('--limit', 50, { integer: true, min: 1 });
         const top = parseNumberArg('--top', 20, { integer: true, min: 1 });
         console.log(renderHistoricalWinnerAutopsy(db, config, { minGain, limit, top }));
+        break;
+      }
+      case 'token:refresh-coverage-summary': {
+        const windowHours = parseNumberArg('--window-hours', 24, { min: 0 });
+        const limit = parseNumberArg('--limit', 200, { integer: true, min: 1 });
+        const top = parseNumberArg('--top', 20, { integer: true, min: 1 });
+        console.log(renderRefreshCoverageSummary(buildRefreshCoverageSummary(db, config, { windowHours, limit, top })));
         break;
       }
       default:
