@@ -15,6 +15,7 @@ import { renderTooEarlyWatchReport } from './paper/tooEarlyWatch';
 import { renderTokenSessionSummary } from './paper/sessionSummary';
 import { renderNearMissShadowReport } from './paper/nearMiss';
 import { renderWinnerStudyReport } from './paper/studyWinners';
+import { renderWinnerProfileReport } from './paper/winnerProfile';
 import { runWatchRefresh, renderWatchRefreshReport } from './paper/watchRefresh';
 import { runPaperReview, runPaperReviewLoop, type PaperReviewLoopCycleSummary } from './paper/review';
 import { buildPaperPerformanceReport } from './paper/performance';
@@ -128,6 +129,12 @@ async function main(): Promise<void> {
       case 'token:study-winners':
         console.log(renderWinnerStudyReport(db, config));
         break;
+      case 'token:winner-profile': {
+        const minGain = parseNumberArg('--min-gain', 50, { min: 0 });
+        const topN = parseNumberArg('--top', 10, { integer: true, min: 1 });
+        console.log(renderWinnerProfileReport(db, config, { minGainPct: minGain, top: topN }));
+        break;
+      }
       case 'token:watch-refresh': {
         const limit = parseNumberArg('--limit', 25, { integer: true, min: 1 });
         const windowHours = parseNumberArg('--window-hours', 24, { min: 0 });
