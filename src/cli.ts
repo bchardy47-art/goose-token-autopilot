@@ -17,6 +17,7 @@ import { renderNearMissShadowReport } from './paper/nearMiss';
 import { renderWinnerStudyReport } from './paper/studyWinners';
 import { renderWinnerProfileReport } from './paper/winnerProfile';
 import { renderEarlySignalFilterReport } from './paper/earlySignalFilter';
+import { renderProfileMatchOutcomesReport } from './paper/profileMatchOutcomes';
 import { runWatchRefresh, renderWatchRefreshReport } from './paper/watchRefresh';
 import { runPaperReview, runPaperReviewLoop, type PaperReviewLoopCycleSummary } from './paper/review';
 import { buildPaperPerformanceReport } from './paper/performance';
@@ -143,6 +144,15 @@ async function main(): Promise<void> {
         const maxMoved = parseNumberArg('--max-moved', 100, { min: 0 });
         const minPc5m = parseNumberArg('--min-pc5m', 40, { min: 0 });
         console.log(renderEarlySignalFilterReport(db, config, { limit, windowHours, minBsr, maxMoved, minPc5m }));
+        break;
+      }
+      case 'token:profile-match-outcomes': {
+        const limit = parseNumberArg('--limit', 121, { integer: true, min: 1 });
+        const windowHours = parseNumberArg('--window-hours', 72, { min: 0 });
+        const minBsr = parseNumberArg('--min-bsr', 1.5, { min: 0 });
+        const maxMoved = parseNumberArg('--max-moved', 100, { min: 0 });
+        const minPc5m = parseNumberArg('--min-pc5m', 40, { min: 0 });
+        console.log(renderProfileMatchOutcomesReport(db, config, { limit, windowHours, minBsr, maxMoved, minPc5m }));
         break;
       }
       case 'token:watch-refresh': {
