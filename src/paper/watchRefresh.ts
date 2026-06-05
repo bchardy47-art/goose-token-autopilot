@@ -26,6 +26,8 @@ interface SelectedEntry {
   candidate: WatchOnlyCandidate;
   symbol: string;
   mint: string;
+  source: string;
+  poolAddress: string;
   discoveryAgeMinutes: number;
 }
 
@@ -95,18 +97,32 @@ export async function runWatchRefresh(
     const snapshot = db.getLatestSnapshot(candidate.tokenId);
     if (!snapshot) {
       skipReasons['no_snapshot'] = (skipReasons['no_snapshot'] ?? 0) + 1;
+      if (!dryRun) {
+        try {
+          db.recordWatchRefreshAttempt(candidate.tokenId, candidate.id, tokenRecord.symbol, tokenRecord.source, null, windowHours, 'failed', 'no_snapshot', 0);
+        } catch (e) {
+          console.error('[watchRefresh] attempt log failed (no_snapshot):', e);
+        }
+      }
       continue;
     }
 
     const poolAddress = (snapshot.raw?.selectedPair as Record<string, unknown> | undefined)?.pairAddress;
     if (typeof poolAddress !== 'string' || !poolAddress) {
       skipReasons['no_pool_address'] = (skipReasons['no_pool_address'] ?? 0) + 1;
+      if (!dryRun) {
+        try {
+          db.recordWatchRefreshAttempt(candidate.tokenId, candidate.id, tokenRecord.symbol, tokenRecord.source, null, windowHours, 'missing_pool_address', null, 0);
+        } catch (e) {
+          console.error('[watchRefresh] attempt log failed (missing_pool_address):', e);
+        }
+      }
       continue;
     }
 
     geckoCount += 1;
     if (selected.length >= limit) break;
-    selected.push({ candidate, symbol: tokenRecord.symbol, mint: tokenRecord.mint, discoveryAgeMinutes });
+    selected.push({ candidate, symbol: tokenRecord.symbol, mint: tokenRecord.mint, source: tokenRecord.source, poolAddress, discoveryAgeMinutes });
   }
 
   const candidatesSkipped = Object.values(skipReasons).reduce((a, b) => a + b, 0);
@@ -172,11 +188,16 @@ export async function runWatchRefresh(
   let refreshedCount = 0;
   let failedCount = 0;
 
-  for (const { candidate, symbol, mint } of selected) {
+  for (const { candidate, symbol, mint, source, poolAddress } of selected) {
     const refreshed = refreshedByMint.get(mint);
 
     if (!refreshed) {
       failedCount += 1;
+      try {
+        db.recordWatchRefreshAttempt(candidate.tokenId, candidate.id, symbol, source, poolAddress, windowHours, 'no_data', 'gecko refresh returned no data', 0);
+      } catch (e) {
+        console.error('[watchRefresh] attempt log failed (no_data):', e);
+      }
       results.push({
         symbol,
         mint,
@@ -210,6 +231,11 @@ export async function runWatchRefresh(
     );
     watchUpdates += 1;
     refreshedCount += 1;
+    try {
+      db.recordWatchRefreshAttempt(candidate.tokenId, candidate.id, symbol, source, poolAddress, windowHours, 'refreshed', null, 1);
+    } catch (e) {
+      console.error('[watchRefresh] attempt log failed (refreshed):', e);
+    }
 
     const returnPct =
       candidate.entryPriceUsd != null && refreshed.priceUsd != null && candidate.entryPriceUsd > 0

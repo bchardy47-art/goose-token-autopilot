@@ -45,6 +45,9 @@ interface CandidateCoverage {
   missedCount: number;
   latestReturnPct: number | null;
   bestGainPct: number | null;
+  lastAttemptOutcome: string | null;
+  lastAttemptAt: string | null;
+  lastAttemptReason: string | null;
 }
 
 export interface RefreshCoverageSummary {
@@ -67,6 +70,7 @@ export interface RefreshCoverageSummary {
   bestCandidates: CandidateCoverage[];
   noPoolAddress: CandidateCoverage[];
   poolAddressButNoSnapshots: CandidateCoverage[];
+  attemptStats: { total: number; refreshed: number; no_data: number; missing_pool_address: number; failed: number } | null;
   shouldRunLoop: boolean;
   suggestedWindowHours: number;
   suggestedLimit: number;
@@ -218,10 +222,51 @@ export function buildRefreshCoverageSummary(
     snapsByToken.get(r.token_id)!.push({ minutesAfter, priceUsd: r.price_usd });
   }
 
+  // Latest attempt per token for candidates in window
+  const attemptRows = sql.prepare(`
+    SELECT wra.token_id, wra.outcome, wra.attempted_at, wra.reason
+    FROM watch_refresh_attempts wra
+    JOIN watch_only_candidates wc ON wc.token_id = wra.token_id
+    WHERE wc.created_at >= ?
+    ORDER BY wra.attempted_at DESC
+  `).all(cutoff) as Array<{ token_id: number; outcome: string; attempted_at: string; reason: string | null }>;
+
+  // keep only most-recent attempt per token
+  const latestAttemptByToken = new Map<number, { outcome: string; attemptedAt: string; reason: string | null }>();
+  for (const r of attemptRows) {
+    if (!latestAttemptByToken.has(r.token_id)) {
+      latestAttemptByToken.set(r.token_id, { outcome: r.outcome, attemptedAt: r.attempted_at, reason: r.reason });
+    }
+  }
+
+  // overall attempt stats for window candidates
+  const attemptStatRows = sql.prepare(`
+    SELECT wra.outcome, COUNT(*) as cnt
+    FROM watch_refresh_attempts wra
+    JOIN watch_only_candidates wc ON wc.token_id = wra.token_id
+    WHERE wc.created_at >= ?
+    GROUP BY wra.outcome
+  `).all(cutoff) as Array<{ outcome: string; cnt: number }>;
+
+  let attemptStats: RefreshCoverageSummary['attemptStats'] = null;
+  if (attemptStatRows.length > 0) {
+    const counts = { total: 0, refreshed: 0, no_data: 0, missing_pool_address: 0, failed: 0 };
+    for (const r of attemptStatRows) {
+      const cnt = r.cnt;
+      counts.total += cnt;
+      if (r.outcome === 'refreshed') counts.refreshed += cnt;
+      else if (r.outcome === 'no_data') counts.no_data += cnt;
+      else if (r.outcome === 'missing_pool_address') counts.missing_pool_address += cnt;
+      else if (r.outcome === 'failed') counts.failed += cnt;
+    }
+    attemptStats = counts;
+  }
+
   const candidates: CandidateCoverage[] = candidateRows.map((r) => {
     const ageMinutes = minutesSince(r.created_at);
     const snaps = snapsByToken.get(r.token_id) ?? [];
     const windows = WINDOWS.map((w) => classifyWindow(ageMinutes, snaps, w, r.entry_price_usd));
+    const lastAttempt = latestAttemptByToken.get(r.token_id) ?? null;
     return {
       candidateId: r.candidate_id,
       tokenId: r.token_id,
@@ -238,6 +283,9 @@ export function buildRefreshCoverageSummary(
       missedCount: windows.filter((w) => w.status === 'MISSED').length,
       latestReturnPct: deriveReturnPct(r.entry_price_usd, r.latest_price_usd),
       bestGainPct: r.best_gain_pct,
+      lastAttemptOutcome: lastAttempt?.outcome ?? null,
+      lastAttemptAt: lastAttempt?.attemptedAt ?? null,
+      lastAttemptReason: lastAttempt?.reason ?? null,
     };
   });
 
@@ -319,6 +367,7 @@ export function buildRefreshCoverageSummary(
     bestCandidates,
     noPoolAddress,
     poolAddressButNoSnapshots,
+    attemptStats,
     shouldRunLoop,
     suggestedWindowHours,
     suggestedLimit,
@@ -426,8 +475,15 @@ export function renderRefreshCoverageSummary(summary: RefreshCoverageSummary): s
   // 6. No-Data / Refresh Failure Clues
   lines.push('No-Data / Refresh Failure Clues');
   lines.push(sep);
-  lines.push('  NOTE: Refresh failure history is not persisted in the DB.');
-  lines.push('  Failure clues are inferred from snapshot absence only.');
+  if (summary.attemptStats === null) {
+    lines.push('  Attempt history: no attempts logged yet.');
+    lines.push('  Run token:watch-refresh or token:early-refresh-loop to begin collecting attempt history.');
+  } else {
+    const a = summary.attemptStats;
+    lines.push(
+      `  Attempt history (window candidates): total=${a.total}  refreshed=${a.refreshed}  no_data=${a.no_data}  missing_pool=${a.missing_pool_address}  failed=${a.failed}`
+    );
+  }
   lines.push('');
   lines.push(`  Candidates with no pool address: ${summary.noPoolAddress.length}`);
   if (summary.noPoolAddress.length === 0) {
@@ -448,7 +504,10 @@ export function renderRefreshCoverageSummary(summary: RefreshCoverageSummary): s
   } else {
     const shown = summary.poolAddressButNoSnapshots.slice(0, 10);
     for (const c of shown) {
-      lines.push(`    ${c.symbol.padEnd(14)} src=${c.source}  age=${fmtAge(c.discoveryAgeMinutes)}`);
+      const attempt = c.lastAttemptOutcome
+        ? `last_attempt=${c.lastAttemptOutcome}${c.lastAttemptReason ? ` (${c.lastAttemptReason})` : ''}`
+        : 'never_attempted';
+      lines.push(`    ${c.symbol.padEnd(14)} src=${c.source}  age=${fmtAge(c.discoveryAgeMinutes)}  ${attempt}`);
     }
     if (summary.poolAddressButNoSnapshots.length > 10) {
       lines.push(`    ... and ${summary.poolAddressButNoSnapshots.length - 10} more`);

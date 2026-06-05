@@ -28,7 +28,9 @@ import type {
   AuthorityStatus,
   CreatorStatus,
   ConcentrationStatus,
-  AvailabilityStatus
+  AvailabilityStatus,
+  WatchRefreshOutcome,
+  WatchRefreshAttempt
 } from './types';
 
 function toToday(): string {
@@ -254,6 +256,57 @@ export class AppDb {
       )
       .run(tokenId, proposalId, side, amountUsd, new Date().toISOString(), blocked ? 1 : 0, blockReason, txSignature, JSON.stringify(raw));
     return Number(result.lastInsertRowid);
+  }
+
+  recordWatchRefreshAttempt(
+    tokenId: number,
+    watchCandidateId: number | null,
+    symbol: string | null,
+    source: string | null,
+    poolAddress: string | null,
+    windowHours: number | null,
+    outcome: WatchRefreshOutcome,
+    reason: string | null,
+    snapshotsInserted: number,
+    raw: Record<string, unknown> = {}
+  ): number {
+    const result = this.sqlite
+      .prepare(
+        'INSERT INTO watch_refresh_attempts (attempted_at, token_id, watch_candidate_id, symbol, source, pool_address, window_hours, outcome, reason, snapshots_inserted, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      )
+      .run(
+        new Date().toISOString(),
+        tokenId,
+        watchCandidateId ?? null,
+        symbol ?? null,
+        source ?? null,
+        poolAddress ?? null,
+        windowHours ?? null,
+        outcome,
+        reason ?? null,
+        snapshotsInserted,
+        JSON.stringify(raw)
+      );
+    return Number(result.lastInsertRowid);
+  }
+
+  getWatchRefreshAttemptsSince(since: string, limit = 2000): WatchRefreshAttempt[] {
+    const rows = this.sqlite
+      .prepare('SELECT * FROM watch_refresh_attempts WHERE attempted_at >= ? ORDER BY attempted_at DESC LIMIT ?')
+      .all(since, limit) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      id: row['id'] as number,
+      attemptedAt: row['attempted_at'] as string,
+      tokenId: row['token_id'] as number,
+      watchCandidateId: (row['watch_candidate_id'] as number | null) ?? null,
+      symbol: (row['symbol'] as string | null) ?? null,
+      source: (row['source'] as string | null) ?? null,
+      poolAddress: (row['pool_address'] as string | null) ?? null,
+      windowHours: (row['window_hours'] as number | null) ?? null,
+      outcome: row['outcome'] as WatchRefreshOutcome,
+      reason: (row['reason'] as string | null) ?? null,
+      snapshotsInserted: (row['snapshots_inserted'] as number) ?? 0,
+    }));
   }
 
   upsertWatchOnlyCandidate(
