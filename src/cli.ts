@@ -42,6 +42,7 @@ import { renderHistoricalWinnerAutopsy } from './paper/historicalWinnerAutopsy';
 import { buildShadowCandidateReport, renderShadowCandidateReport } from './paper/shadowCandidateReport';
 import { runEarlyRefreshLoop, renderEarlyRefreshLoopResult } from './paper/earlyRefreshLoop';
 import { buildRefreshCoverageSummary, renderRefreshCoverageSummary } from './paper/refreshCoverageSummary';
+import { runFreshCaptureSession, renderFreshCaptureSessionResult } from './paper/freshCaptureSession';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -371,6 +372,25 @@ async function main(): Promise<void> {
         const limit = parseNumberArg('--limit', 200, { integer: true, min: 1 });
         const top = parseNumberArg('--top', 20, { integer: true, min: 1 });
         console.log(renderRefreshCoverageSummary(buildRefreshCoverageSummary(db, config, { windowHours, limit, top })));
+        break;
+      }
+      case 'token:fresh-capture-session': {
+        const windowHours = parseNumberArg('--window-hours', 6, { min: 0 });
+        const limit = parseNumberArg('--limit', 20, { integer: true, min: 1 });
+        const cycles = parseNumberArg('--cycles', 4, { integer: true, min: 1 });
+        const intervalMinutes = parseNumberArg('--interval-minutes', 15, { min: 0 });
+        const dryRun = process.argv.includes('--dry-run');
+        const skipWatchCycle = process.argv.includes('--skip-watch-cycle');
+        const result = await runFreshCaptureSession(db, config, {
+          windowHours,
+          limit,
+          cycles,
+          intervalMs: intervalMinutes * 60_000,
+          dryRun,
+          skipWatchCycle,
+          onPhase: (phase) => console.log(`[fresh-capture-session] ${phase}`),
+        });
+        console.log(renderFreshCaptureSessionResult(result));
         break;
       }
       default:
