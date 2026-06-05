@@ -46,6 +46,7 @@ import { runFreshCaptureSession, renderFreshCaptureSessionResult } from './paper
 import { buildRejectedRunnerAutopsy, renderRejectedRunnerAutopsy } from './paper/rejectedRunnerAutopsy';
 import { buildChaseWatchReport, renderChaseWatchReport } from './paper/chaseWatchReport';
 import { buildPaperReadinessReport, renderPaperReadinessReport } from './paper/paperReadinessReport';
+import { buildTinyPaperPlanReport, renderTinyPaperPlanReport } from './paper/tinyPaperPlanReport';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -433,6 +434,27 @@ async function main(): Promise<void> {
       }
       case 'token:paper-readiness-report': {
         console.log(renderPaperReadinessReport(buildPaperReadinessReport(db, config)));
+        break;
+      }
+      case 'token:tiny-paper-plan-report': {
+        const windowHours = parseNumberArg('--window-hours', 24, { min: 0 });
+        const limit = parseNumberArg('--limit', 200, { integer: true, min: 1 });
+        const maxPaperPositionUsd = parseNumberArg('--max-paper-position-usd', 5, { min: 0 });
+        const maxOpenPositions = parseNumberArg('--max-open-positions', 1, { integer: true, min: 1 });
+        const maxDailyPaperBuys = parseNumberArg('--max-daily-paper-buys', 1, { integer: true, min: 1 });
+        const minLiquidity = parseNumberArg('--min-liquidity', 50_000, { min: 0 });
+        const maxSlippageBps = parseNumberArg('--max-slippage-bps', 200, { min: 0 });
+        const minShadowSamples = parseNumberArg('--min-shadow-samples', 3, { integer: true, min: 0 });
+        const requireQuoteCheck = !process.argv.includes('--no-require-quote-check');
+        console.log(
+          renderTinyPaperPlanReport(
+            buildTinyPaperPlanReport(db, config, {
+              windowHours, limit, maxPaperPositionUsd, maxOpenPositions,
+              maxDailyPaperBuys, minLiquidity, maxSlippageBps,
+              minShadowSamples, requireQuoteCheck,
+            })
+          )
+        );
         break;
       }
       default:
