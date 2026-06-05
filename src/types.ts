@@ -13,6 +13,7 @@ export type TokenSourceName = 'fixture' | 'dexscreener' | 'geckoterminal';
 export type ResearchStatus = 'IGNORE' | 'WATCH_ONLY' | 'PAPER_TRACKED' | 'CLOSED';
 export type WatchOnlySignalClass = 'EARLY_RUNNER' | 'LATE_RUNNER' | 'INSTANT_DUMP' | 'DEAD_NOISE' | 'TOO_DANGEROUS';
 export type HolderConcentrationLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'UNKNOWN';
+export type WatchRefreshOutcome = 'refreshed' | 'no_data' | 'missing_pool_address' | 'failed';
 
 export interface TokenCandidate {
   chain: string;
@@ -388,6 +389,20 @@ export interface QuoteSellabilityCheckRow {
   safetyStatus: string | null;
   errorSummary: string | null;
   rawJson: string;
+}
+
+export interface WatchRefreshAttempt {
+  id: number;
+  attemptedAt: string;
+  tokenId: number;
+  watchCandidateId: number | null;
+  symbol: string | null;
+  source: string | null;
+  poolAddress: string | null;
+  windowHours: number | null;
+  outcome: WatchRefreshOutcome;
+  reason: string | null;
+  snapshotsInserted: number;
 }
 
 export interface AppConfig {

@@ -273,4 +273,21 @@ CREATE TABLE IF NOT EXISTS run_logs (
   status TEXT NOT NULL,
   summary_json TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS watch_refresh_attempts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  attempted_at TEXT NOT NULL,
+  token_id INTEGER NOT NULL,
+  watch_candidate_id INTEGER,
+  symbol TEXT,
+  source TEXT,
+  pool_address TEXT,
+  window_hours REAL,
+  outcome TEXT NOT NULL,
+  reason TEXT,
+  snapshots_inserted INTEGER NOT NULL DEFAULT 0,
+  raw_json TEXT NOT NULL,
+  FOREIGN KEY(token_id) REFERENCES tokens(id),
+  FOREIGN KEY(watch_candidate_id) REFERENCES watch_only_candidates(id)
+);
 `;
