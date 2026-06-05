@@ -43,6 +43,7 @@ import { buildShadowCandidateReport, renderShadowCandidateReport } from './paper
 import { runEarlyRefreshLoop, renderEarlyRefreshLoopResult } from './paper/earlyRefreshLoop';
 import { buildRefreshCoverageSummary, renderRefreshCoverageSummary } from './paper/refreshCoverageSummary';
 import { runFreshCaptureSession, renderFreshCaptureSessionResult } from './paper/freshCaptureSession';
+import { buildRejectedRunnerAutopsy, renderRejectedRunnerAutopsy } from './paper/rejectedRunnerAutopsy';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -391,6 +392,26 @@ async function main(): Promise<void> {
           onPhase: (phase) => console.log(`[fresh-capture-session] ${phase}`),
         });
         console.log(renderFreshCaptureSessionResult(result));
+        break;
+      }
+      case 'token:rejected-runner-autopsy': {
+        const minGain = parseNumberArg('--min-gain', 50, { min: 0 });
+        const windowHours = parseNumberArg('--window-hours', 24, { min: 0 });
+        const limit = parseNumberArg('--limit', 200, { integer: true, min: 1 });
+        const minLiquidity = parseNumberArg('--min-liquidity', 50_000, { min: 0 });
+        const maxMoved = parseNumberArg('--max-moved', 25, { min: 0 });
+        const minBsr = parseNumberArg('--min-bsr', 2.0, { min: 0 });
+        const minPc5m = parseNumberArg('--min-pc5m', 3, { min: 0 });
+        const maxPc5m = parseNumberArg('--max-pc5m', 75, { min: 0 });
+        const maxSlippageBps = parseNumberArg('--max-slippage-bps', 200, { min: 0 });
+        console.log(
+          renderRejectedRunnerAutopsy(
+            buildRejectedRunnerAutopsy(db, config, {
+              minGain, windowHours, limit,
+              minLiquidity, maxMoved, minBsr, minPc5m, maxPc5m, maxSlippageBps,
+            })
+          )
+        );
         break;
       }
       default:
