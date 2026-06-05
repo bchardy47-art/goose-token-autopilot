@@ -57,6 +57,7 @@
     "token:refresh-coverage-summary": "tsx src/cli.ts token:refresh-coverage-summary",
     "token:fresh-capture-session": "tsx src/cli.ts token:fresh-capture-session",
     "token:rejected-runner-autopsy": "tsx src/cli.ts token:rejected-runner-autopsy",
+    "token:chase-watch-report": "tsx src/cli.ts token:chase-watch-report",
     "test": "vitest run"
   },
   "dependencies": {

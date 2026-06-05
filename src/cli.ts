@@ -44,6 +44,7 @@ import { runEarlyRefreshLoop, renderEarlyRefreshLoopResult } from './paper/early
 import { buildRefreshCoverageSummary, renderRefreshCoverageSummary } from './paper/refreshCoverageSummary';
 import { runFreshCaptureSession, renderFreshCaptureSessionResult } from './paper/freshCaptureSession';
 import { buildRejectedRunnerAutopsy, renderRejectedRunnerAutopsy } from './paper/rejectedRunnerAutopsy';
+import { buildChaseWatchReport, renderChaseWatchReport } from './paper/chaseWatchReport';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -409,6 +410,21 @@ async function main(): Promise<void> {
             buildRejectedRunnerAutopsy(db, config, {
               minGain, windowHours, limit,
               minLiquidity, maxMoved, minBsr, minPc5m, maxPc5m, maxSlippageBps,
+            })
+          )
+        );
+        break;
+      }
+      case 'token:chase-watch-report': {
+        const windowHours = parseNumberArg('--window-hours', 24, { min: 0 });
+        const limit = parseNumberArg('--limit', 200, { integer: true, min: 1 });
+        const minGain = parseNumberArg('--min-gain', 30, { min: 0 });
+        const chaseMovedPct = parseNumberArg('--chase-moved-pct', 25, { min: 0 });
+        const chasePc5mPct = parseNumberArg('--chase-pc5m-pct', 75, { min: 0 });
+        console.log(
+          renderChaseWatchReport(
+            buildChaseWatchReport(db, config, {
+              windowHours, limit, minGain, chaseMovedPct, chasePc5mPct,
             })
           )
         );
