@@ -168,17 +168,33 @@ export function buildRefreshCoverageSummary(
 
   const sourceBreakdown = sourceBreakdownRows.map((r) => ({ source: r.source, count: r.cnt }));
 
-  // pool address presence — JOIN avoids IN (...) param limits for large candidate sets
-  const poolAddressSet = new Set<number>(
-    (sql.prepare(`
-      SELECT DISTINCT sse.token_id
-      FROM solana_safety_enrichments sse
-      JOIN watch_only_candidates wc ON wc.token_id = sse.token_id
-      WHERE wc.created_at >= ?
-        AND sse.lp_or_pool_address IS NOT NULL
-        AND sse.lp_or_pool_address != ''
-    `).all(cutoff) as Array<{ token_id: number }>).map((r) => r.token_id)
-  );
+  // Pool address presence — read from earliest snapshot's raw.selectedPair.pairAddress.
+  // This matches the exact field watchRefresh uses to select candidates for refresh.
+  // solana_safety_enrichments.lp_or_pool_address is NOT used here: SSE enrichment is a
+  // separate pipeline that many recent GeckoTerminal candidates have never gone through.
+  const snapPoolRows = sql.prepare(`
+    SELECT wc.token_id, snap.raw_json
+    FROM watch_only_candidates wc
+    JOIN token_snapshots snap ON snap.id = (
+      SELECT id FROM token_snapshots WHERE token_id = wc.token_id ORDER BY observed_at ASC LIMIT 1
+    )
+    WHERE wc.created_at >= ?
+  `).all(cutoff) as Array<{ token_id: number; raw_json: string }>;
+
+  const poolAddressSet = new Set<number>();
+  for (const r of snapPoolRows) {
+    try {
+      const parsed = JSON.parse(r.raw_json) as Record<string, unknown>;
+      const inner = parsed?.raw as Record<string, unknown> | undefined;
+      const selectedPair = inner?.selectedPair as Record<string, unknown> | undefined;
+      const pairAddress = selectedPair?.pairAddress;
+      if (typeof pairAddress === 'string' && pairAddress.length > 0) {
+        poolAddressSet.add(r.token_id);
+      }
+    } catch {
+      // skip malformed raw_json
+    }
+  }
 
   // post-discovery snapshots
   const snapRows = sql.prepare(`
