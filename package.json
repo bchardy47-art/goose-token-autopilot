@@ -59,6 +59,7 @@
     "token:rejected-runner-autopsy": "tsx src/cli.ts token:rejected-runner-autopsy",
     "token:chase-watch-report": "tsx src/cli.ts token:chase-watch-report",
     "token:paper-readiness-report": "tsx src/cli.ts token:paper-readiness-report",
+    "token:tiny-paper-plan-report": "tsx src/cli.ts token:tiny-paper-plan-report",
     "test": "vitest run"
   },
   "dependencies": {
