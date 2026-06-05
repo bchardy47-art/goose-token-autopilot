@@ -534,10 +534,37 @@ export function renderRefreshCoverageSummary(summary: RefreshCoverageSummary): s
     lines.push('  All actionable windows are missed. early-refresh-loop was likely not running.');
     lines.push('  Consider increasing loop frequency for new candidates going forward.');
   } else {
-    lines.push('  Coverage looks healthy. No immediate action needed.');
-    lines.push(
-      `  Coverage: ${summary.coveragePct}% | DONE=${summary.doneWindows} MISSED=${summary.missedWindows}`
-    );
+    const noDataCount = summary.attemptStats?.no_data ?? 0;
+    const refreshedCount = summary.attemptStats?.refreshed ?? 0;
+    const coverageHealthy = summary.coveragePct >= 70 && summary.missedWindows <= summary.doneWindows && noDataCount < 5;
+
+    if (coverageHealthy) {
+      lines.push('  Coverage looks healthy. No immediate action needed.');
+      lines.push(
+        `  Coverage: ${summary.coveragePct}% | DONE=${summary.doneWindows} MISSED=${summary.missedWindows}`
+      );
+    } else {
+      lines.push(
+        `  Coverage is limited (${summary.coveragePct}%). No windows are due right now, but missed windows are high.`
+      );
+      if (noDataCount > 0) {
+        lines.push(
+          `  no_data attempts: ${noDataCount} — stale rescue has low value. Do not blindly refresh missed windows.`
+        );
+      } else if (summary.attemptStats === null) {
+        lines.push('  No attempt history yet — missed windows have never been attempted.');
+      }
+      lines.push('  Recommended: run token:watch-cycle to discover new candidates, then start');
+      lines.push('  token:early-refresh-loop immediately after so fresh windows are captured on time.');
+      lines.push(
+        `  Coverage: ${summary.coveragePct}% | DONE=${summary.doneWindows} MISSED=${summary.missedWindows}`
+      );
+      if (summary.attemptStats !== null) {
+        lines.push(
+          `  Attempt stats: refreshed=${refreshedCount}  no_data=${noDataCount}  missing_pool=${summary.attemptStats.missing_pool_address}  failed=${summary.attemptStats.failed}`
+        );
+      }
+    }
   }
   lines.push('');
 
