@@ -58,6 +58,7 @@
     "token:fresh-capture-session": "tsx src/cli.ts token:fresh-capture-session",
     "token:rejected-runner-autopsy": "tsx src/cli.ts token:rejected-runner-autopsy",
     "token:chase-watch-report": "tsx src/cli.ts token:chase-watch-report",
+    "token:paper-readiness-report": "tsx src/cli.ts token:paper-readiness-report",
     "test": "vitest run"
   },
   "dependencies": {

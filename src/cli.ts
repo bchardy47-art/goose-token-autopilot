@@ -45,6 +45,7 @@ import { buildRefreshCoverageSummary, renderRefreshCoverageSummary } from './pap
 import { runFreshCaptureSession, renderFreshCaptureSessionResult } from './paper/freshCaptureSession';
 import { buildRejectedRunnerAutopsy, renderRejectedRunnerAutopsy } from './paper/rejectedRunnerAutopsy';
 import { buildChaseWatchReport, renderChaseWatchReport } from './paper/chaseWatchReport';
+import { buildPaperReadinessReport, renderPaperReadinessReport } from './paper/paperReadinessReport';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -428,6 +429,10 @@ async function main(): Promise<void> {
             })
           )
         );
+        break;
+      }
+      case 'token:paper-readiness-report': {
+        console.log(renderPaperReadinessReport(buildPaperReadinessReport(db, config)));
         break;
       }
       default:
