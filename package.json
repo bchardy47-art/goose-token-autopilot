@@ -55,6 +55,7 @@
     "token:shadow-candidate-report": "tsx src/cli.ts token:shadow-candidate-report",
     "token:early-refresh-loop": "tsx src/cli.ts token:early-refresh-loop",
     "token:refresh-coverage-summary": "tsx src/cli.ts token:refresh-coverage-summary",
+    "token:fresh-capture-session": "tsx src/cli.ts token:fresh-capture-session",
     "test": "vitest run"
   },
   "dependencies": {
