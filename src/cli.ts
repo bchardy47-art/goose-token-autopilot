@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { loadConfig } from './config';
 import { createDb } from './db';
 import { runScan } from './scanner';
@@ -48,6 +49,7 @@ import { buildChaseWatchReport, renderChaseWatchReport } from './paper/chaseWatc
 import { buildPaperReadinessReport, renderPaperReadinessReport } from './paper/paperReadinessReport';
 import { buildTinyPaperPlanReport, renderTinyPaperPlanReport } from './paper/tinyPaperPlanReport';
 import { startControlCenterServer } from './dashboard/controlCenterServer';
+import { buildXEarsReport, renderXEarsReport, type SocialPost, type XEarsSourceMode } from './social/xEarsAnalyzer';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -456,6 +458,34 @@ async function main(): Promise<void> {
             })
           )
         );
+        break;
+      }
+      case 'token:x-ears-report': {
+        const limit = parseNumberArg('--limit', 50, { integer: true, min: 1 });
+        const windowMinutes = parseNumberArg('--window-minutes', 90, { min: 1 });
+        const fixturePath = getArgValue('--fixture');
+        const jsonMode = process.argv.includes('--json');
+
+        let posts: SocialPost[] = [];
+        let sourceMode: XEarsSourceMode = 'api_unavailable';
+
+        if (fixturePath) {
+          const raw = fs.readFileSync(fixturePath, 'utf-8');
+          posts = JSON.parse(raw) as SocialPost[];
+          sourceMode = 'fixture';
+        } else if (process.env.X_BEARER_TOKEN) {
+          console.error('[x-ears] X_BEARER_TOKEN detected but live API is not implemented in V1.');
+          console.error('[x-ears] Use --fixture=<path> to test with local sample data.');
+        }
+
+        const slicedPosts = posts.slice(0, limit);
+        const report = buildXEarsReport(slicedPosts, { windowMinutes, sourceMode });
+
+        if (jsonMode) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(renderXEarsReport(report));
+        }
         break;
       }
       case 'token:control-center': {
