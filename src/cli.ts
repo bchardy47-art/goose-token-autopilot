@@ -64,12 +64,22 @@ import {
   loadTokenGrabSession,
   type TokenGrabSessionFile,
 } from './token-grab/sessionCapture';
-import { fetchSessionSnapshots, writeSnapshotFile } from './token-grab/snapshot';
+import { fetchSessionSnapshots, writeSnapshotFile, sleep } from './token-grab/snapshot';
 import {
   selectWatchCandidates,
   renderWatchSnapshotSummary,
   type WatchSnapshotSummary,
 } from './token-grab/watchSnapshot';
+import {
+  chooseLiveAssistedCandidate,
+  isFakeBuyEligible,
+  calculateFakePosition,
+  calculateFakePnL,
+  buildLiveAssistedSummary,
+  renderLiveAssistedReport,
+  type FakeBuyRecord,
+  type LiveAssistedPnL,
+} from './token-grab/liveAssistedWatch';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -815,6 +825,224 @@ async function main(): Promise<void> {
           for (const s of watchResult.skipReasons) {
             console.log(`  ! ${s.ticker} (${s.candidateId}): ${s.reason}`);
           }
+        }
+        break;
+      }
+
+      case 'token:live-assisted-watch': {
+        const fakeBankroll = parseNumberArg('--fake-bankroll', 20, { min: 0.01 });
+        const maxFakePosition = parseNumberArg('--max-fake-position', 5, { min: 0.01 });
+        const watchMinutes = parseNumberArg('--watch-minutes', 10, { min: 0.01 });
+        const geckoLimit = parseNumberArg('--gecko-limit', 20, { integer: true, min: 1 });
+        const delayMs = parseNumberArg('--delay-ms', 5000, { integer: true, min: 0 });
+        const outDir = getArgValue('--out-dir') ?? 'data/token-grab/live-assisted';
+        const tsArg = getArgValue('--timestamp');
+        const skipSleep = process.argv.includes('--skip-sleep');
+        const jsonMode = process.argv.includes('--json');
+
+        if (maxFakePosition > fakeBankroll) {
+          throw new Error(`--max-fake-position (${maxFakePosition}) cannot exceed --fake-bankroll (${fakeBankroll})`);
+        }
+
+        const now = new Date();
+        const ts = tsArg ?? [
+          now.getUTCFullYear(),
+          String(now.getUTCMonth() + 1).padStart(2, '0'),
+          String(now.getUTCDate()).padStart(2, '0'),
+        ].join('') + '-' + [
+          String(now.getUTCHours()).padStart(2, '0'),
+          String(now.getUTCMinutes()).padStart(2, '0'),
+        ].join('');
+
+        const sessionPath = `${outDir}/session-${ts}.json`;
+        const entryPath = `${outDir}/session-${ts}-entry.json`;
+        const exitPath = `${outDir}/session-${ts}-exit.json`;
+
+        // 1. Safety banner
+        const LIVE_WIDE = '═'.repeat(62);
+        console.log(LIVE_WIDE);
+        console.log('  LIVE-ASSISTED PAPER MODE — Token Grab V1');
+        console.log(LIVE_WIDE);
+        console.log('  NO REAL TRADING EXECUTED');
+        console.log('  token:auto-paper was NOT run');
+        console.log(`  Fake bankroll      : $${fakeBankroll}`);
+        console.log(`  Max fake position  : $${maxFakePosition}`);
+        console.log(`  Watch minutes      : ${watchMinutes}`);
+        if (skipSleep) console.log('  [skip-sleep mode active]');
+        console.log('');
+
+        // 2. Detect fresh pools
+        console.log('Detecting fresh Solana pools from GeckoTerminal...');
+        const livePools = await fetchGeckoFreshPools({ limit: geckoLimit });
+        const freshPools = dedupeFreshPools(livePools);
+        const liveReport = buildTokenGrabReport({ socialSignals: [], eventSignals: [], freshPools });
+
+        // 3. Save session
+        const liveSession: TokenGrabSessionFile = {
+          schema: 'token-grab-session-v1',
+          generatedAt: liveReport.generatedAt,
+          source: { social: 'none', freshPools: 'geckoterminal', events: 'none' },
+          flags: { geckoFreshPools: true, geckoLimit },
+          summary: liveReport.summary,
+          candidates: tokenGrabReportToAutopsyCandidates(liveReport),
+          safety: {
+            reportOnly: true,
+            noTradingExecuted: true,
+            tradingExecuted: 0,
+            dbWrites: false,
+            scheduler: false,
+          },
+        };
+        saveTokenGrabSession(sessionPath, liveSession);
+
+        const allCandidates = liveSession.candidates;
+        const laneSummary: Record<string, number> = {};
+        for (const c of allCandidates) {
+          laneSummary[c.lane] = (laneSummary[c.lane] ?? 0) + 1;
+        }
+
+        console.log(`Detected ${allCandidates.length} candidates:`);
+        for (const [lane, count] of Object.entries(laneSummary)) {
+          console.log(`  ${lane}: ${count}`);
+        }
+        console.log('');
+
+        // 4. Select watch-worthy candidates
+        const liveSelected = selectWatchCandidates(allCandidates);
+
+        if (!liveSelected.hasWatchWorthy) {
+          writeSnapshotFile(entryPath, []);
+          writeSnapshotFile(exitPath, []);
+          const noWatchSummary = buildLiveAssistedSummary({
+            ts, sessionPath, entrySnapshotPath: entryPath, exitSnapshotPath: exitPath,
+            fakeBankroll, maxFakePosition, watchMinutes,
+            candidatesDetected: allCandidates.length,
+            laneSummary, watchWorthyCount: 0,
+            decision: 'NO_BUY',
+            noBuyReason: 'No watch-worthy candidates found in this detection round.',
+            skipSleepMode: skipSleep,
+          });
+          if (jsonMode) {
+            console.log(JSON.stringify(noWatchSummary, null, 2));
+          } else {
+            console.log(renderLiveAssistedReport(noWatchSummary));
+          }
+          break;
+        }
+
+        // 5. Entry snapshot
+        console.log(`${liveSelected.candidates.length} watch-worthy candidate(s). Fetching entry snapshots...`);
+        const entryResult = await fetchSessionSnapshots({
+          candidates: liveSelected.candidates,
+          delayMs,
+        });
+        writeSnapshotFile(entryPath, entryResult.snapshots);
+        console.log(`Entry snapshots: ${entryResult.snapshots.length} written, ${entryResult.skipped} skipped.`);
+        console.log('');
+
+        // 6. Fake buy decision
+        const chosen = chooseLiveAssistedCandidate(liveSelected.candidates, entryResult.snapshots);
+        const entrySnapshot = chosen?.snapshot;
+        const fakeBuyOk = chosen != null && isFakeBuyEligible(
+          chosen.candidate, entrySnapshot, maxFakePosition, fakeBankroll,
+        );
+
+        let fakeBuyRecord: FakeBuyRecord | undefined;
+        let noBuyReason: string | undefined;
+
+        if (fakeBuyOk && chosen && entrySnapshot && entrySnapshot.priceUsd) {
+          const positionSize = calculateFakePosition(fakeBankroll, maxFakePosition);
+          const fakeTokensHeld = positionSize / entrySnapshot.priceUsd;
+          fakeBuyRecord = {
+            candidateId: chosen.candidate.id,
+            tokenName: chosen.candidate.tokenName,
+            ticker: chosen.candidate.ticker,
+            lane: chosen.candidate.lane,
+            fakePositionSize: positionSize,
+            fakeEntryPrice: entrySnapshot.priceUsd,
+            fakeLiquidityAtEntry: entrySnapshot.liquidityUsd ?? 0,
+            fakeTokensHeld,
+            paperStopNote: 'Paper stop only; no real order placed',
+            fakeExitRule: `Exit at ${watchMinutes}-minute snapshot`,
+          };
+          console.log(`FAKE BUY: $${fakeBuyRecord.ticker} @ $${fakeBuyRecord.fakeEntryPrice.toExponential(4)}`);
+          console.log(`  Position size : $${positionSize.toFixed(2)}`);
+          console.log(`  Tokens held   : ${fakeTokensHeld.toFixed(6)}`);
+          console.log(`  Lane          : ${chosen.candidate.lane}`);
+          console.log(`  Liquidity     : $${entrySnapshot.liquidityUsd?.toFixed(0) ?? 'n/a'}`);
+          console.log('  [PAPER ONLY — NO REAL ORDER PLACED]');
+        } else {
+          if (!chosen) {
+            noBuyReason = 'No watch candidate found.';
+          } else if (!entrySnapshot) {
+            noBuyReason = `Entry snapshot missing for ${chosen.candidate.ticker}.`;
+          } else if (!entrySnapshot.priceUsd || entrySnapshot.priceUsd <= 0) {
+            noBuyReason = `Entry price unavailable for ${chosen.candidate.ticker}.`;
+          } else if (!entrySnapshot.liquidityUsd || entrySnapshot.liquidityUsd < 1000) {
+            noBuyReason = `Liquidity too low ($${(entrySnapshot.liquidityUsd ?? 0).toFixed(0)} < $1000) for ${chosen.candidate.ticker}.`;
+          } else {
+            noBuyReason = `Lane ${chosen.candidate.lane} not eligible for fake buy in V1.`;
+          }
+          console.log(`NO_BUY: ${noBuyReason}`);
+        }
+        console.log('');
+
+        // 7. Sleep
+        if (!skipSleep) {
+          console.log(`Sleeping ${watchMinutes} minute(s) before exit snapshot...`);
+          await sleep(watchMinutes * 60 * 1000);
+        } else {
+          console.log('[skip-sleep: proceeding immediately to exit snapshot]');
+        }
+
+        // 8. Exit snapshot
+        console.log('Fetching exit snapshots...');
+        const exitResult = await fetchSessionSnapshots({
+          candidates: liveSelected.candidates,
+          delayMs,
+        });
+        writeSnapshotFile(exitPath, exitResult.snapshots);
+        console.log(`Exit snapshots: ${exitResult.snapshots.length} written, ${exitResult.skipped} skipped.`);
+        console.log('');
+
+        // 9. Autopsy
+        const allSnapshots = [...entryResult.snapshots, ...exitResult.snapshots];
+        const liveAutopsy = buildTokenGrabAutopsyReport(liveSelected.candidates, allSnapshots, { mode: 'session-file' });
+        const chosenAutopsyResult = chosen
+          ? liveAutopsy.results.find(r => r.candidateId === chosen.candidate.id)
+          : undefined;
+
+        // 10. P/L
+        let livePnL: LiveAssistedPnL | undefined;
+        if (fakeBuyRecord) {
+          const exitSnap = exitResult.snapshots.find(s => s.candidateId === fakeBuyRecord!.candidateId);
+          livePnL = calculateFakePnL(
+            fakeBuyRecord.fakePositionSize,
+            fakeBuyRecord.fakeEntryPrice,
+            fakeBuyRecord.fakeTokensHeld,
+            exitSnap?.priceUsd,
+            fakeBankroll,
+          );
+        }
+
+        // 11. Final report
+        const liveSummary = buildLiveAssistedSummary({
+          ts, sessionPath, entrySnapshotPath: entryPath, exitSnapshotPath: exitPath,
+          fakeBankroll, maxFakePosition, watchMinutes,
+          candidatesDetected: allCandidates.length,
+          laneSummary, watchWorthyCount: liveSelected.totalWatchWorthy,
+          decision: fakeBuyRecord ? 'FAKE_BUY' : 'NO_BUY',
+          noBuyReason,
+          fakeBuy: fakeBuyRecord,
+          fakePnL: livePnL,
+          autopsyResult: chosenAutopsyResult,
+          skipSleepMode: skipSleep,
+        });
+
+        if (jsonMode) {
+          console.log(JSON.stringify(liveSummary, null, 2));
+        } else {
+          console.log(renderLiveAssistedReport(liveSummary));
         }
         break;
       }
