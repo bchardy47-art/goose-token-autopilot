@@ -57,6 +57,12 @@ import { loadFreshPoolsFromFile, loadEventSignalsFromFile } from './token-grab/l
 import { fetchGeckoFreshPools, dedupeFreshPools } from './token-grab/geckoFreshPools';
 import { buildTokenGrabAutopsyReport, renderTokenGrabAutopsyReport } from './token-grab/autopsy';
 import { loadAutopsyCandidatesFromFile, loadAutopsySnapshotsFromFile } from './token-grab/autopsyLoaders';
+import {
+  tokenGrabReportToAutopsyCandidates,
+  saveTokenGrabSession,
+  loadTokenGrabSession,
+  type TokenGrabSessionFile,
+} from './token-grab/sessionCapture';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -519,6 +525,7 @@ async function main(): Promise<void> {
         const geckoLimit = parseNumberArg('--gecko-limit', 20, { integer: true, min: 1 });
         const geckoTimeoutMs = parseNumberArg('--gecko-timeout-ms', 10_000, { integer: true, min: 500 });
         const jsonMode = process.argv.includes('--json');
+        const saveSessionPath = getArgValue('--save-session');
 
         let xSocialSignals: ReturnType<typeof mapXEarsReportToSocialSignals> = [];
 
@@ -544,6 +551,41 @@ async function main(): Promise<void> {
           freshPools,
         });
 
+        if (saveSessionPath) {
+          const freshPoolsSource =
+            useGecko && freshPoolsPath ? 'mixed' :
+            useGecko ? 'geckoterminal' :
+            freshPoolsPath ? 'local' : 'none';
+          const sessionFlags: TokenGrabSessionFile['flags'] = {
+            geckoFreshPools: useGecko,
+          };
+          if (useGecko) sessionFlags.geckoLimit = geckoLimit;
+          if (freshPoolsPath) sessionFlags.freshPoolsPath = freshPoolsPath;
+          if (eventsPath) sessionFlags.eventsPath = eventsPath;
+          if (fixturePath) sessionFlags.fixturePath = fixturePath;
+          const session: TokenGrabSessionFile = {
+            schema: 'token-grab-session-v1',
+            generatedAt: report.generatedAt,
+            source: {
+              social: fixturePath ? 'fixture' : process.env.X_BEARER_TOKEN ? 'x-ears' : 'none',
+              freshPools: freshPoolsSource,
+              events: eventsPath ? 'local' : 'none',
+            },
+            flags: sessionFlags,
+            summary: report.summary,
+            candidates: tokenGrabReportToAutopsyCandidates(report),
+            safety: {
+              reportOnly: true,
+              noTradingExecuted: true,
+              tradingExecuted: 0,
+              dbWrites: false,
+              scheduler: false,
+            },
+          };
+          saveTokenGrabSession(saveSessionPath, session);
+          console.log(`Saved Token Grab session: ${saveSessionPath}`);
+        }
+
         if (jsonMode) {
           console.log(JSON.stringify(report, null, 2));
         } else {
@@ -552,14 +594,37 @@ async function main(): Promise<void> {
         break;
       }
       case 'token:ears-autopsy': {
-        const candidatesPath = getArgValue('--candidates') ?? 'fixtures/token-grab/autopsy-candidates.json';
+        const sessionPath = getArgValue('--session');
         const snapshotsPath = getArgValue('--snapshots') ?? 'fixtures/token-grab/autopsy-snapshots.json';
         const jsonMode = process.argv.includes('--json');
-        const candidates = loadAutopsyCandidatesFromFile(candidatesPath);
+
+        let autopsyCandidates: ReturnType<typeof loadAutopsyCandidatesFromFile>;
+        let sessionMeta: TokenGrabSessionFile | undefined;
+
+        if (sessionPath) {
+          const session = loadTokenGrabSession(sessionPath);
+          autopsyCandidates = session.candidates;
+          sessionMeta = session;
+        } else {
+          const candidatesPath = getArgValue('--candidates') ?? 'fixtures/token-grab/autopsy-candidates.json';
+          autopsyCandidates = loadAutopsyCandidatesFromFile(candidatesPath);
+        }
+
         const snapshots = loadAutopsySnapshotsFromFile(snapshotsPath);
-        const report = buildTokenGrabAutopsyReport(candidates, snapshots);
+        const autopsyMode = sessionPath ? 'session-file' as const : 'fixture-only' as const;
+        const report = buildTokenGrabAutopsyReport(autopsyCandidates, snapshots, { mode: autopsyMode });
+
         if (jsonMode) {
-          console.log(JSON.stringify(report, null, 2));
+          if (sessionMeta) {
+            console.log(JSON.stringify({
+              ...report,
+              sessionSource: sessionMeta.source,
+              sessionFlags: sessionMeta.flags,
+              sessionGeneratedAt: sessionMeta.generatedAt,
+            }, null, 2));
+          } else {
+            console.log(JSON.stringify(report, null, 2));
+          }
         } else {
           console.log(renderTokenGrabAutopsyReport(report));
         }

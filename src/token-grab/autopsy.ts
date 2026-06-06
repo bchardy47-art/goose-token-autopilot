@@ -71,7 +71,7 @@ export interface TokenGrabAutopsyResult {
 
 export interface TokenGrabAutopsyReport {
   generatedAt: string;
-  mode: 'fixture-only';
+  mode: 'fixture-only' | 'session-file';
   tradingStatus: 'LOCKED / NO TRADING EXECUTED';
   results: TokenGrabAutopsyResult[];
   summary: {
@@ -229,6 +229,7 @@ export function buildAutopsyResult(
 export function buildTokenGrabAutopsyReport(
   candidates: TokenGrabAutopsyCandidate[],
   snapshots: TokenGrabAutopsySnapshot[],
+  options?: { mode?: TokenGrabAutopsyReport['mode'] },
 ): TokenGrabAutopsyReport {
   const results = candidates.map(c =>
     buildAutopsyResult(c, snapshots.filter(s => s.candidateId === c.id)),
@@ -236,7 +237,7 @@ export function buildTokenGrabAutopsyReport(
 
   return {
     generatedAt: new Date().toISOString(),
-    mode: 'fixture-only',
+    mode: options?.mode ?? 'fixture-only',
     tradingStatus: 'LOCKED / NO TRADING EXECUTED',
     results,
     summary: {
