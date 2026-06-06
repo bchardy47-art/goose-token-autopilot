@@ -6,6 +6,7 @@ import {
   fetchCandidateSnapshot,
   fetchSessionSnapshots,
   writeSnapshotFile,
+  sleep,
 } from '../src/token-grab/snapshot';
 import { buildTokenGrabAutopsyReport } from '../src/token-grab/autopsy';
 import type { TokenGrabAutopsyCandidate, TokenGrabAutopsySnapshot } from '../src/token-grab/autopsy';
@@ -49,6 +50,16 @@ function makeThrowingFetch(message: string): typeof fetch {
 function tmpPath(label: string): string {
   return path.join(os.tmpdir(), `tg-snap-${label}-${process.pid}.json`);
 }
+
+// ── sleep helper ─────────────────────────────────────────────────────────────
+
+describe('sleep', () => {
+  it('resolves after approximately the given delay', async () => {
+    const start = Date.now();
+    await sleep(20);
+    expect(Date.now() - start).toBeGreaterThanOrEqual(15);
+  });
+});
 
 // ── fetchCandidateSnapshot — pool endpoint ────────────────────────────────────
 
@@ -302,6 +313,147 @@ describe('fetchSessionSnapshots', () => {
     });
     expect(result.snapshots).toHaveLength(0);
     expect(result.skipped).toBe(0);
+  });
+});
+
+// ── fetchSessionSnapshots — startAt and delayMs ───────────────────────────────
+
+describe('fetchSessionSnapshots — startAt and delayMs', () => {
+  it('startAt skips leading candidates', async () => {
+    const candidates = [
+      makeCandidate({ id: 'tg-001', ticker: 'A' }),
+      makeCandidate({ id: 'tg-002', ticker: 'B' }),
+      makeCandidate({ id: 'tg-003', ticker: 'C' }),
+    ];
+    const result = await fetchSessionSnapshots({
+      candidates,
+      startAt: 1,
+      nowIso: NOW_ISO,
+      fetchImpl: makeFetch({ data: { attributes: { price_in_usd: '0.001' } } }),
+    });
+
+    expect(result.snapshots).toHaveLength(2);
+    expect(result.snapshots[0]!.candidateId).toBe('tg-002');
+    expect(result.snapshots[1]!.candidateId).toBe('tg-003');
+  });
+
+  it('limit is applied after startAt', async () => {
+    const candidates = [
+      makeCandidate({ id: 'tg-001', ticker: 'A' }),
+      makeCandidate({ id: 'tg-002', ticker: 'B' }),
+      makeCandidate({ id: 'tg-003', ticker: 'C' }),
+      makeCandidate({ id: 'tg-004', ticker: 'D' }),
+    ];
+    const result = await fetchSessionSnapshots({
+      candidates,
+      startAt: 1,
+      limit: 2,
+      nowIso: NOW_ISO,
+      fetchImpl: makeFetch({ data: { attributes: { price_in_usd: '0.001' } } }),
+    });
+
+    expect(result.snapshots).toHaveLength(2);
+    expect(result.snapshots[0]!.candidateId).toBe('tg-002');
+    expect(result.snapshots[1]!.candidateId).toBe('tg-003');
+  });
+
+  it('startAt beyond candidate count returns empty result', async () => {
+    const candidates = [
+      makeCandidate({ id: 'tg-001', ticker: 'A' }),
+      makeCandidate({ id: 'tg-002', ticker: 'B' }),
+    ];
+    const result = await fetchSessionSnapshots({
+      candidates,
+      startAt: 5,
+      nowIso: NOW_ISO,
+      fetchImpl: makeFetch({ data: { attributes: {} } }),
+    });
+    expect(result.snapshots).toHaveLength(0);
+    expect(result.skipped).toBe(0);
+  });
+
+  it('delayMs > 0 calls sleepImpl between candidates', async () => {
+    const candidates = [
+      makeCandidate({ id: 'tg-001', ticker: 'A' }),
+      makeCandidate({ id: 'tg-002', ticker: 'B' }),
+      makeCandidate({ id: 'tg-003', ticker: 'C' }),
+    ];
+    const sleepCalls: number[] = [];
+    const sleepImpl = async (ms: number) => { sleepCalls.push(ms); };
+
+    await fetchSessionSnapshots({
+      candidates,
+      nowIso: NOW_ISO,
+      fetchImpl: makeFetch({ data: { attributes: { price_in_usd: '0.001' } } }),
+      delayMs: 500,
+      sleepImpl,
+    });
+
+    // 3 candidates → 2 sleeps (not after last)
+    expect(sleepCalls).toHaveLength(2);
+    expect(sleepCalls[0]).toBe(500);
+    expect(sleepCalls[1]).toBe(500);
+  });
+
+  it('delayMs > 0 does not sleep after the final candidate', async () => {
+    const candidates = [
+      makeCandidate({ id: 'tg-001', ticker: 'A' }),
+      makeCandidate({ id: 'tg-002', ticker: 'B' }),
+    ];
+    const sleepCalls: number[] = [];
+    const sleepImpl = async (ms: number) => { sleepCalls.push(ms); };
+
+    await fetchSessionSnapshots({
+      candidates,
+      nowIso: NOW_ISO,
+      fetchImpl: makeFetch({ data: { attributes: { price_in_usd: '0.001' } } }),
+      delayMs: 1500,
+      sleepImpl,
+    });
+
+    // 2 candidates → exactly 1 sleep (between them, not after last)
+    expect(sleepCalls).toHaveLength(1);
+  });
+
+  it('delayMs of 0 never calls sleepImpl', async () => {
+    const candidates = [
+      makeCandidate({ id: 'tg-001', ticker: 'A' }),
+      makeCandidate({ id: 'tg-002', ticker: 'B' }),
+    ];
+    const sleepCalls: number[] = [];
+    const sleepImpl = async (ms: number) => { sleepCalls.push(ms); };
+
+    await fetchSessionSnapshots({
+      candidates,
+      nowIso: NOW_ISO,
+      fetchImpl: makeFetch({ data: { attributes: {} } }),
+      delayMs: 0,
+      sleepImpl,
+    });
+
+    expect(sleepCalls).toHaveLength(0);
+  });
+
+  it('skip/fail on one candidate does not block others when delayMs > 0', async () => {
+    const candidates = [
+      makeCandidate({ id: 'tg-001', ticker: 'FAILS', poolAddress: undefined, contractAddress: undefined }),
+      makeCandidate({ id: 'tg-002', ticker: 'WORKS' }),
+    ];
+    const sleepCalls: number[] = [];
+    const sleepImpl = async (ms: number) => { sleepCalls.push(ms); };
+
+    const result = await fetchSessionSnapshots({
+      candidates,
+      nowIso: NOW_ISO,
+      fetchImpl: makeFetch({ data: { attributes: { price_in_usd: '0.001' } } }),
+      delayMs: 200,
+      sleepImpl,
+    });
+
+    // One skip + one success; sleep still fires between them
+    expect(result.snapshots).toHaveLength(1);
+    expect(result.skipped).toBe(1);
+    expect(sleepCalls).toHaveLength(1);
   });
 });
 

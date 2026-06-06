@@ -69,9 +69,12 @@ export interface SnapshotFetchResult {
 export interface FetchSessionSnapshotsOptions {
   candidates: TokenGrabAutopsyCandidate[];
   nowIso?: string;
+  startAt?: number;
   limit?: number;
+  delayMs?: number;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  sleepImpl?: (ms: number) => Promise<void>;
 }
 
 export interface FetchSessionSnapshotsResult {
@@ -188,10 +191,17 @@ async function fetchByToken(
   };
 }
 
+// ── Helpers ── (batch) ────────────────────────────────────────────────────────
+
+export function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 // ── Batch fetch ───────────────────────────────────────────────────────────────
 
 /**
- * Fetches snapshots for all (or up to limit) candidates in a session.
+ * Fetches snapshots for candidates in a session, starting at startAt, up to limit.
+ * Sleeps delayMs between requests (not after the last) to avoid rate limits.
  * A failed lookup for one candidate does not fail the rest.
  * No DB writes, no scheduling, report-only.
  */
@@ -199,14 +209,20 @@ export async function fetchSessionSnapshots(
   options: FetchSessionSnapshotsOptions,
 ): Promise<FetchSessionSnapshotsResult> {
   const nowIso = options.nowIso ?? new Date().toISOString();
+  const startAt = options.startAt ?? 0;
+  const delayMs = options.delayMs ?? 0;
+  const sleepImpl = options.sleepImpl ?? sleep;
+
+  const afterStart = options.candidates.slice(startAt);
   const candidates = options.limit != null
-    ? options.candidates.slice(0, options.limit)
-    : options.candidates;
+    ? afterStart.slice(0, options.limit)
+    : afterStart;
 
   const snapshots: TokenGrabAutopsySnapshot[] = [];
   const skipReasons: Array<{ candidateId: string; ticker: string; reason: string }> = [];
 
-  for (const candidate of candidates) {
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = candidates[i]!;
     const result = await fetchCandidateSnapshot(candidate, {
       nowIso,
       fetchImpl: options.fetchImpl,
@@ -221,6 +237,10 @@ export async function fetchSessionSnapshots(
         ticker: candidate.ticker,
         reason: result.reason ?? 'unknown',
       });
+    }
+
+    if (delayMs > 0 && i < candidates.length - 1) {
+      await sleepImpl(delayMs);
     }
   }
 

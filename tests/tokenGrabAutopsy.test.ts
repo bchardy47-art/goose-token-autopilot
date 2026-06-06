@@ -9,7 +9,7 @@ import {
   RUN_GAIN_PCT,
   DIED_DRAWDOWN_PCT,
 } from '../src/token-grab/autopsy';
-import { loadAutopsyCandidatesFromFile, loadAutopsySnapshotsFromFile } from '../src/token-grab/autopsyLoaders';
+import { loadAutopsyCandidatesFromFile, loadAutopsySnapshotsFromFile, loadAutopsySnapshotsFromFiles } from '../src/token-grab/autopsyLoaders';
 import type { TokenGrabAutopsyCandidate, TokenGrabAutopsySnapshot } from '../src/token-grab/autopsy';
 
 // ── Factories ─────────────────────────────────────────────────────────────────
@@ -445,6 +445,103 @@ describe('loadAutopsySnapshotsFromFile', () => {
     expect(() => loadAutopsySnapshotsFromFile('/no/such/snapshots.json')).toThrow(
       'Cannot read file',
     );
+  });
+});
+
+// ── loadAutopsySnapshotsFromFiles ─────────────────────────────────────────────
+
+describe('loadAutopsySnapshotsFromFiles', () => {
+  function writeTmpSnapshots(label: string, snapshots: TokenGrabAutopsySnapshot[]): string {
+    const filePath = path.join(os.tmpdir(), `tg-multi-snap-${label}-${process.pid}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(snapshots));
+    return filePath;
+  }
+
+  it('loads a single path and returns its snapshots', () => {
+    const filePath = path.join(__dirname, '../fixtures/token-grab/autopsy-snapshots.json');
+    const snapshots = loadAutopsySnapshotsFromFiles([filePath]);
+
+    expect(Array.isArray(snapshots)).toBe(true);
+    expect(snapshots.length).toBeGreaterThan(0);
+  });
+
+  it('combines snapshots from two files into one array', () => {
+    const snapA: TokenGrabAutopsySnapshot[] = [
+      { candidateId: 'cA', observedAt: '2026-06-06T10:00:00.000Z', minutesAfterDetection: 10, priceUsd: 0.001, source: 'geckoterminal' },
+    ];
+    const snapB: TokenGrabAutopsySnapshot[] = [
+      { candidateId: 'cB', observedAt: '2026-06-06T11:00:00.000Z', minutesAfterDetection: 20, priceUsd: 0.002, source: 'geckoterminal' },
+    ];
+    const pathA = writeTmpSnapshots('combineA', snapA);
+    const pathB = writeTmpSnapshots('combineB', snapB);
+
+    try {
+      const combined = loadAutopsySnapshotsFromFiles([pathA, pathB]);
+      expect(combined).toHaveLength(2);
+      const ids = combined.map(s => s.candidateId);
+      expect(ids).toContain('cA');
+      expect(ids).toContain('cB');
+    } finally {
+      fs.rmSync(pathA, { force: true });
+      fs.rmSync(pathB, { force: true });
+    }
+  });
+
+  it('result is sorted by observedAt', () => {
+    const snapsLate: TokenGrabAutopsySnapshot[] = [
+      { candidateId: 'cLate', observedAt: '2026-06-06T12:00:00.000Z', minutesAfterDetection: 60, source: 'geckoterminal' },
+    ];
+    const snapsEarly: TokenGrabAutopsySnapshot[] = [
+      { candidateId: 'cEarly', observedAt: '2026-06-06T09:00:00.000Z', minutesAfterDetection: 5, source: 'geckoterminal' },
+    ];
+    const pathLate = writeTmpSnapshots('sortLate', snapsLate);
+    const pathEarly = writeTmpSnapshots('sortEarly', snapsEarly);
+
+    try {
+      const combined = loadAutopsySnapshotsFromFiles([pathLate, pathEarly]);
+      expect(combined[0]!.candidateId).toBe('cEarly');
+      expect(combined[1]!.candidateId).toBe('cLate');
+    } finally {
+      fs.rmSync(pathLate, { force: true });
+      fs.rmSync(pathEarly, { force: true });
+    }
+  });
+
+  it('throws clearly when a snapshot file is missing', () => {
+    expect(() => loadAutopsySnapshotsFromFiles(['/no/such/snap.json'])).toThrow(
+      'Cannot read file',
+    );
+  });
+
+  it('combining two files with two snapshots per candidate enables outcome (not INSUFFICIENT_DATA)', () => {
+    const snapA: TokenGrabAutopsySnapshot[] = [
+      { candidateId: 'cX', observedAt: '2026-06-06T10:00:00.000Z', minutesAfterDetection: 10, priceUsd: 0.0001, source: 'geckoterminal' },
+    ];
+    const snapB: TokenGrabAutopsySnapshot[] = [
+      { candidateId: 'cX', observedAt: '2026-06-06T11:00:00.000Z', minutesAfterDetection: 70, priceUsd: 0.00034, source: 'geckoterminal' },
+    ];
+    const pathA = writeTmpSnapshots('outcomeA', snapA);
+    const pathB = writeTmpSnapshots('outcomeB', snapB);
+
+    const candidate = makeCandidate({ id: 'cX', ticker: 'XTEST', lane: 'FRESH_LAUNCH_CANDIDATE', decision: 'ALERT_ONLY' });
+
+    try {
+      const combined = loadAutopsySnapshotsFromFiles([pathA, pathB]);
+      const report = buildTokenGrabAutopsyReport([candidate], combined, { mode: 'session-file' });
+      const result = report.results[0]!;
+      // Two snapshots → outcome is determinable, not INSUFFICIENT_DATA
+      expect(result.outcome).not.toBe('INSUFFICIENT_DATA');
+      expect(result.outcome).toBe('RAN');
+      expect(result.noTradingExecuted).toBe(true);
+    } finally {
+      fs.rmSync(pathA, { force: true });
+      fs.rmSync(pathB, { force: true });
+    }
+  });
+
+  it('empty paths array returns empty array', () => {
+    const result = loadAutopsySnapshotsFromFiles([]);
+    expect(result).toHaveLength(0);
   });
 });
 

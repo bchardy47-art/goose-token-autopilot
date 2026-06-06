@@ -27,3 +27,11 @@ export function loadAutopsyCandidatesFromFile(filePath: string): TokenGrabAutops
 export function loadAutopsySnapshotsFromFile(filePath: string): TokenGrabAutopsySnapshot[] {
   return readJsonArray(filePath, 'loadAutopsySnapshots') as TokenGrabAutopsySnapshot[];
 }
+
+export function loadAutopsySnapshotsFromFiles(filePaths: string[]): TokenGrabAutopsySnapshot[] {
+  const all: TokenGrabAutopsySnapshot[] = [];
+  for (const filePath of filePaths) {
+    all.push(...loadAutopsySnapshotsFromFile(filePath));
+  }
+  return all.sort((a, b) => a.observedAt.localeCompare(b.observedAt));
+}

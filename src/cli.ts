@@ -56,7 +56,7 @@ import { mapXEarsReportToSocialSignals } from './token-grab/xEarsAdapter';
 import { loadFreshPoolsFromFile, loadEventSignalsFromFile } from './token-grab/loaders';
 import { fetchGeckoFreshPools, dedupeFreshPools } from './token-grab/geckoFreshPools';
 import { buildTokenGrabAutopsyReport, renderTokenGrabAutopsyReport } from './token-grab/autopsy';
-import { loadAutopsyCandidatesFromFile, loadAutopsySnapshotsFromFile } from './token-grab/autopsyLoaders';
+import { loadAutopsyCandidatesFromFile, loadAutopsySnapshotsFromFile, loadAutopsySnapshotsFromFiles } from './token-grab/autopsyLoaders';
 import {
   tokenGrabReportToAutopsyCandidates,
   saveTokenGrabSession,
@@ -72,6 +72,19 @@ function getArgValue(flag: string): string | undefined {
     if (arg.startsWith(`${flag}=`)) return arg.slice(flag.length + 1);
   }
   return undefined;
+}
+
+function getArgValues(flag: string): string[] {
+  const values: string[] = [];
+  for (let i = 0; i < process.argv.length; i++) {
+    const arg = process.argv[i];
+    if (arg === flag && process.argv[i + 1] !== undefined) {
+      values.push(process.argv[i + 1]!);
+    } else if (arg.startsWith(`${flag}=`)) {
+      values.push(arg.slice(flag.length + 1));
+    }
+  }
+  return values;
 }
 
 function parseNumberArg(flag: string, fallback: number, options: { integer?: boolean; min?: number } = {}): number {
@@ -596,7 +609,10 @@ async function main(): Promise<void> {
       }
       case 'token:ears-autopsy': {
         const sessionPath = getArgValue('--session');
-        const snapshotsPath = getArgValue('--snapshots') ?? 'fixtures/token-grab/autopsy-snapshots.json';
+        const snapshotPathArgs = getArgValues('--snapshots');
+        const resolvedSnapshotPaths = snapshotPathArgs.length > 0
+          ? snapshotPathArgs
+          : ['fixtures/token-grab/autopsy-snapshots.json'];
         const jsonMode = process.argv.includes('--json');
 
         let autopsyCandidates: ReturnType<typeof loadAutopsyCandidatesFromFile>;
@@ -611,7 +627,7 @@ async function main(): Promise<void> {
           autopsyCandidates = loadAutopsyCandidatesFromFile(candidatesPath);
         }
 
-        const snapshots = loadAutopsySnapshotsFromFile(snapshotsPath);
+        const snapshots = loadAutopsySnapshotsFromFiles(resolvedSnapshotPaths);
         const autopsyMode = sessionPath ? 'session-file' as const : 'fixture-only' as const;
         const report = buildTokenGrabAutopsyReport(autopsyCandidates, snapshots, { mode: autopsyMode });
 
@@ -650,20 +666,31 @@ async function main(): Promise<void> {
         if (!sessionPath) throw new Error('token:ears-snapshot requires --session <path>');
         if (!outPath) throw new Error('token:ears-snapshot requires --out <path>');
 
+        const startAt = parseNumberArg('--start-at', 0, { integer: true, min: 0 });
         const limit = parseNumberArg('--limit', 20, { integer: true, min: 1 });
+        const delayMs = parseNumberArg('--delay-ms', 0, { integer: true, min: 0 });
         const timeoutMs = parseNumberArg('--timeout-ms', 10_000, { integer: true, min: 500 });
 
         const session = loadTokenGrabSession(sessionPath);
+        const candidatesAttempted = Math.min(
+          session.candidates.length - startAt,
+          limit,
+        );
 
         console.log(`Session   : ${sessionPath}`);
         console.log(`Output    : ${outPath}`);
-        console.log(`Candidates: ${session.candidates.length} (fetching up to ${limit})`);
+        console.log(`Candidates: ${session.candidates.length} loaded, starting at ${startAt}, limit ${limit}`);
+        if (delayMs > 0) {
+          console.log(`Delay     : ${delayMs}ms between requests`);
+        }
         console.log('Fetching snapshots from GeckoTerminal...');
         console.log('');
 
         const result = await fetchSessionSnapshots({
           candidates: session.candidates,
+          startAt,
           limit,
+          delayMs,
           timeoutMs,
         });
 
@@ -671,11 +698,14 @@ async function main(): Promise<void> {
 
         const THIN = '─'.repeat(50);
         console.log(THIN);
-        console.log(`Session            : ${sessionPath}`);
-        console.log(`Output             : ${outPath}`);
-        console.log(`Candidates loaded  : ${session.candidates.length}`);
-        console.log(`Snapshots written  : ${result.snapshots.length}`);
-        console.log(`Skipped / failed   : ${result.skipped}`);
+        console.log(`Session              : ${sessionPath}`);
+        console.log(`Output               : ${outPath}`);
+        console.log(`Candidates loaded    : ${session.candidates.length}`);
+        console.log(`Start at             : ${startAt}`);
+        console.log(`Limit                : ${limit}`);
+        console.log(`Candidates attempted : ${candidatesAttempted}`);
+        console.log(`Snapshots written    : ${result.snapshots.length}`);
+        console.log(`Skipped / failed     : ${result.skipped}`);
         if (result.skipReasons.length > 0) {
           for (const s of result.skipReasons) {
             console.log(`  ! ${s.ticker} (${s.candidateId}): ${s.reason}`);
