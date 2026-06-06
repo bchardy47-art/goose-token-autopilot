@@ -80,6 +80,17 @@ import {
   type FakeBuyRecord,
   type LiveAssistedPnL,
 } from './token-grab/liveAssistedWatch';
+import {
+  assertMaxLivePosition,
+  getRequiredConfirmationPhrase,
+  parseLiveUnlockEnv,
+  buildLiveTradePlan,
+  evaluateLiveReadinessGates,
+  renderLiveHarnessReport,
+  type LiveTradePlan,
+  type LiveHarnessSummary,
+} from './token-grab/liveHarness';
+import readline from 'node:readline';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -1044,6 +1055,233 @@ async function main(): Promise<void> {
         } else {
           console.log(renderLiveAssistedReport(liveSummary));
         }
+        break;
+      }
+
+      case 'token:live-harness': {
+        const liveIntent = process.argv.includes('--live-intent');
+        const requireConfirmation = process.argv.includes('--require-confirmation');
+        const fakeBankroll = parseNumberArg('--fake-bankroll', 20, { min: 0.01 });
+        const maxLivePosition = parseNumberArg('--max-live-position', 1, { min: 0.01 });
+        const watchMinutes = parseNumberArg('--watch-minutes', 10, { min: 0.01 });
+        const geckoLimit = parseNumberArg('--gecko-limit', 20, { integer: true, min: 1 });
+        const delayMs = parseNumberArg('--delay-ms', 5000, { integer: true, min: 0 });
+        const outDir = getArgValue('--out-dir') ?? 'data/token-grab/live-harness';
+        const tsArg = getArgValue('--timestamp');
+        const skipSleep = process.argv.includes('--skip-sleep');
+        const jsonMode = process.argv.includes('--json');
+
+        // V1 hard cap — fail-fast before any network calls
+        assertMaxLivePosition(maxLivePosition);
+
+        const now = new Date();
+        const ts = tsArg ?? [
+          now.getUTCFullYear(),
+          String(now.getUTCMonth() + 1).padStart(2, '0'),
+          String(now.getUTCDate()).padStart(2, '0'),
+        ].join('') + '-' + [
+          String(now.getUTCHours()).padStart(2, '0'),
+          String(now.getUTCMinutes()).padStart(2, '0'),
+        ].join('');
+
+        const sessionPath = `${outDir}/session-${ts}.json`;
+        const entryPath = `${outDir}/session-${ts}-entry.json`;
+        const planFilePath = `${outDir}/plan-${ts}.json`;
+
+        fs.mkdirSync(outDir, { recursive: true });
+
+        // 1. Safety banner
+        const LIVE_WIDE = '═'.repeat(64);
+        console.log(LIVE_WIDE);
+        console.log('  MANUAL-APPROVED LIVE HARNESS V1');
+        console.log('  NOT AUTONOMOUS');
+        console.log('  DEFAULT DRY RUN');
+        console.log(`  MAX LIVE POSITION: $${maxLivePosition}`);
+        console.log('  MAX OPEN POSITIONS: 1');
+        console.log('  token:auto-paper was NOT run');
+        if (!liveIntent) console.log('  [dry-run mode — pass --live-intent to enable live gates]');
+        if (skipSleep) console.log('  [skip-sleep mode active]');
+        console.log(LIVE_WIDE);
+        console.log('');
+
+        // 2. Detect fresh pools
+        console.log('Detecting fresh Solana pools from GeckoTerminal...');
+        const livePools = await fetchGeckoFreshPools({ limit: geckoLimit });
+        const freshPools = dedupeFreshPools(livePools);
+        const liveReport = buildTokenGrabReport({ socialSignals: [], eventSignals: [], freshPools });
+
+        // 3. Save session
+        const liveSession: TokenGrabSessionFile = {
+          schema: 'token-grab-session-v1',
+          generatedAt: liveReport.generatedAt,
+          source: { social: 'none', freshPools: 'geckoterminal', events: 'none' },
+          flags: { geckoFreshPools: true, geckoLimit },
+          summary: liveReport.summary,
+          candidates: tokenGrabReportToAutopsyCandidates(liveReport),
+          safety: {
+            reportOnly: true,
+            noTradingExecuted: true,
+            tradingExecuted: 0,
+            dbWrites: false,
+            scheduler: false,
+          },
+        };
+        saveTokenGrabSession(sessionPath, liveSession);
+
+        const allCandidates = liveSession.candidates;
+        const laneSummary: Record<string, number> = {};
+        for (const c of allCandidates) {
+          laneSummary[c.lane] = (laneSummary[c.lane] ?? 0) + 1;
+        }
+
+        console.log(`Detected ${allCandidates.length} candidates:`);
+        for (const [lane, count] of Object.entries(laneSummary)) {
+          console.log(`  ${lane}: ${count}`);
+        }
+        console.log('');
+
+        // 4. Select watch-worthy candidates
+        const liveSelected = selectWatchCandidates(allCandidates);
+
+        // Helper to build and emit the final summary
+        const emitSummary = (summary: LiveHarnessSummary): void => {
+          if (jsonMode) {
+            console.log(JSON.stringify(summary, null, 2));
+          } else {
+            console.log(renderLiveHarnessReport(summary));
+          }
+        };
+
+        if (!liveSelected.hasWatchWorthy) {
+          writeSnapshotFile(entryPath, []);
+          const readiness = evaluateLiveReadinessGates({
+            liveIntent,
+            requireConfirmation,
+            maxLivePosition,
+            unlockEnvValue: process.env['TOKEN_GRAB_LIVE_UNLOCK'],
+            decision: 'NO_BUY',
+            candidate: undefined,
+            snapshot: undefined,
+            candidateCount: 0,
+          });
+          const summary: LiveHarnessSummary = {
+            ts, outDir, status: 'NO_TRADE', decision: 'NO_BUY',
+            readiness, liveIntent, requireConfirmation, maxLivePosition,
+            maxOpenPositions: 1, candidatesDetected: allCandidates.length,
+            laneSummary, watchWorthyCount: 0,
+            notAutonomous: true, noRealTradeSent: true, autoPaperNotRun: true,
+            skipSleepMode: skipSleep,
+          };
+          emitSummary(summary);
+          break;
+        }
+
+        // 5. Entry snapshot
+        console.log(`${liveSelected.candidates.length} watch-worthy candidate(s). Fetching entry snapshots...`);
+        const entryResult = await fetchSessionSnapshots({ candidates: liveSelected.candidates, delayMs });
+        writeSnapshotFile(entryPath, entryResult.snapshots);
+        console.log(`Entry snapshots: ${entryResult.snapshots.length} written, ${entryResult.skipped} skipped.`);
+        console.log('');
+
+        // 6. Paper decision (reuses live-assisted logic)
+        const chosen = chooseLiveAssistedCandidate(liveSelected.candidates, entryResult.snapshots);
+        const entrySnapshot = chosen?.snapshot;
+        const fakeBuyOk = chosen != null && isFakeBuyEligible(
+          chosen.candidate, entrySnapshot, maxLivePosition, fakeBankroll,
+        );
+
+        const decision = fakeBuyOk ? 'FAKE_BUY' as const : 'NO_BUY' as const;
+        let noBuyReason: string | undefined;
+
+        if (!fakeBuyOk) {
+          if (!chosen) {
+            noBuyReason = 'No watch candidate found.';
+          } else if (!entrySnapshot) {
+            noBuyReason = `Entry snapshot missing for ${chosen.candidate.ticker}.`;
+          } else if (!entrySnapshot.priceUsd || entrySnapshot.priceUsd <= 0) {
+            noBuyReason = `Entry price unavailable for ${chosen.candidate.ticker}.`;
+          } else if (!entrySnapshot.liquidityUsd || entrySnapshot.liquidityUsd < 1000) {
+            noBuyReason = `Liquidity too low ($${(entrySnapshot.liquidityUsd ?? 0).toFixed(0)} < $1000) for ${chosen.candidate.ticker}.`;
+          } else {
+            noBuyReason = `Lane ${chosen.candidate.lane} not eligible in V1.`;
+          }
+          console.log(`Paper decision: NO_BUY — ${noBuyReason}`);
+        } else {
+          console.log(`Paper decision: FAKE_BUY — $${chosen!.candidate.ticker} @ lane ${chosen!.candidate.lane}`);
+        }
+        console.log('');
+
+        // 7. Build trade plan if FAKE_BUY
+        let tradePlan: LiveTradePlan | undefined;
+        if (fakeBuyOk && chosen && entrySnapshot) {
+          tradePlan = buildLiveTradePlan(chosen.candidate, entrySnapshot, maxLivePosition);
+          fs.writeFileSync(planFilePath, JSON.stringify(tradePlan, null, 2), 'utf-8');
+          console.log(`Trade plan written: ${planFilePath}`);
+          console.log('  Status: PLAN_ONLY — no real trade sent');
+          console.log('');
+        }
+
+        // candidateCount is 1 when a single candidate was chosen for live consideration
+        const chosenCandidateCount = chosen ? 1 : 0;
+
+        // 8. Evaluate live readiness gates (without confirmation initially)
+        const preReadiness = evaluateLiveReadinessGates({
+          liveIntent,
+          requireConfirmation,
+          maxLivePosition,
+          unlockEnvValue: process.env['TOKEN_GRAB_LIVE_UNLOCK'],
+          decision,
+          candidate: chosen?.candidate,
+          snapshot: entrySnapshot,
+          candidateCount: chosenCandidateCount,
+          typedConfirmation: undefined,
+        });
+
+        // 9. If confirmation is needed, prompt for it
+        let finalReadiness = preReadiness;
+        if (preReadiness.status === 'LIVE_REQUIRES_CONFIRMATION') {
+          const phrase = getRequiredConfirmationPhrase();
+          console.log(`All other live gates passed.`);
+          console.log(`Type exactly to proceed: ${phrase}`);
+          const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+          const typedConfirmation = await new Promise<string>((resolve) => {
+            rl.question('> ', (answer) => { rl.close(); resolve(answer.trim()); });
+          });
+          finalReadiness = evaluateLiveReadinessGates({
+            liveIntent,
+            requireConfirmation,
+            maxLivePosition,
+            unlockEnvValue: process.env['TOKEN_GRAB_LIVE_UNLOCK'],
+            decision,
+            candidate: chosen?.candidate,
+            snapshot: entrySnapshot,
+            candidateCount: chosenCandidateCount,
+            typedConfirmation,
+          });
+        }
+
+        const finalSummary: LiveHarnessSummary = {
+          ts,
+          outDir,
+          planFilePath: tradePlan ? planFilePath : undefined,
+          status: finalReadiness.status,
+          decision,
+          tradePlan,
+          readiness: finalReadiness,
+          liveIntent,
+          requireConfirmation,
+          maxLivePosition,
+          maxOpenPositions: 1,
+          candidatesDetected: allCandidates.length,
+          laneSummary,
+          watchWorthyCount: liveSelected.totalWatchWorthy,
+          notAutonomous: true,
+          noRealTradeSent: true,
+          autoPaperNotRun: true,
+          skipSleepMode: skipSleep,
+        };
+
+        emitSummary(finalSummary);
         break;
       }
 
