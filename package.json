@@ -67,6 +67,7 @@
     "token:bad-reject-review": "tsx src/cli.ts token:bad-reject-review",
     "token:ears-snapshot": "tsx src/cli.ts token:ears-snapshot",
     "token:ears-demo": "tsx src/cli.ts token:ears-demo",
+    "token:watch-snapshot": "tsx src/cli.ts token:watch-snapshot",
     "test": "vitest run"
   },
   "dependencies": {

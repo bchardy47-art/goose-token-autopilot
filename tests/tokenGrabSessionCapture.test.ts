@@ -45,6 +45,7 @@ function makeReport(candidates: TokenGrabRadarCandidate[] = []): TokenGrabReport
       prelaunchWatch: 0,
       memeEventCandidates: 0,
       freshLaunchCandidates: candidates.filter(c => c.lane === 'FRESH_LAUNCH_CANDIDATE').length,
+      earlyVelocityWatch: candidates.filter(c => c.lane === 'EARLY_VELOCITY_WATCH').length,
       rejectedNoise: candidates.filter(c => c.lane === 'NOISE_RUG_LIKELY').length,
       tradingExecuted: 0,
     },
