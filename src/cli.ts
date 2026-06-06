@@ -47,6 +47,7 @@ import { buildRejectedRunnerAutopsy, renderRejectedRunnerAutopsy } from './paper
 import { buildChaseWatchReport, renderChaseWatchReport } from './paper/chaseWatchReport';
 import { buildPaperReadinessReport, renderPaperReadinessReport } from './paper/paperReadinessReport';
 import { buildTinyPaperPlanReport, renderTinyPaperPlanReport } from './paper/tinyPaperPlanReport';
+import { startControlCenterServer } from './dashboard/controlCenterServer';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -455,6 +456,20 @@ async function main(): Promise<void> {
             })
           )
         );
+        break;
+      }
+      case 'token:control-center': {
+        const port = parseNumberArg('--port', 3030, { integer: true, min: 1 });
+        const server = await startControlCenterServer(db, config, { port });
+        console.log(`Control Center running at http://127.0.0.1:${port}`);
+        console.log('Read-only dashboard. Press Ctrl+C to stop.');
+        await new Promise<void>((resolve) => {
+          const shutdown = () => {
+            server.close(() => resolve());
+          };
+          process.once('SIGINT', shutdown);
+          process.once('SIGTERM', shutdown);
+        });
         break;
       }
       default:

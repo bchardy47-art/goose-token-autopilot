@@ -290,4 +290,20 @@ CREATE TABLE IF NOT EXISTS watch_refresh_attempts (
   FOREIGN KEY(token_id) REFERENCES tokens(id),
   FOREIGN KEY(watch_candidate_id) REFERENCES watch_only_candidates(id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_tokens_last_seen_at ON tokens(last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS idx_token_snapshots_token_id_id ON token_snapshots(token_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_token_snapshots_token_id_observed_at ON token_snapshots(token_id, observed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_token_scores_token_id_scored_at_id ON token_scores(token_id, scored_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_positions_mode_status_opened_at ON positions(mode, status, opened_at DESC);
+CREATE INDEX IF NOT EXISTS idx_positions_mode_closed_at ON positions(mode, closed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_trades_created_at ON paper_trades(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_watch_only_candidates_created_at ON watch_only_candidates(created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_watch_only_outcomes_observed_at ON watch_only_outcomes(observed_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_watch_only_signal_analysis_analyzed_at ON watch_only_signal_analysis(analyzed_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_solana_safety_enrichments_token_id_checked_at ON solana_safety_enrichments(token_id, checked_at DESC);
+CREATE INDEX IF NOT EXISTS idx_quote_sellability_checks_token_id_checked_at ON quote_sellability_checks(token_id, checked_at DESC);
+CREATE INDEX IF NOT EXISTS idx_safety_events_created_at_event_type ON safety_events(created_at DESC, event_type);
+CREATE INDEX IF NOT EXISTS idx_run_logs_run_type_started_at ON run_logs(run_type, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_watch_refresh_attempts_attempted_at ON watch_refresh_attempts(attempted_at DESC);
 `;
