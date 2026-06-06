@@ -24,6 +24,33 @@ export type LiveHarnessStatus =
   | 'LIVE_REQUIRES_CONFIRMATION'
   | 'LIVE_REJECTED_BY_GATES';
 
+export type EntryConfirmationVerdict =
+  | 'CONFIRMED'
+  | 'REJECTED_PRICE_WEAK'
+  | 'REJECTED_PRICE_DRAWDOWN'
+  | 'REJECTED_LIQUIDITY_FADE'
+  | 'REJECTED_MISSING_SNAPSHOT'
+  | 'NOT_REQUIRED';
+
+export interface EntryConfirmationResult {
+  verdict: EntryConfirmationVerdict;
+  entryPrice: number | null;
+  confirmPrice: number | null;
+  priceChangePct: number | null;
+  entryLiquidityUsd: number | null;
+  confirmLiquidityUsd: number | null;
+  liquidityChangePct: number | null;
+  reason: string;
+}
+
+export interface EvaluateEntryConfirmationInput {
+  entrySnapshot: TokenGrabAutopsySnapshot | undefined;
+  confirmSnapshot: TokenGrabAutopsySnapshot | undefined;
+  minPriceChangePct: number;
+  minLiquidityChangePct: number;
+  maxDrawdownPct: number;
+}
+
 export interface LiveTradePlan {
   candidateId: string;
   tokenName: string;
@@ -75,6 +102,10 @@ export interface LiveHarnessSummary {
   fakeBankroll: number;
   exitSnapshotPath?: string;
   fakePnL?: LiveAssistedPnL;
+  confirmEntry: boolean;
+  confirmMinutes: number;
+  confirmSnapshotPath?: string;
+  entryConfirmation?: EntryConfirmationResult;
 }
 
 export interface EvaluateLiveReadinessGatesInput {
@@ -90,6 +121,87 @@ export interface EvaluateLiveReadinessGatesInput {
 }
 
 // ── Pure helpers ──────────────────────────────────────────────────────────────
+
+/**
+ * Returns percentage change from `from` to `to`. Returns 0 if `from` is zero.
+ */
+export function calculatePctChange(from: number, to: number): number {
+  if (from === 0) return 0;
+  return ((to - from) / from) * 100;
+}
+
+/**
+ * Evaluates the entry confirmation gate — checks that a second snapshot taken
+ * after the entry shows sufficient price strength and liquidity health.
+ * Pure — no I/O, no side effects.
+ */
+export function evaluateEntryConfirmation(
+  input: EvaluateEntryConfirmationInput,
+): EntryConfirmationResult {
+  const { entrySnapshot, confirmSnapshot, minPriceChangePct, minLiquidityChangePct, maxDrawdownPct } = input;
+
+  const entryPrice = entrySnapshot?.priceUsd ?? null;
+  const confirmPrice = confirmSnapshot?.priceUsd ?? null;
+  const entryLiquidityUsd = entrySnapshot?.liquidityUsd ?? null;
+  const confirmLiquidityUsd = confirmSnapshot?.liquidityUsd ?? null;
+
+  if (entrySnapshot == null || entryPrice == null || entryPrice <= 0) {
+    return {
+      verdict: 'REJECTED_MISSING_SNAPSHOT',
+      entryPrice, confirmPrice,
+      priceChangePct: null, entryLiquidityUsd, confirmLiquidityUsd, liquidityChangePct: null,
+      reason: 'Entry snapshot or entry price unavailable',
+    };
+  }
+
+  if (confirmSnapshot == null || confirmPrice == null || confirmPrice <= 0) {
+    return {
+      verdict: 'REJECTED_MISSING_SNAPSHOT',
+      entryPrice, confirmPrice,
+      priceChangePct: null, entryLiquidityUsd, confirmLiquidityUsd, liquidityChangePct: null,
+      reason: 'Confirmation snapshot or confirmation price unavailable',
+    };
+  }
+
+  const priceChangePct = calculatePctChange(entryPrice, confirmPrice);
+  const liquidityChangePct =
+    entryLiquidityUsd != null && entryLiquidityUsd > 0 && confirmLiquidityUsd != null
+      ? calculatePctChange(entryLiquidityUsd, confirmLiquidityUsd)
+      : null;
+
+  if (priceChangePct < maxDrawdownPct) {
+    return {
+      verdict: 'REJECTED_PRICE_DRAWDOWN',
+      entryPrice, confirmPrice, priceChangePct, entryLiquidityUsd, confirmLiquidityUsd, liquidityChangePct,
+      reason: `Price dropped ${priceChangePct.toFixed(2)}% — beyond drawdown threshold of ${maxDrawdownPct}%`,
+    };
+  }
+
+  if (priceChangePct < minPriceChangePct) {
+    return {
+      verdict: 'REJECTED_PRICE_WEAK',
+      entryPrice, confirmPrice, priceChangePct, entryLiquidityUsd, confirmLiquidityUsd, liquidityChangePct,
+      reason: `Price gain ${priceChangePct.toFixed(2)}% below confirmation threshold of ${minPriceChangePct}%`,
+    };
+  }
+
+  if (liquidityChangePct !== null && liquidityChangePct < minLiquidityChangePct) {
+    return {
+      verdict: 'REJECTED_LIQUIDITY_FADE',
+      entryPrice, confirmPrice, priceChangePct, entryLiquidityUsd, confirmLiquidityUsd, liquidityChangePct,
+      reason: `Liquidity faded ${liquidityChangePct.toFixed(2)}% — below threshold of ${minLiquidityChangePct}%`,
+    };
+  }
+
+  const liqStr = liquidityChangePct != null
+    ? `, liquidity ${liquidityChangePct >= 0 ? '+' : ''}${liquidityChangePct.toFixed(2)}%`
+    : '';
+  return {
+    verdict: 'CONFIRMED',
+    entryPrice, confirmPrice, priceChangePct, entryLiquidityUsd, confirmLiquidityUsd, liquidityChangePct,
+    reason: `Price +${priceChangePct.toFixed(2)}% confirmed${liqStr}`,
+  };
+}
 
 /**
  * Throws if maxLivePosition exceeds the V1 hard cap of $1.
@@ -301,6 +413,32 @@ export function renderLiveHarnessReport(s: LiveHarnessSummary): string {
   lines.push(THIN);
   lines.push(`  Status          : ${s.status}`);
   lines.push('');
+
+  if (s.confirmEntry && s.entryConfirmation) {
+    const ec = s.entryConfirmation;
+    lines.push(THIN);
+    lines.push('Entry Confirmation Gate  [DRY-RUN — PAPER ONLY]');
+    lines.push(THIN);
+    lines.push(`  Verdict         : ${ec.verdict}`);
+    const ep = ec.entryPrice != null ? `$${ec.entryPrice.toExponential(4)}` : '(unavailable)';
+    const cp = ec.confirmPrice != null ? `$${ec.confirmPrice.toExponential(4)}` : '(unavailable)';
+    lines.push(`  Entry price     : ${ep}`);
+    lines.push(`  Confirm price   : ${cp}`);
+    const pctStr = ec.priceChangePct != null
+      ? `${ec.priceChangePct >= 0 ? '+' : ''}${ec.priceChangePct.toFixed(2)}%`
+      : 'N/A';
+    lines.push(`  Price change    : ${pctStr}`);
+    if (ec.liquidityChangePct != null) {
+      lines.push(`  Liquidity chg   : ${ec.liquidityChangePct >= 0 ? '+' : ''}${ec.liquidityChangePct.toFixed(2)}%`);
+    }
+    if (s.confirmSnapshotPath) {
+      lines.push(`  Confirm snap    : ${s.confirmSnapshotPath}`);
+    }
+    if (ec.verdict !== 'CONFIRMED') {
+      lines.push(`  Reject reason   : ${ec.reason}`);
+    }
+    lines.push('');
+  }
 
   if (s.tradePlan) {
     lines.push(THIN);

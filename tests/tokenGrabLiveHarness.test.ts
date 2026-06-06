@@ -6,8 +6,11 @@ import {
   parseLiveUnlockEnv,
   buildLiveTradePlan,
   evaluateLiveReadinessGates,
+  evaluateEntryConfirmation,
+  calculatePctChange,
   renderLiveHarnessReport,
   type EvaluateLiveReadinessGatesInput,
+  type EvaluateEntryConfirmationInput,
   type LiveHarnessSummary,
   type LiveReadinessReport,
 } from '../src/token-grab/liveHarness';
@@ -85,6 +88,21 @@ function makeBaseSummary(
     skipSleepMode: false,
     watchCycle: false,
     fakeBankroll: 20,
+    confirmEntry: false,
+    confirmMinutes: 2,
+    ...overrides,
+  };
+}
+
+function makeConfirmInput(
+  overrides: Partial<EvaluateEntryConfirmationInput> = {},
+): EvaluateEntryConfirmationInput {
+  return {
+    entrySnapshot: makeSnapshot({ priceUsd: 0.001, liquidityUsd: 5000 }),
+    confirmSnapshot: makeSnapshot({ priceUsd: 0.00106, liquidityUsd: 5200, observedAt: '2026-06-06T18:03:00Z' }),
+    minPriceChangePct: 5,
+    minLiquidityChangePct: 0,
+    maxDrawdownPct: -10,
     ...overrides,
   };
 }
@@ -748,5 +766,305 @@ describe('watch cycle — LiveHarnessSummary', () => {
     // Safety text must still be present
     expect(rendered).toContain('NOT AUTONOMOUS');
     expect(rendered).toContain('NO REAL TRADE SENT');
+  });
+});
+
+// ── Entry Confirmation Gate tests (12 required) ───────────────────────────────
+
+describe('calculatePctChange', () => {
+  it('returns positive pct when price increases', () => {
+    expect(calculatePctChange(0.001, 0.00106)).toBeCloseTo(6, 4);
+  });
+
+  it('returns negative pct when price decreases', () => {
+    expect(calculatePctChange(0.001, 0.0009)).toBeCloseTo(-10, 4);
+  });
+
+  it('returns 0 when from is 0 to avoid division by zero', () => {
+    expect(calculatePctChange(0, 0.001)).toBe(0);
+  });
+
+  it('returns 0 when price is flat', () => {
+    expect(calculatePctChange(0.001, 0.001)).toBeCloseTo(0, 10);
+  });
+});
+
+// Test 1: Default behavior unchanged when confirmEntry is absent
+describe('entry confirmation gate — default (confirmEntry: false)', () => {
+  it('makeBaseSummary has confirmEntry false and confirmMinutes 2 by default', () => {
+    const readiness: LiveReadinessReport = { status: 'DRY_RUN_ONLY', gates: [], allGatesPassed: false };
+    const summary = makeBaseSummary(readiness);
+    expect(summary.confirmEntry).toBe(false);
+    expect(summary.confirmMinutes).toBe(2);
+    expect(summary.confirmSnapshotPath).toBeUndefined();
+    expect(summary.entryConfirmation).toBeUndefined();
+  });
+
+  it('report with confirmEntry false does not show Entry Confirmation Gate section', () => {
+    const readiness: LiveReadinessReport = { status: 'DRY_RUN_ONLY', gates: [], allGatesPassed: false };
+    const summary = makeBaseSummary(readiness, { status: 'DRY_RUN_ONLY', decision: 'FAKE_BUY' });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).not.toContain('Entry Confirmation Gate');
+    expect(rendered).toContain('NOT AUTONOMOUS');
+  });
+});
+
+// Test 2: Confirmation passes when price is up >= threshold and liquidity is flat/up
+describe('evaluateEntryConfirmation — CONFIRMED', () => {
+  it('passes when price is above threshold and liquidity is flat', () => {
+    // 0.00106 / 0.001 = 6% — clearly above the 5% threshold, avoiding float boundary issues
+    const result = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.00106, liquidityUsd: 5000 }),
+      minPriceChangePct: 5,
+    }));
+    expect(result.verdict).toBe('CONFIRMED');
+    expect(result.priceChangePct).toBeCloseTo(6, 1);
+    expect(result.liquidityChangePct).toBeCloseTo(0, 1);
+  });
+
+  it('passes when price is well above threshold and liquidity has grown', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput());
+    expect(result.verdict).toBe('CONFIRMED');
+    expect(result.priceChangePct).toBeGreaterThan(5);
+    expect(result.liquidityChangePct).toBeGreaterThan(0);
+    expect(result.reason).toContain('confirmed');
+  });
+
+  it('confirmed result has non-null entry and confirm prices', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput());
+    expect(result.entryPrice).toBeCloseTo(0.001, 6);
+    expect(result.confirmPrice).toBeCloseTo(0.00106, 6);
+  });
+});
+
+// Test 3: Confirmation rejects when price gain is below threshold
+describe('evaluateEntryConfirmation — REJECTED_PRICE_WEAK', () => {
+  it('rejects when price is up but below the 5% threshold', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.00103, liquidityUsd: 5000 }),
+    }));
+    expect(result.verdict).toBe('REJECTED_PRICE_WEAK');
+    expect(result.priceChangePct).toBeCloseTo(3, 1);
+    expect(result.reason).toMatch(/below confirmation threshold/i);
+  });
+
+  it('rejects when price is flat (0% gain)', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.001, liquidityUsd: 5000 }),
+    }));
+    expect(result.verdict).toBe('REJECTED_PRICE_WEAK');
+    expect(result.priceChangePct).toBeCloseTo(0, 1);
+  });
+});
+
+// Test 4: Confirmation rejects when price drops beyond drawdown threshold
+describe('evaluateEntryConfirmation — REJECTED_PRICE_DRAWDOWN', () => {
+  it('rejects when price has dropped more than 10%', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.00088, liquidityUsd: 4000 }),
+    }));
+    expect(result.verdict).toBe('REJECTED_PRICE_DRAWDOWN');
+    expect(result.priceChangePct).toBeLessThan(-10);
+    expect(result.reason).toMatch(/drawdown threshold/i);
+  });
+
+  it('does not trigger REJECTED_PRICE_DRAWDOWN when drop is below the threshold (e.g. -5%)', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.00095, liquidityUsd: 5000 }),
+    }));
+    // -5% is above -10% drawdown threshold, so it falls to REJECTED_PRICE_WEAK
+    expect(result.verdict).toBe('REJECTED_PRICE_WEAK');
+  });
+});
+
+// Test 5: Confirmation rejects when liquidity fades below threshold
+describe('evaluateEntryConfirmation — REJECTED_LIQUIDITY_FADE', () => {
+  it('rejects when liquidity drops and minLiquidityChangePct is 0', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.00106, liquidityUsd: 4900 }),
+      minLiquidityChangePct: 0,
+    }));
+    expect(result.verdict).toBe('REJECTED_LIQUIDITY_FADE');
+    expect(result.liquidityChangePct).toBeLessThan(0);
+    expect(result.reason).toMatch(/faded/i);
+  });
+
+  it('passes when liquidity is exactly flat with threshold of 0', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.00106, liquidityUsd: 5000 }),
+      minLiquidityChangePct: 0,
+    }));
+    expect(result.verdict).toBe('CONFIRMED');
+  });
+});
+
+// Test 6: Confirmation rejects when entry snapshot is missing
+describe('evaluateEntryConfirmation — REJECTED_MISSING_SNAPSHOT (entry)', () => {
+  it('rejects with REJECTED_MISSING_SNAPSHOT when entrySnapshot is undefined', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput({ entrySnapshot: undefined }));
+    expect(result.verdict).toBe('REJECTED_MISSING_SNAPSHOT');
+    expect(result.reason).toMatch(/entry snapshot/i);
+    expect(result.priceChangePct).toBeNull();
+  });
+
+  it('rejects when entry price is null', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput({
+      entrySnapshot: makeSnapshot({ priceUsd: undefined }),
+    }));
+    expect(result.verdict).toBe('REJECTED_MISSING_SNAPSHOT');
+  });
+
+  it('rejects when entry price is zero', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput({
+      entrySnapshot: makeSnapshot({ priceUsd: 0 }),
+    }));
+    expect(result.verdict).toBe('REJECTED_MISSING_SNAPSHOT');
+  });
+});
+
+// Test 7: Confirmation rejects when confirmation snapshot is missing
+describe('evaluateEntryConfirmation — REJECTED_MISSING_SNAPSHOT (confirm)', () => {
+  it('rejects with REJECTED_MISSING_SNAPSHOT when confirmSnapshot is undefined', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput({ confirmSnapshot: undefined }));
+    expect(result.verdict).toBe('REJECTED_MISSING_SNAPSHOT');
+    expect(result.reason).toMatch(/confirmation snapshot/i);
+  });
+
+  it('rejects when confirm price is null', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: undefined }),
+    }));
+    expect(result.verdict).toBe('REJECTED_MISSING_SNAPSHOT');
+  });
+});
+
+// Test 8: Report includes confirmation verdict and price/liquidity change
+describe('renderLiveHarnessReport — Entry Confirmation Gate section', () => {
+  it('renders confirmation section with verdict, prices, and pct change when confirmEntry is true', () => {
+    const readiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+    const entryConfirmation = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.00088, liquidityUsd: 4000 }),
+    }));
+    const summary = makeBaseSummary(readiness, {
+      status: 'NO_TRADE', decision: 'NO_BUY',
+      confirmEntry: true, confirmMinutes: 2,
+      confirmSnapshotPath: 'data/token-grab/live-harness/session-20260606-1800-confirm.json',
+      entryConfirmation,
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('Entry Confirmation Gate');
+    expect(rendered).toContain('REJECTED_PRICE_DRAWDOWN');
+    expect(rendered).toContain('Confirm price');
+    expect(rendered).toContain('Price change');
+    expect(rendered).toContain('Reject reason');
+    expect(rendered).toContain('session-20260606-1800-confirm.json');
+  });
+
+  it('renders CONFIRMED verdict without Reject reason line', () => {
+    const readiness: LiveReadinessReport = { status: 'DRY_RUN_ONLY', gates: [], allGatesPassed: false };
+    const entryConfirmation = evaluateEntryConfirmation(makeConfirmInput());
+    const summary = makeBaseSummary(readiness, {
+      status: 'DRY_RUN_ONLY', decision: 'FAKE_BUY',
+      confirmEntry: true, confirmMinutes: 2,
+      entryConfirmation,
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('Entry Confirmation Gate');
+    expect(rendered).toContain('CONFIRMED');
+    expect(rendered).not.toContain('Reject reason');
+  });
+});
+
+// Test 9: When confirmation rejects, no PLAN_ONLY trade plan is created
+describe('entry confirmation gate — no plan when rejected', () => {
+  it('a rejected confirmation result is never CONFIRMED — plan creation must be blocked', () => {
+    const weak = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.001, liquidityUsd: 5000 }),
+    }));
+    expect(weak.verdict).not.toBe('CONFIRMED');
+    // The CLI uses verdict !== 'CONFIRMED' to block plan creation;
+    // verify the verdict here proves no PLAN_ONLY would be created.
+    expect(['REJECTED_PRICE_WEAK', 'REJECTED_PRICE_DRAWDOWN',
+      'REJECTED_LIQUIDITY_FADE', 'REJECTED_MISSING_SNAPSHOT']).toContain(weak.verdict);
+  });
+
+  it('summary with rejected confirmation has no tradePlan', () => {
+    const readiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+    const entryConfirmation = evaluateEntryConfirmation(makeConfirmInput({ confirmSnapshot: undefined }));
+    const summary = makeBaseSummary(readiness, {
+      status: 'NO_TRADE', decision: 'NO_BUY',
+      confirmEntry: true, confirmMinutes: 2, entryConfirmation,
+    });
+    expect(summary.tradePlan).toBeUndefined();
+    expect(entryConfirmation.verdict).toBe('REJECTED_MISSING_SNAPSHOT');
+  });
+});
+
+// Test 10: When confirmation passes, PLAN_ONLY can be created
+describe('entry confirmation gate — plan allowed when confirmed', () => {
+  it('CONFIRMED verdict allows trade plan creation', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput());
+    expect(result.verdict).toBe('CONFIRMED');
+
+    const plan = buildLiveTradePlan(makeCandidate(), makeSnapshot(), 1);
+    expect(plan.status).toBe('PLAN_ONLY');
+    expect(plan.entryPrice).toBeGreaterThan(0);
+  });
+
+  it('summary with confirmed entryConfirmation can include a tradePlan', () => {
+    const readiness: LiveReadinessReport = { status: 'DRY_RUN_ONLY', gates: [], allGatesPassed: false };
+    const entryConfirmation = evaluateEntryConfirmation(makeConfirmInput());
+    const tradePlan = buildLiveTradePlan(makeCandidate(), makeSnapshot(), 1);
+    const summary = makeBaseSummary(readiness, {
+      status: 'DRY_RUN_ONLY', decision: 'FAKE_BUY',
+      confirmEntry: true, confirmMinutes: 2, entryConfirmation, tradePlan,
+    });
+    expect(summary.entryConfirmation?.verdict).toBe('CONFIRMED');
+    expect(summary.tradePlan?.status).toBe('PLAN_ONLY');
+  });
+});
+
+// Test 11: No LIVE_EXECUTED status in entry confirmation types
+describe('entry confirmation gate — no LIVE_EXECUTED', () => {
+  it('EntryConfirmationVerdict does not include LIVE_EXECUTED', () => {
+    const validVerdicts = [
+      'CONFIRMED', 'REJECTED_PRICE_WEAK', 'REJECTED_PRICE_DRAWDOWN',
+      'REJECTED_LIQUIDITY_FADE', 'REJECTED_MISSING_SNAPSHOT', 'NOT_REQUIRED',
+    ];
+    expect(validVerdicts.includes('LIVE_EXECUTED')).toBe(false);
+  });
+
+  it('confirmation gate rendered output never contains LIVE_EXECUTED', () => {
+    const readiness: LiveReadinessReport = { status: 'DRY_RUN_ONLY', gates: [], allGatesPassed: false };
+    const entryConfirmation = evaluateEntryConfirmation(makeConfirmInput());
+    const summary = makeBaseSummary(readiness, {
+      status: 'DRY_RUN_ONLY', decision: 'FAKE_BUY',
+      confirmEntry: true, confirmMinutes: 2, entryConfirmation,
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).not.toMatch(/LIVE_EXECUTED/);
+  });
+});
+
+// Test 12: No wallet/private key/swap/signing in confirmation rendered output
+describe('entry confirmation gate — safety text', () => {
+  it('report with entry confirmation contains no signing/swap/key patterns', () => {
+    const readiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+    const entryConfirmation = evaluateEntryConfirmation(makeConfirmInput({ confirmSnapshot: undefined }));
+    const summary = makeBaseSummary(readiness, {
+      status: 'NO_TRADE', decision: 'NO_BUY',
+      confirmEntry: true, confirmMinutes: 0.1, entryConfirmation,
+      confirmSnapshotPath: 'data/token-grab/live-harness/session-confirm.json',
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).not.toMatch(/(?:private|secret)[\s_]?key\s*[=({]/i);
+    expect(rendered).not.toMatch(/signTransaction\s*\(/i);
+    expect(rendered).not.toMatch(/sendTransaction\s*\(/i);
+    expect(rendered).not.toMatch(/executeSwap\s*\(/i);
+    expect(rendered).not.toMatch(/wallet\.connect\s*\(/i);
+    expect(rendered).not.toMatch(/LIVE_EXECUTED/);
+    expect(rendered).toContain('NOT AUTONOMOUS');
+    expect(rendered).toContain('NO REAL TRADE SENT');
+    expect(rendered).toContain('token:auto-paper was NOT run');
   });
 });

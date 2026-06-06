@@ -86,9 +86,11 @@ import {
   parseLiveUnlockEnv,
   buildLiveTradePlan,
   evaluateLiveReadinessGates,
+  evaluateEntryConfirmation,
   renderLiveHarnessReport,
   type LiveTradePlan,
   type LiveHarnessSummary,
+  type EntryConfirmationResult,
 } from './token-grab/liveHarness';
 import readline from 'node:readline';
 
@@ -1070,6 +1072,11 @@ async function main(): Promise<void> {
         const tsArg = getArgValue('--timestamp');
         const skipSleep = process.argv.includes('--skip-sleep');
         const watchCycle = process.argv.includes('--watch-cycle');
+        const confirmEntry = process.argv.includes('--confirm-entry');
+        const confirmMinutes = parseNumberArg('--confirm-minutes', 2, { min: 0.01 });
+        const confirmMinPriceChangePct = parseNumberArg('--confirm-min-price-change-pct', 5);
+        const confirmMinLiquidityChangePct = parseNumberArg('--confirm-min-liquidity-change-pct', 0);
+        const confirmMaxDrawdownPct = parseNumberArg('--confirm-max-drawdown-pct', -10);
         const jsonMode = process.argv.includes('--json');
 
         // V1 hard cap — fail-fast before any network calls
@@ -1102,6 +1109,7 @@ async function main(): Promise<void> {
         console.log('  token:auto-paper was NOT run');
         if (!liveIntent) console.log('  [dry-run mode — pass --live-intent to enable live gates]');
         if (watchCycle) console.log('  [watch-cycle: will sleep and take exit snapshot]');
+        if (confirmEntry) console.log(`  [confirm-entry: ${confirmMinutes} min window, >${confirmMinPriceChangePct}% price required]`);
         if (skipSleep) console.log('  [skip-sleep mode active]');
         console.log(LIVE_WIDE);
         console.log('');
@@ -1175,6 +1183,7 @@ async function main(): Promise<void> {
             skipSleepMode: skipSleep,
             watchCycle: false,
             fakeBankroll,
+            confirmEntry, confirmMinutes,
           };
           emitSummary(summary);
           break;
@@ -1194,7 +1203,7 @@ async function main(): Promise<void> {
           chosen.candidate, entrySnapshot, maxLivePosition, fakeBankroll,
         );
 
-        const decision = fakeBuyOk ? 'FAKE_BUY' as const : 'NO_BUY' as const;
+        let decision: 'FAKE_BUY' | 'NO_BUY' = fakeBuyOk ? 'FAKE_BUY' : 'NO_BUY';
         let noBuyReason: string | undefined;
 
         if (!fakeBuyOk) {
@@ -1215,9 +1224,67 @@ async function main(): Promise<void> {
         }
         console.log('');
 
+        // 6a. Entry confirmation gate (requires --confirm-entry and a FAKE_BUY candidate)
+        let entryConfirmation: EntryConfirmationResult | undefined;
+        let confirmSnapshotPath: string | undefined;
+
+        if (confirmEntry && decision === 'FAKE_BUY' && chosen && entrySnapshot) {
+          if (!skipSleep) {
+            console.log(`[confirm-entry] Sleeping ${confirmMinutes} minute(s) before confirmation snapshot...`);
+            await sleep(confirmMinutes * 60 * 1000);
+          } else {
+            console.log('[confirm-entry] skip-sleep: proceeding immediately to confirmation snapshot');
+          }
+
+          confirmSnapshotPath = `${outDir}/session-${ts}-confirm.json`;
+          console.log('[confirm-entry] Fetching confirmation snapshot...');
+          const confirmResult = await fetchSessionSnapshots({ candidates: [chosen.candidate], delayMs });
+          writeSnapshotFile(confirmSnapshotPath, confirmResult.snapshots);
+          const confirmSnap = confirmResult.snapshots.find(s => s.candidateId === chosen.candidate.id);
+
+          entryConfirmation = evaluateEntryConfirmation({
+            entrySnapshot,
+            confirmSnapshot: confirmSnap,
+            minPriceChangePct: confirmMinPriceChangePct,
+            minLiquidityChangePct: confirmMinLiquidityChangePct,
+            maxDrawdownPct: confirmMaxDrawdownPct,
+          });
+
+          console.log(`[confirm-entry] Verdict: ${entryConfirmation.verdict}`);
+
+          if (entryConfirmation.verdict !== 'CONFIRMED') {
+            decision = 'NO_BUY';
+            console.log(`[confirm-entry] Rejected — ${entryConfirmation.reason}`);
+            console.log('');
+
+            const rejReadiness = evaluateLiveReadinessGates({
+              liveIntent, requireConfirmation, maxLivePosition,
+              unlockEnvValue: process.env['TOKEN_GRAB_LIVE_UNLOCK'],
+              decision: 'NO_BUY', candidate: undefined, snapshot: undefined, candidateCount: 0,
+            });
+            const rejSummary: LiveHarnessSummary = {
+              ts, outDir, status: 'NO_TRADE', decision: 'NO_BUY',
+              readiness: rejReadiness, liveIntent, requireConfirmation, maxLivePosition,
+              maxOpenPositions: 1, candidatesDetected: allCandidates.length, laneSummary,
+              watchWorthyCount: liveSelected.totalWatchWorthy,
+              notAutonomous: true, noRealTradeSent: true, autoPaperNotRun: true,
+              skipSleepMode: skipSleep, watchCycle: false, fakeBankroll,
+              confirmEntry, confirmMinutes, confirmSnapshotPath, entryConfirmation,
+            };
+            emitSummary(rejSummary);
+            break;
+          }
+
+          const pctStr = entryConfirmation.priceChangePct != null
+            ? `${entryConfirmation.priceChangePct >= 0 ? '+' : ''}${entryConfirmation.priceChangePct.toFixed(2)}%`
+            : 'N/A';
+          console.log(`[confirm-entry] Confirmed — price ${pctStr} change`);
+          console.log('');
+        }
+
         // 7. Build trade plan if FAKE_BUY
         let tradePlan: LiveTradePlan | undefined;
-        if (fakeBuyOk && chosen && entrySnapshot) {
+        if (fakeBuyOk && chosen && entrySnapshot && decision === 'FAKE_BUY') {
           tradePlan = buildLiveTradePlan(chosen.candidate, entrySnapshot, maxLivePosition);
           fs.writeFileSync(planFilePath, JSON.stringify(tradePlan, null, 2), 'utf-8');
           console.log(`Trade plan written: ${planFilePath}`);
@@ -1325,6 +1392,10 @@ async function main(): Promise<void> {
           fakeBankroll,
           exitSnapshotPath,
           fakePnL: watchCyclePnL,
+          confirmEntry,
+          confirmMinutes,
+          confirmSnapshotPath,
+          entryConfirmation,
         };
 
         emitSummary(finalSummary);

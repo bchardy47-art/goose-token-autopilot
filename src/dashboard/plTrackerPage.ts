@@ -63,9 +63,13 @@ export function renderPlTrackerPage(): string {
   .card .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
   .card .value { font-size: 24px; font-weight: 700; margin-top: 6px; line-height: 1.1; }
   .card .sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .card.primary { border-color: #2b3a5e; background: linear-gradient(180deg, #121b30, #0f1626); grid-column: span 1; }
+  .card.primary .label { color: #bcd2f5; }
+  .card.primary .value { font-size: 34px; }
   .pos { color: var(--green); }
   .neg { color: var(--red); }
   .flat { color: var(--text); }
+  td.strong { font-weight: 800; font-size: 15px; }
 
   /* Tabs */
   nav.tabs { display: flex; gap: 4px; padding: 12px 18px 0; flex-wrap: wrap; }
@@ -120,6 +124,16 @@ export function renderPlTrackerPage(): string {
   .ro-note { font-size: 11px; color: var(--muted); margin-top: 8px; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
   footer { padding: 16px 18px 28px; color: var(--gray); font-size: 11px; }
+
+  /* lower panels */
+  .lower { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; padding: 16px 18px 4px; }
+  .lpanel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+  .lpanel h3 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 700; }
+  .lpanel .kv { padding: 5px 0; }
+  .events div { padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; gap: 10px; }
+  .events div:last-child { border-bottom: none; }
+  .events .ev-token { color: var(--text); font-weight: 600; }
+  .events .ev-time { color: var(--gray); font-size: 11px; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -128,7 +142,10 @@ export function renderPlTrackerPage(): string {
     <span class="brand">TOKEN GRAB</span>
     <span class="pill paper" id="modePill">Paper</span>
     <span class="pill locked" id="lockPill">LIVE TRADING: LOCKED</span>
-    <span class="status-item">Source: <b id="sourceVal">…</b></span>
+    <span class="status-item">Positions: <b id="posSrc">…</b></span>
+    <span class="status-item">Radar: <b id="radarSrc">…</b></span>
+    <span class="status-item">Watchlist: <b id="watchSrc">…</b></span>
+    <span class="pill yellow" id="fallbackBadge" style="display:none;">Fixture fallback</span>
     <span class="spacer"></span>
     <span class="status-item">Last updated: <b id="updatedVal">…</b></span>
     <button class="btn ghost" id="refreshBtn">Refresh</button>
@@ -138,8 +155,8 @@ export function renderPlTrackerPage(): string {
 <div id="topError"></div>
 
 <section class="cards" id="cards">
-  <div class="card"><div class="label">Today P/L</div><div class="value flat" id="cardToday">…</div><div class="sub" id="cardTodaySub">realized today + open</div></div>
-  <div class="card"><div class="label">Open P/L</div><div class="value flat" id="cardOpen">…</div><div class="sub">unrealized, open positions</div></div>
+  <div class="card primary"><div class="label">Today P/L</div><div class="value flat" id="cardToday">…</div><div class="sub" id="cardTodaySub">realized today + open</div></div>
+  <div class="card primary"><div class="label">Open P/L</div><div class="value flat" id="cardOpen">…</div><div class="sub">unrealized, open positions</div></div>
   <div class="card"><div class="label">Closed P/L</div><div class="value flat" id="cardClosed">…</div><div class="sub">realized, all closed</div></div>
   <div class="card"><div class="label">Win Rate</div><div class="value flat" id="cardWin">…</div><div class="sub" id="cardWinSub">closed trades</div></div>
   <div class="card"><div class="label">Open Positions</div><div class="value flat" id="cardPositions">…</div><div class="sub">paper</div></div>
@@ -155,6 +172,21 @@ export function renderPlTrackerPage(): string {
 <main>
   <div class="panel" id="panel"><div class="state">Loading…</div></div>
 </main>
+
+<section class="lower" id="lowerPanels">
+  <div class="lpanel">
+    <h3>Recent Position Events</h3>
+    <div class="events" id="eventsPanel"><div class="state">Loading…</div></div>
+  </div>
+  <div class="lpanel">
+    <h3>System Read</h3>
+    <div id="systemPanel"><div class="state">Loading…</div></div>
+  </div>
+  <div class="lpanel">
+    <h3>Radar Summary</h3>
+    <div id="radarSummaryPanel"><div class="state">Loading…</div></div>
+  </div>
+</section>
 
 <footer>
   Read-only paper / simulated tracker. No DB writes. No trading execution. Real trading remains locked. Auto-refreshing every 4s.
@@ -236,15 +268,23 @@ export function renderPlTrackerPage(): string {
         lock.textContent = 'LIVE TRADING: LOCKED';
         lock.className = 'pill locked';
       }
-      document.getElementById('sourceVal').textContent = sb.source || 'N/A';
       document.getElementById('updatedVal').textContent = timeLabel(sb.generatedAt);
+
+      var meta = d.meta || {};
+      document.getElementById('posSrc').textContent = meta.positionsSource === 'none' ? 'none yet' : (meta.positionsSource || 'live DB');
+      document.getElementById('radarSrc').textContent = meta.radarSource || 'N/A';
+      document.getElementById('watchSrc').textContent = meta.watchlistSource || 'N/A';
+      document.getElementById('fallbackBadge').style.display = meta.fixtureFallbackActive ? '' : 'none';
+
+      renderLowerPanels(meta, d.recentEvents || []);
 
       setCard('cardToday', usd(s.todayPlUsd), cls(s.todayPlUsd));
       document.getElementById('cardTodaySub').textContent = 'realized today ' + usd(s.todayRealizedUsd) + ' + open';
       setCard('cardOpen', usd(s.openPlUsd), cls(s.openPlUsd));
       setCard('cardClosed', usd(s.closedPlUsd), cls(s.closedPlUsd));
-      setCard('cardWin', s.winRatePct === null || s.winRatePct === undefined ? 'N/A' : s.winRatePct.toFixed(1) + '%', 'flat');
-      document.getElementById('cardWinSub').textContent = (s.closedTrades || 0) + ' closed trades';
+      var noClosed = (s.winRatePct === null || s.winRatePct === undefined);
+      setCard('cardWin', noClosed ? '—' : s.winRatePct.toFixed(1) + '%', 'flat');
+      document.getElementById('cardWinSub').textContent = noClosed ? 'No closed trades yet' : (s.closedTrades || 0) + ' closed trades';
       setCard('cardPositions', String(s.openPositions != null ? s.openPositions : 'N/A'), 'flat');
       setTopError('');
     } catch (e) {
@@ -255,6 +295,39 @@ export function renderPlTrackerPage(): string {
     var el = document.getElementById(id);
     el.textContent = text;
     el.className = 'value ' + klass;
+  }
+
+  function lkv(k, v, klass) {
+    return '<div class="kv"><span class="k">' + esc(k) + '</span><span class="v ' + (klass || '') + '">' + v + '</span></div>';
+  }
+  function renderLowerPanels(meta, events) {
+    // Recent events
+    var ev = document.getElementById('eventsPanel');
+    if (!events.length) {
+      ev.innerHTML = '<div class="state">No recent position events.</div>';
+    } else {
+      ev.innerHTML = events.map(function (e) {
+        var pl = (e.plUsd === null || e.plUsd === undefined) ? '' : ' <span class="' + cls(e.plUsd) + '">' + usd(e.plUsd) + '</span>';
+        return '<div><span><span class="ev-token">' + esc(e.token) + '</span> ' + esc(e.text) + pl + '</span><span class="ev-time">' + timeLabel(e.at) + '</span></div>';
+      }).join('');
+    }
+
+    // System read
+    var sys = document.getElementById('systemPanel');
+    sys.innerHTML =
+      lkv('Live trading', meta.liveTradingLocked === false ? '<span class="neg">UNLOCKED</span>' : '<span class="pos">LOCKED</span>') +
+      lkv('Tracker mode', 'Read-only') +
+      lkv('Token source', esc(meta.tokenSource || 'N/A')) +
+      lkv('Refresh interval', (meta.refreshIntervalSeconds || 4) + 's');
+
+    // Radar summary
+    var rs = document.getElementById('radarSummaryPanel');
+    rs.innerHTML =
+      lkv('Radar candidates', String(meta.radarCount != null ? meta.radarCount : 'N/A')) +
+      lkv('Watchlist candidates', String(meta.watchlistCount != null ? meta.watchlistCount : 'N/A')) +
+      lkv('Radar source', esc(meta.radarSource || 'N/A')) +
+      lkv('Watchlist source', esc(meta.watchlistSource || 'N/A')) +
+      lkv('Fixture fallback', meta.fixtureFallbackActive ? '<span class="pill yellow">active</span>' : '<span class="pill gray">off</span>');
   }
 
   function emptyState(msg) { return '<div class="state">' + esc(msg) + '</div>'; }
@@ -273,10 +346,10 @@ export function renderPlTrackerPage(): string {
         '<td class="num">' + price(p.entryPriceUsd) + '</td>' +
         '<td class="num">' + price(p.currentPriceUsd) + '</td>' +
         '<td class="num">' + usd(p.positionSizeUsd) + '</td>' +
-        '<td class="num ' + cls(p.plUsd) + '">' + usd(p.plUsd) + '</td>' +
-        '<td class="num ' + cls(p.plPct) + '">' + pct(p.plPct) + '</td>' +
+        '<td class="num strong ' + cls(p.plUsd) + '">' + usd(p.plUsd) + '</td>' +
+        '<td class="num strong ' + cls(p.plPct) + '">' + pct(p.plPct) + '</td>' +
         '<td class="num">' + esc(p.ageLabel) + '</td>' +
-        '<td>' + esc(p.exitStatus) + '</td>' +
+        '<td><span class="pill blue">PAPER OPEN</span><div style="margin-top:5px;color:var(--muted);font-size:12px;">' + esc(p.exitStatus) + '</div></td>' +
         '<td><button class="btn" data-inspect="' + esc(p.id) + '">Inspect</button></td>' +
         '</tr>';
     }).join('');
