@@ -1,0 +1,75 @@
+[
+  {
+    "id": "ac-goose",
+    "tokenName": "Goose",
+    "ticker": "GOOSE",
+    "contractAddress": "GooseFakeCAForTestingPurposesNa11111111111",
+    "poolAddress": "GoosePoolFakeAddressForTestingPurposes111",
+    "lane": "FRESH_LAUNCH_CANDIDATE",
+    "decision": "ALERT_ONLY",
+    "scoreAtDetection": 80,
+    "detectedAt": "2026-06-05T10:05:00Z",
+    "poolCreatedAt": "2026-06-05T10:00:00Z",
+    "reasons": [
+      "+25: 2 credible pre-launch signals before pool creation",
+      "+20: 2 independent credible authors",
+      "+10: Social/website metadata present on pool",
+      "+10: Liquidity above $20k"
+    ],
+    "redFlags": []
+  },
+  {
+    "id": "ac-scamgem",
+    "tokenName": "ScamGem",
+    "ticker": "SCAMGEM",
+    "contractAddress": "ScamGemFakeCAForTestingPurposesNa11111111",
+    "lane": "NOISE_RUG_LIKELY",
+    "decision": "REJECT",
+    "scoreAtDetection": 0,
+    "detectedAt": "2026-06-05T09:35:00Z",
+    "reasons": [],
+    "redFlags": [
+      "-15: No social/website metadata on pool",
+      "-20: All matched social signals are suspected bots",
+      "-20: 3 identical spam cluster signal(s)"
+    ]
+  },
+  {
+    "id": "ac-rnd999",
+    "tokenName": "RandomCoin999",
+    "ticker": "RND999",
+    "contractAddress": "RandomCoin999FakeCAForTestingPurposes1111",
+    "lane": "NOISE_RUG_LIKELY",
+    "decision": "REJECT",
+    "scoreAtDetection": 0,
+    "detectedAt": "2026-06-05T10:20:00Z",
+    "reasons": [],
+    "redFlags": [
+      "-15: No social/website metadata on pool",
+      "-15: No social/event/pre-launch context found for this pool"
+    ]
+  },
+  {
+    "id": "ac-moodeng",
+    "tokenName": "MOODENG",
+    "ticker": "MOODENG",
+    "contractAddress": "MoodengFakeCAForTestingPurposesNa111111111",
+    "lane": "PRE_LAUNCH_WATCH",
+    "decision": "WATCH",
+    "scoreAtDetection": 73,
+    "detectedAt": "2026-06-05T08:00:00Z",
+    "reasons": ["+15: 2 independent credible authors"],
+    "redFlags": []
+  },
+  {
+    "id": "ac-ptoad",
+    "tokenName": "PRESIDENT TOAD",
+    "ticker": "PTOAD",
+    "lane": "MEME_EVENT_CANDIDATE",
+    "decision": "WATCH",
+    "scoreAtDetection": 76,
+    "detectedAt": "2026-06-05T06:00:00Z",
+    "reasons": ["Event velocity 72/100, evidence count 145"],
+    "redFlags": []
+  }
+]

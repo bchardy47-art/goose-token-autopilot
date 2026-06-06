@@ -1,0 +1,83 @@
+[
+  {
+    "candidateId": "ac-goose",
+    "observedAt": "2026-06-05T10:10:00Z",
+    "minutesAfterDetection": 5,
+    "priceUsd": 0.0001,
+    "liquidityUsd": 45000,
+    "volumeUsd": 8200,
+    "source": "fixture"
+  },
+  {
+    "candidateId": "ac-goose",
+    "observedAt": "2026-06-05T10:47:00Z",
+    "minutesAfterDetection": 42,
+    "priceUsd": 0.00034,
+    "liquidityUsd": 142000,
+    "volumeUsd": 89000,
+    "source": "fixture"
+  },
+  {
+    "candidateId": "ac-goose",
+    "observedAt": "2026-06-05T11:05:00Z",
+    "minutesAfterDetection": 60,
+    "priceUsd": 0.00031,
+    "liquidityUsd": 120000,
+    "volumeUsd": 65000,
+    "source": "fixture"
+  },
+  {
+    "candidateId": "ac-scamgem",
+    "observedAt": "2026-06-05T09:40:00Z",
+    "minutesAfterDetection": 5,
+    "priceUsd": 0.00005,
+    "liquidityUsd": 4000,
+    "volumeUsd": 200,
+    "source": "fixture"
+  },
+  {
+    "candidateId": "ac-scamgem",
+    "observedAt": "2026-06-05T10:05:00Z",
+    "minutesAfterDetection": 30,
+    "priceUsd": 0.000008,
+    "liquidityUsd": 800,
+    "volumeUsd": 50,
+    "source": "fixture"
+  },
+  {
+    "candidateId": "ac-scamgem",
+    "observedAt": "2026-06-05T10:35:00Z",
+    "minutesAfterDetection": 60,
+    "priceUsd": 0.000002,
+    "liquidityUsd": 150,
+    "volumeUsd": 10,
+    "source": "fixture"
+  },
+  {
+    "candidateId": "ac-rnd999",
+    "observedAt": "2026-06-05T10:25:00Z",
+    "minutesAfterDetection": 5,
+    "priceUsd": 0.00002,
+    "liquidityUsd": 9000,
+    "volumeUsd": 1200,
+    "source": "fixture"
+  },
+  {
+    "candidateId": "ac-rnd999",
+    "observedAt": "2026-06-05T11:05:00Z",
+    "minutesAfterDetection": 45,
+    "priceUsd": 0.000065,
+    "liquidityUsd": 38000,
+    "volumeUsd": 42000,
+    "source": "fixture"
+  },
+  {
+    "candidateId": "ac-rnd999",
+    "observedAt": "2026-06-05T11:20:00Z",
+    "minutesAfterDetection": 60,
+    "priceUsd": 0.000078,
+    "liquidityUsd": 52000,
+    "volumeUsd": 71000,
+    "source": "fixture"
+  }
+]
