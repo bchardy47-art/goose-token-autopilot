@@ -81,6 +81,7 @@ export function buildTokenGrabReport(fixtures: TokenGrabFixtures): TokenGrabRepo
       tokenName: pool.tokenName,
       ticker: pool.ticker,
       contractAddress: pool.contractAddress,
+      poolAddress: pool.poolAddress,
       lane,
       decision,
       score: result.score,

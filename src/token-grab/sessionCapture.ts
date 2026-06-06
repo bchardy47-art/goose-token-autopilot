@@ -41,6 +41,7 @@ export function tokenGrabReportToAutopsyCandidates(
     tokenName: c.tokenName ?? c.ticker ?? '(unknown)',
     ticker: c.ticker ?? c.tokenName ?? '(unknown)',
     contractAddress: c.contractAddress,
+    poolAddress: c.poolAddress,
     lane: c.lane,
     decision: c.decision,
     scoreAtDetection: c.score,
