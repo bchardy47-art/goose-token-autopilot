@@ -16,8 +16,13 @@ const LANE_ORDER: Record<TokenGrabRadarCandidate['lane'], number> = {
   FRESH_LAUNCH_CANDIDATE: 0,
   PRE_LAUNCH_WATCH: 1,
   MEME_EVENT_CANDIDATE: 2,
-  NOISE_RUG_LIKELY: 3,
+  EARLY_VELOCITY_WATCH: 3,
+  NOISE_RUG_LIKELY: 4,
 };
+
+const VELOCITY_MIN_LIQUIDITY = 1_000;
+const VELOCITY_MAX_LIQUIDITY = 20_000;
+const VELOCITY_MIN_RATIO = 0.5;
 
 export function buildTokenGrabReport(fixtures: TokenGrabFixtures): TokenGrabReport {
   const { socialSignals, eventSignals, freshPools } = fixtures;
@@ -53,10 +58,33 @@ export function buildTokenGrabReport(fixtures: TokenGrabFixtures): TokenGrabRepo
 
     let lane: TokenGrabRadarCandidate['lane'];
     let decision: TokenGrabRadarCandidate['decision'];
+    const velocityReasons: string[] = [];
 
     if (!hasAnyMatch || allBotOrSpam || result.score < MIN_FRESH_LAUNCH_SCORE) {
-      lane = 'NOISE_RUG_LIKELY';
-      decision = 'REJECT';
+      // Check for early velocity signal on no-context pools only
+      const isNoContext = !hasAnyMatch;
+      const liq = pool.liquidityUsd ?? 0;
+      const vol = pool.volume5mUsd ?? 0;
+      const meetsVelocityRule =
+        isNoContext &&
+        liq >= VELOCITY_MIN_LIQUIDITY &&
+        liq <= VELOCITY_MAX_LIQUIDITY &&
+        vol > 0 &&
+        vol / liq >= VELOCITY_MIN_RATIO;
+
+      if (meetsVelocityRule) {
+        lane = 'EARLY_VELOCITY_WATCH';
+        decision = 'WATCH';
+        const ratio = (vol / liq).toFixed(2);
+        velocityReasons.push(
+          `Early volume/liquidity ratio ${ratio} (≥${VELOCITY_MIN_RATIO}) suggests unusual activity`,
+        );
+        velocityReasons.push('WATCH ONLY — not a buy signal. No social/event context confirmed.');
+        velocityReasons.push('Needs snapshot follow-up to assess outcome.');
+      } else {
+        lane = 'NOISE_RUG_LIKELY';
+        decision = 'REJECT';
+      }
     } else {
       lane = 'FRESH_LAUNCH_CANDIDATE';
       decision = 'ALERT_ONLY';
@@ -91,7 +119,7 @@ export function buildTokenGrabReport(fixtures: TokenGrabFixtures): TokenGrabRepo
       matchedSocialSignals: matchedSocial,
       matchedEventSignals: matchedEvents,
       matchedLaunchSignals: matchedLaunch,
-      reasons: result.reasons,
+      reasons: [...result.reasons, ...velocityReasons],
       redFlags: result.redFlags,
       noTradingExecuted: true,
     });
@@ -156,6 +184,7 @@ export function buildTokenGrabReport(fixtures: TokenGrabFixtures): TokenGrabRepo
       prelaunchWatch: candidates.filter(c => c.lane === 'PRE_LAUNCH_WATCH').length,
       memeEventCandidates: candidates.filter(c => c.lane === 'MEME_EVENT_CANDIDATE').length,
       freshLaunchCandidates: candidates.filter(c => c.lane === 'FRESH_LAUNCH_CANDIDATE').length,
+      earlyVelocityWatch: candidates.filter(c => c.lane === 'EARLY_VELOCITY_WATCH').length,
       rejectedNoise: candidates.filter(c => c.lane === 'NOISE_RUG_LIKELY').length,
       tradingExecuted: 0,
     },
@@ -215,6 +244,9 @@ export function renderTokenGrabReport(report: TokenGrabReport): string {
       for (const f of c.redFlags) lines.push(`  ! ${f}`);
     }
 
+    if (c.lane === 'EARLY_VELOCITY_WATCH') {
+      lines.push('  !! WATCH ONLY — Not a buy signal. No social context confirmed. !!');
+    }
     lines.push('');
     lines.push('  NO TRADING EXECUTED');
     lines.push('');
@@ -226,6 +258,7 @@ export function renderTokenGrabReport(report: TokenGrabReport): string {
   lines.push(`  Pre-launch watch      : ${report.summary.prelaunchWatch}`);
   lines.push(`  Meme event candidates : ${report.summary.memeEventCandidates}`);
   lines.push(`  Fresh launch cands    : ${report.summary.freshLaunchCandidates}`);
+  lines.push(`  Early velocity watch  : ${report.summary.earlyVelocityWatch}`);
   lines.push(`  Rejected / noise      : ${report.summary.rejectedNoise}`);
   lines.push(`  Trading executed      : ${report.summary.tradingExecuted}`);
   lines.push('');
