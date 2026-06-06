@@ -105,6 +105,7 @@ export interface TokenGrabRadarCandidate {
   tokenName?: string;
   ticker?: string;
   contractAddress?: string;
+  poolAddress?: string;
   lane: TokenGrabLane;
   decision: TokenGrabDecision;
   score: number;

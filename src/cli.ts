@@ -63,6 +63,7 @@ import {
   loadTokenGrabSession,
   type TokenGrabSessionFile,
 } from './token-grab/sessionCapture';
+import { fetchSessionSnapshots, writeSnapshotFile } from './token-grab/snapshot';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -640,6 +641,49 @@ async function main(): Promise<void> {
         } else {
           console.log(renderTokenGrabReport(report));
         }
+        break;
+      }
+      case 'token:ears-snapshot': {
+        const sessionPath = getArgValue('--session');
+        const outPath = getArgValue('--out');
+
+        if (!sessionPath) throw new Error('token:ears-snapshot requires --session <path>');
+        if (!outPath) throw new Error('token:ears-snapshot requires --out <path>');
+
+        const limit = parseNumberArg('--limit', 20, { integer: true, min: 1 });
+        const timeoutMs = parseNumberArg('--timeout-ms', 10_000, { integer: true, min: 500 });
+
+        const session = loadTokenGrabSession(sessionPath);
+
+        console.log(`Session   : ${sessionPath}`);
+        console.log(`Output    : ${outPath}`);
+        console.log(`Candidates: ${session.candidates.length} (fetching up to ${limit})`);
+        console.log('Fetching snapshots from GeckoTerminal...');
+        console.log('');
+
+        const result = await fetchSessionSnapshots({
+          candidates: session.candidates,
+          limit,
+          timeoutMs,
+        });
+
+        writeSnapshotFile(outPath, result.snapshots);
+
+        const THIN = '─'.repeat(50);
+        console.log(THIN);
+        console.log(`Session            : ${sessionPath}`);
+        console.log(`Output             : ${outPath}`);
+        console.log(`Candidates loaded  : ${session.candidates.length}`);
+        console.log(`Snapshots written  : ${result.snapshots.length}`);
+        console.log(`Skipped / failed   : ${result.skipped}`);
+        if (result.skipReasons.length > 0) {
+          for (const s of result.skipReasons) {
+            console.log(`  ! ${s.ticker} (${s.candidateId}): ${s.reason}`);
+          }
+        }
+        console.log('');
+        console.log('NO TRADING EXECUTED');
+        console.log(THIN);
         break;
       }
       default:
