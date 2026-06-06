@@ -53,6 +53,7 @@ import { buildXEarsReport, renderXEarsReport, type SocialPost, type XEarsSourceM
 import { loadTokenGrabFixtures } from './token-grab/fixtures';
 import { buildTokenGrabReport, renderTokenGrabReport } from './token-grab/report';
 import { mapXEarsReportToSocialSignals } from './token-grab/xEarsAdapter';
+import { loadFreshPoolsFromFile, loadEventSignalsFromFile } from './token-grab/loaders';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -509,6 +510,8 @@ async function main(): Promise<void> {
         const limit = parseNumberArg('--limit', 50, { integer: true, min: 1 });
         const windowMinutes = parseNumberArg('--window-minutes', 90, { min: 1 });
         const fixturePath = getArgValue('--fixture');
+        const freshPoolsPath = getArgValue('--fresh-pools');
+        const eventsPath = getArgValue('--events');
         const jsonMode = process.argv.includes('--json');
 
         let xSocialSignals: ReturnType<typeof mapXEarsReportToSocialSignals> = [];
@@ -522,10 +525,13 @@ async function main(): Promise<void> {
           console.error('[ears-report] Live X API not implemented in V1. Use --fixture <path>.');
         }
 
+        const freshPools = freshPoolsPath ? loadFreshPoolsFromFile(freshPoolsPath) : [];
+        const eventSignals = eventsPath ? loadEventSignalsFromFile(eventsPath) : [];
+
         const report = buildTokenGrabReport({
           socialSignals: xSocialSignals,
-          eventSignals: [],
-          freshPools: [],
+          eventSignals,
+          freshPools,
         });
 
         if (jsonMode) {
