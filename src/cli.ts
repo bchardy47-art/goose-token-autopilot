@@ -55,6 +55,8 @@ import { buildTokenGrabReport, renderTokenGrabReport } from './token-grab/report
 import { mapXEarsReportToSocialSignals } from './token-grab/xEarsAdapter';
 import { loadFreshPoolsFromFile, loadEventSignalsFromFile } from './token-grab/loaders';
 import { fetchGeckoFreshPools, dedupeFreshPools } from './token-grab/geckoFreshPools';
+import { buildTokenGrabAutopsyReport, renderTokenGrabAutopsyReport } from './token-grab/autopsy';
+import { loadAutopsyCandidatesFromFile, loadAutopsySnapshotsFromFile } from './token-grab/autopsyLoaders';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -546,6 +548,20 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(report, null, 2));
         } else {
           console.log(renderTokenGrabReport(report));
+        }
+        break;
+      }
+      case 'token:ears-autopsy': {
+        const candidatesPath = getArgValue('--candidates') ?? 'fixtures/token-grab/autopsy-candidates.json';
+        const snapshotsPath = getArgValue('--snapshots') ?? 'fixtures/token-grab/autopsy-snapshots.json';
+        const jsonMode = process.argv.includes('--json');
+        const candidates = loadAutopsyCandidatesFromFile(candidatesPath);
+        const snapshots = loadAutopsySnapshotsFromFile(snapshotsPath);
+        const report = buildTokenGrabAutopsyReport(candidates, snapshots);
+        if (jsonMode) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(renderTokenGrabAutopsyReport(report));
         }
         break;
       }

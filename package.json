@@ -63,6 +63,7 @@
     "token:x-ears-report": "tsx src/cli.ts token:x-ears-report",
     "token:control-center": "tsx src/cli.ts token:control-center",
     "token:ears-report": "tsx src/cli.ts token:ears-report",
+    "token:ears-autopsy": "tsx src/cli.ts token:ears-autopsy",
     "token:ears-demo": "tsx src/cli.ts token:ears-demo",
     "test": "vitest run"
   },
