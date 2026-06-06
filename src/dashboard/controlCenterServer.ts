@@ -3,6 +3,7 @@ import { URL } from 'node:url';
 import type { AppDb } from '../db';
 import type { AppConfig } from '../types';
 import { buildControlCenterSummary } from './controlCenterSummary';
+import { buildTokenGrabDashboardModel, renderTokenGrabDashboardPage } from './tokenGrabDashboard';
 
 function htmlPage(): string {
   return `<!doctype html>
@@ -364,6 +365,27 @@ export async function startControlCenterServer(db: AppDb, config: AppConfig, opt
         const summary = buildControlCenterSummary(db, config);
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify(summary, null, 2));
+        return;
+      }
+
+      if (url.pathname === '/token-grab') {
+        const model = buildTokenGrabDashboardModel();
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(renderTokenGrabDashboardPage(model));
+        return;
+      }
+
+      if (url.pathname === '/api/token-grab-summary') {
+        const model = buildTokenGrabDashboardModel();
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          generatedAt: model.generatedAt,
+          readOnly: true,
+          tradingExecuted: 0,
+          geckoLiveFetch: false,
+          earsSummary: model.earsReport.summary,
+          autopsySummary: model.autopsyReport.summary,
+        }, null, 2));
         return;
       }
 
