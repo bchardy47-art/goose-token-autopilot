@@ -1,0 +1,17 @@
+[
+  {
+    "id": "ev001",
+    "source": "fixture",
+    "phrase": "PRESIDENT TOAD",
+    "normalizedPhrase": "president toad",
+    "category": "internet",
+    "firstSeenAt": "2026-06-05T06:00:00Z",
+    "velocityScore": 72,
+    "evidenceCount": 145,
+    "relatedTerms": ["presidenttoad", "ptoad", "toad president", "toadcoin"],
+    "exampleUrls": [
+      "https://x.com/fixture/example/status/1",
+      "https://x.com/fixture/example/status/2"
+    ]
+  }
+]

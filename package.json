@@ -60,6 +60,9 @@
     "token:chase-watch-report": "tsx src/cli.ts token:chase-watch-report",
     "token:paper-readiness-report": "tsx src/cli.ts token:paper-readiness-report",
     "token:tiny-paper-plan-report": "tsx src/cli.ts token:tiny-paper-plan-report",
+    "token:x-ears-report": "tsx src/cli.ts token:x-ears-report",
+    "token:control-center": "tsx src/cli.ts token:control-center",
+    "token:ears-demo": "tsx src/cli.ts token:ears-demo",
     "test": "vitest run"
   },
   "dependencies": {

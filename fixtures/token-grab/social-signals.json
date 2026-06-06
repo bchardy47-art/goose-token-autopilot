@@ -1,0 +1,131 @@
+[
+  {
+    "id": "ss001",
+    "source": "fixture",
+    "authorHandle": "GooseWhisperer",
+    "authorDisplayName": "Goose Whisperer",
+    "authorFollowers": 18400,
+    "authorCredibility": 82,
+    "text": "$GOOSE fair launch on Raydium TODAY. CA: GooseFakeCAForTestingPurposesNa11111111111 LP will be burned on deploy. This is the one.",
+    "url": "https://x.com/fixture/goosewhisperer/1",
+    "firstSeenAt": "2026-06-05T08:00:00Z",
+    "createdAt": "2026-06-05T08:00:00Z",
+    "engagement": { "likes": 142, "reposts": 38, "replies": 21 },
+    "extracted": {
+      "tickers": ["GOOSE"],
+      "tokenNames": ["Goose"],
+      "contractAddresses": ["GooseFakeCAForTestingPurposesNa11111111111"],
+      "urls": ["https://x.com/fixture/goosewhisperer/1"],
+      "phrases": ["fair launch", "LP burned", "raydium"]
+    },
+    "flags": {
+      "knownCaller": true
+    }
+  },
+  {
+    "id": "ss002",
+    "source": "fixture",
+    "authorHandle": "SolanaWatcher99",
+    "authorFollowers": 3200,
+    "authorCredibility": 55,
+    "text": "watching $GOOSE closely. contract GooseFakeCAForTestingPurposesNa11111111111 just deployed stealth launch vibes, launch soon",
+    "url": "https://x.com/fixture/solanawatcher99/1",
+    "firstSeenAt": "2026-06-05T08:15:00Z",
+    "createdAt": "2026-06-05T08:15:00Z",
+    "engagement": { "likes": 27, "reposts": 9, "replies": 4 },
+    "extracted": {
+      "tickers": ["GOOSE"],
+      "tokenNames": ["Goose"],
+      "contractAddresses": ["GooseFakeCAForTestingPurposesNa11111111111"],
+      "urls": [],
+      "phrases": ["stealth launch", "launch soon"]
+    },
+    "flags": {}
+  },
+  {
+    "id": "ss003",
+    "source": "fixture",
+    "authorHandle": "PhantomDevOfficial",
+    "authorDisplayName": "Phantom Token (Official)",
+    "authorFollowers": 6700,
+    "authorCredibility": 90,
+    "text": "CA soon. $PHANTOM stealth launch incoming. Fair launch, no presale, LP burned on day 1. Follow for countdown.",
+    "url": "https://x.com/fixture/phantomdevofficial/1",
+    "firstSeenAt": "2026-06-05T07:30:00Z",
+    "createdAt": "2026-06-05T07:30:00Z",
+    "engagement": { "likes": 89, "reposts": 31, "replies": 14 },
+    "extracted": {
+      "tickers": ["PHANTOM"],
+      "tokenNames": ["Phantom"],
+      "contractAddresses": [],
+      "urls": ["https://x.com/fixture/phantomdevofficial/1"],
+      "phrases": ["CA soon", "stealth launch", "fair launch", "LP burned"]
+    },
+    "flags": {
+      "officialProjectAccount": true
+    }
+  },
+  {
+    "id": "ss004",
+    "source": "fixture",
+    "authorHandle": "SolanaBot001",
+    "authorFollowers": 12,
+    "text": "100x gem $SCAMGEM CA: ScamGemFakeCAForTestingPurposesNa11111111 fair launch pumpfun graduated LP burned community takeover",
+    "firstSeenAt": "2026-06-05T09:00:00Z",
+    "createdAt": "2026-06-05T09:00:00Z",
+    "engagement": { "likes": 0, "reposts": 0, "replies": 0 },
+    "extracted": {
+      "tickers": ["SCAMGEM"],
+      "tokenNames": ["ScamGem"],
+      "contractAddresses": ["ScamGemFakeCAForTestingPurposesNa11111111"],
+      "urls": [],
+      "phrases": ["fair launch", "pumpfun", "graduated", "LP burned", "community takeover"]
+    },
+    "flags": {
+      "suspectedBot": true,
+      "identicalSpamCluster": true
+    }
+  },
+  {
+    "id": "ss005",
+    "source": "fixture",
+    "authorHandle": "SolanaBot002",
+    "authorFollowers": 8,
+    "text": "100x gem $SCAMGEM CA: ScamGemFakeCAForTestingPurposesNa11111111 fair launch pumpfun graduated LP burned community takeover",
+    "firstSeenAt": "2026-06-05T09:01:00Z",
+    "createdAt": "2026-06-05T09:01:00Z",
+    "engagement": { "likes": 0, "reposts": 0, "replies": 0 },
+    "extracted": {
+      "tickers": ["SCAMGEM"],
+      "tokenNames": ["ScamGem"],
+      "contractAddresses": ["ScamGemFakeCAForTestingPurposesNa11111111"],
+      "urls": [],
+      "phrases": ["fair launch", "pumpfun", "graduated", "LP burned", "community takeover"]
+    },
+    "flags": {
+      "suspectedBot": true,
+      "identicalSpamCluster": true
+    }
+  },
+  {
+    "id": "ss006",
+    "source": "fixture",
+    "authorHandle": "SolanaBot003",
+    "authorFollowers": 5,
+    "text": "100x gem $SCAMGEM CA: ScamGemFakeCAForTestingPurposesNa11111111 fair launch pumpfun graduated LP burned community takeover",
+    "firstSeenAt": "2026-06-05T09:02:00Z",
+    "createdAt": "2026-06-05T09:02:00Z",
+    "engagement": { "likes": 0, "reposts": 0, "replies": 0 },
+    "extracted": {
+      "tickers": ["SCAMGEM"],
+      "tokenNames": ["ScamGem"],
+      "contractAddresses": ["ScamGemFakeCAForTestingPurposesNa11111111"],
+      "urls": [],
+      "phrases": ["fair launch", "pumpfun", "graduated", "LP burned", "community takeover"]
+    },
+    "flags": {
+      "suspectedBot": true,
+      "identicalSpamCluster": true
+    }
+  }
+]
