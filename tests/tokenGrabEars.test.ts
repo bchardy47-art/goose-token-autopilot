@@ -245,6 +245,147 @@ describe('buildTokenGrabReport lane assignment', () => {
     expect(report.candidates[0]?.decision).toBe('REJECT');
   });
 
+  it('MANLET-like pool (liq=4735, vol=3676, ratio=0.78, no social) => EARLY_VELOCITY_WATCH / WATCH', () => {
+    const manletPool = makeFreshPool({
+      id: 'fp-manlet',
+      ticker: 'MANLET',
+      tokenName: 'MANLET',
+      contractAddress: 'ManletFakeCAForTestingPurposesOnly11111111',
+      liquidityUsd: 4735,
+      volume5mUsd: 3676,
+      metadata: undefined,
+    });
+    const fixtures: TokenGrabFixtures = {
+      socialSignals: [],
+      eventSignals: [],
+      freshPools: [manletPool],
+    };
+    const report = buildTokenGrabReport(fixtures);
+    const c = report.candidates[0];
+    expect(c?.lane).toBe('EARLY_VELOCITY_WATCH');
+    expect(c?.decision).toBe('WATCH');
+    expect(c?.noTradingExecuted).toBe(true);
+    expect(report.summary.tradingExecuted).toBe(0);
+    expect(report.summary.earlyVelocityWatch).toBe(1);
+  });
+
+  it('low-volume low-liquidity no-social pool stays NOISE_RUG_LIKELY / REJECT', () => {
+    const noisyPool = makeFreshPool({
+      id: 'fp-noise2',
+      ticker: 'NOISE2',
+      tokenName: 'NoiseCoin2',
+      contractAddress: 'NoiseCoin2FakeCAForTestingPurposes111111111',
+      liquidityUsd: 500,
+      volume5mUsd: 10,
+      metadata: undefined,
+    });
+    const fixtures: TokenGrabFixtures = {
+      socialSignals: [],
+      eventSignals: [],
+      freshPools: [noisyPool],
+    };
+    const report = buildTokenGrabReport(fixtures);
+    expect(report.candidates[0]?.lane).toBe('NOISE_RUG_LIKELY');
+    expect(report.candidates[0]?.decision).toBe('REJECT');
+    expect(report.summary.earlyVelocityWatch).toBe(0);
+  });
+
+  it('high-liquidity (>$20k) low-volume no-social pool stays NOISE_RUG_LIKELY (above velocity window)', () => {
+    const highLiqPool = makeFreshPool({
+      id: 'fp-highliq',
+      ticker: 'HIGHLIQ',
+      tokenName: 'HighLiqCoin',
+      contractAddress: 'HighLiqCoinFakeCAForTestingPurposesOnly1111',
+      liquidityUsd: 25000,
+      volume5mUsd: 20000,
+      metadata: undefined,
+    });
+    const fixtures: TokenGrabFixtures = {
+      socialSignals: [],
+      eventSignals: [],
+      freshPools: [highLiqPool],
+    };
+    const report = buildTokenGrabReport(fixtures);
+    expect(report.candidates[0]?.lane).toBe('NOISE_RUG_LIKELY');
+    expect(report.candidates[0]?.decision).toBe('REJECT');
+    expect(report.summary.earlyVelocityWatch).toBe(0);
+  });
+
+  it('velocity pool with ratio exactly at threshold (0.50) => EARLY_VELOCITY_WATCH', () => {
+    const thresholdPool = makeFreshPool({
+      id: 'fp-thresh',
+      ticker: 'THRESH',
+      tokenName: 'ThreshCoin',
+      contractAddress: 'ThreshCoinFakeCAForTestingPurposesOnly11111',
+      liquidityUsd: 2000,
+      volume5mUsd: 1000,
+      metadata: undefined,
+    });
+    const fixtures: TokenGrabFixtures = {
+      socialSignals: [],
+      eventSignals: [],
+      freshPools: [thresholdPool],
+    };
+    const report = buildTokenGrabReport(fixtures);
+    expect(report.candidates[0]?.lane).toBe('EARLY_VELOCITY_WATCH');
+    expect(report.candidates[0]?.decision).toBe('WATCH');
+  });
+
+  it('velocity pool below ratio threshold (0.49) stays NOISE_RUG_LIKELY', () => {
+    const lowRatioPool = makeFreshPool({
+      id: 'fp-lowratio',
+      ticker: 'LOWRAT',
+      tokenName: 'LowRatioCoin',
+      contractAddress: 'LowRatioCoinFakeCAForTestingPurposesOnly111',
+      liquidityUsd: 2000,
+      volume5mUsd: 979,
+      metadata: undefined,
+    });
+    const fixtures: TokenGrabFixtures = {
+      socialSignals: [],
+      eventSignals: [],
+      freshPools: [lowRatioPool],
+    };
+    const report = buildTokenGrabReport(fixtures);
+    expect(report.candidates[0]?.lane).toBe('NOISE_RUG_LIKELY');
+    expect(report.candidates[0]?.decision).toBe('REJECT');
+  });
+
+  it('EARLY_VELOCITY_WATCH output includes "not a buy signal" safety text', () => {
+    const manletPool = makeFreshPool({
+      id: 'fp-manlet2',
+      ticker: 'MANLET',
+      tokenName: 'MANLET',
+      contractAddress: 'ManletFakeCAForTestingPurposesOnly22222222',
+      liquidityUsd: 4735,
+      volume5mUsd: 3676,
+      metadata: undefined,
+    });
+    const fixtures: TokenGrabFixtures = { socialSignals: [], eventSignals: [], freshPools: [manletPool] };
+    const report = buildTokenGrabReport(fixtures);
+    const rendered = renderTokenGrabReport(report);
+    expect(rendered).toContain('not a buy signal');
+    expect(rendered).toContain('EARLY_VELOCITY_WATCH');
+    expect(rendered).toContain('NO TRADING EXECUTED');
+  });
+
+  it('velocity watch lane does not claim tickers or events (no FRESH_LAUNCH spillover)', () => {
+    const manletPool = makeFreshPool({
+      id: 'fp-manlet3',
+      ticker: 'MANLET',
+      tokenName: 'MANLET',
+      contractAddress: 'ManletFakeCAForTestingPurposesOnly33333333',
+      liquidityUsd: 4735,
+      volume5mUsd: 3676,
+      metadata: undefined,
+    });
+    const fixtures: TokenGrabFixtures = { socialSignals: [], eventSignals: [], freshPools: [manletPool] };
+    const report = buildTokenGrabReport(fixtures);
+    expect(report.summary.freshLaunchCandidates).toBe(0);
+    expect(report.summary.earlyVelocityWatch).toBe(1);
+    expect(report.summary.tradingExecuted).toBe(0);
+  });
+
   it('identical spam cluster reduces score to 0 and creates red flags', () => {
     const spamSignals = ['Bot1', 'Bot2', 'Bot3'].map((h, i) =>
       makeSocialSignal({
@@ -297,6 +438,7 @@ describe('renderTokenGrabReport', () => {
       report.summary.prelaunchWatch +
       report.summary.memeEventCandidates +
       report.summary.freshLaunchCandidates +
+      report.summary.earlyVelocityWatch +
       report.summary.rejectedNoise;
     expect(total).toBe(report.candidates.length);
     expect(report.summary.tradingExecuted).toBe(0);

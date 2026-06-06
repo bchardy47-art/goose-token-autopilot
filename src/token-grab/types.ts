@@ -2,6 +2,7 @@ export type TokenGrabLane =
   | 'PRE_LAUNCH_WATCH'
   | 'FRESH_LAUNCH_CANDIDATE'
   | 'MEME_EVENT_CANDIDATE'
+  | 'EARLY_VELOCITY_WATCH'
   | 'NOISE_RUG_LIKELY';
 
 export type TokenGrabDecision = 'WATCH' | 'ALERT_ONLY' | 'REJECT';
@@ -135,6 +136,7 @@ export interface TokenGrabReport {
     prelaunchWatch: number;
     memeEventCandidates: number;
     freshLaunchCandidates: number;
+    earlyVelocityWatch: number;
     rejectedNoise: number;
     tradingExecuted: 0;
   };
