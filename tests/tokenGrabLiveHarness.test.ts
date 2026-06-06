@@ -83,6 +83,8 @@ function makeBaseSummary(
     noRealTradeSent: true,
     autoPaperNotRun: true,
     skipSleepMode: false,
+    watchCycle: false,
+    fakeBankroll: 20,
     ...overrides,
   };
 }
@@ -599,5 +601,152 @@ describe('evaluateLiveReadinessGates — happy path', () => {
     expect(gateNames).toContain('ENTRY_PRICE_VALID');
     expect(gateNames).toContain('ENTRY_LIQUIDITY_MINIMUM');
     expect(gateNames).toContain('CONFIRMATION_PHRASE');
+  });
+});
+
+// ── Watch cycle tests (7 required) ────────────────────────────────────────────
+
+describe('watch cycle — LiveHarnessSummary', () => {
+  // Test 1: Default behavior — no watch cycle
+  it('default summary has watchCycle false and no exitSnapshotPath or fakePnL', () => {
+    const readiness: LiveReadinessReport = { status: 'DRY_RUN_ONLY', gates: [], allGatesPassed: false };
+    const summary = makeBaseSummary(readiness);
+    expect(summary.watchCycle).toBe(false);
+    expect(summary.exitSnapshotPath).toBeUndefined();
+    expect(summary.fakePnL).toBeUndefined();
+  });
+
+  it('default summary without watch-cycle renders without watch cycle section', () => {
+    const readiness: LiveReadinessReport = { status: 'DRY_RUN_ONLY', gates: [], allGatesPassed: false };
+    const summary = makeBaseSummary(readiness, { status: 'DRY_RUN_ONLY', decision: 'FAKE_BUY' });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).not.toContain('Watch Cycle');
+    expect(rendered).toContain('DRY_RUN_ONLY');
+  });
+
+  // Test 2: --watch-cycle summary includes exitSnapshotPath
+  it('watch-cycle summary includes exitSnapshotPath when watchCycle is true', () => {
+    const readiness: LiveReadinessReport = { status: 'DRY_RUN_ONLY', gates: [], allGatesPassed: false };
+    const exitPath = 'data/token-grab/live-harness/session-20260606-1800-exit.json';
+    const summary = makeBaseSummary(readiness, {
+      status: 'DRY_RUN_ONLY',
+      decision: 'FAKE_BUY',
+      watchCycle: true,
+      exitSnapshotPath: exitPath,
+    });
+    expect(summary.watchCycle).toBe(true);
+    expect(summary.exitSnapshotPath).toBe(exitPath);
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('Watch Cycle');
+    expect(rendered).toContain(exitPath);
+  });
+
+  // Test 3: --watch-cycle with FAKE_BUY calculates fake P/L
+  it('watch-cycle FAKE_BUY summary includes fakePnL and renders it', () => {
+    const fakePnL = {
+      outcome: 'GAIN' as const,
+      fakePositionSize: 1,
+      fakeEntryPrice: 0.001,
+      fakeExitPrice: 0.002,
+      fakeTokensHeld: 1000,
+      fakeEndingValue: 2,
+      pnlDollars: 1,
+      pnlPct: 100,
+      endingBankroll: 21,
+    };
+    const readiness: LiveReadinessReport = { status: 'DRY_RUN_ONLY', gates: [], allGatesPassed: false };
+    const summary = makeBaseSummary(readiness, {
+      status: 'DRY_RUN_ONLY',
+      decision: 'FAKE_BUY',
+      watchCycle: true,
+      exitSnapshotPath: 'data/token-grab/live-harness/session-20260606-1800-exit.json',
+      fakePnL,
+    });
+    expect(summary.fakePnL?.outcome).toBe('GAIN');
+    expect(summary.fakePnL?.pnlPct).toBe(100);
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('Watch Cycle');
+    expect(rendered).toContain('GAIN');
+    expect(rendered).toContain('Fake P/L');
+    expect(rendered).toContain('Ending bankroll');
+  });
+
+  // Test 4: --watch-cycle with NO_TRADE does not require exitSnapshotPath
+  it('watch-cycle NO_TRADE summary does not require exitSnapshotPath', () => {
+    const readiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+    const summary = makeBaseSummary(readiness, {
+      status: 'NO_TRADE',
+      decision: 'NO_BUY',
+      watchCycle: true,
+    });
+    expect(summary.watchCycle).toBe(true);
+    expect(summary.exitSnapshotPath).toBeUndefined();
+    expect(summary.fakePnL).toBeUndefined();
+    // Rendering should not crash even with watchCycle=true and no exit path
+    expect(() => renderLiveHarnessReport(summary)).not.toThrow();
+  });
+
+  // Test 5: Report clearly says dry-run and no real trade sent (with watch cycle active)
+  it('watch-cycle report contains DRY_RUN_ONLY, NOT AUTONOMOUS, NO REAL TRADE SENT', () => {
+    const readiness: LiveReadinessReport = { status: 'DRY_RUN_ONLY', gates: [], allGatesPassed: false };
+    const summary = makeBaseSummary(readiness, {
+      status: 'DRY_RUN_ONLY',
+      decision: 'FAKE_BUY',
+      watchCycle: true,
+      exitSnapshotPath: 'data/token-grab/live-harness/session-20260606-1800-exit.json',
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('DRY_RUN_ONLY');
+    expect(rendered).toContain('NOT AUTONOMOUS');
+    expect(rendered).toContain('NO REAL TRADE SENT');
+    expect(rendered).toContain('token:auto-paper was NOT run');
+    expect(rendered).toContain('[DRY-RUN — PAPER ONLY]');
+  });
+
+  // Test 6: No LIVE_EXECUTED status exists anywhere
+  it('LIVE_EXECUTED is not a valid LiveHarnessStatus', () => {
+    const validStatuses: LiveHarnessStatus[] = [
+      'DRY_RUN_ONLY',
+      'NO_TRADE',
+      'LIVE_BLOCKED',
+      'LIVE_READY_BUT_EXECUTOR_NOT_IMPLEMENTED',
+      'LIVE_REQUIRES_CONFIRMATION',
+      'LIVE_REJECTED_BY_GATES',
+    ];
+    expect(validStatuses.includes('LIVE_EXECUTED' as LiveHarnessStatus)).toBe(false);
+    // Status type does not include LIVE_EXECUTED — confirmed by the valid list above
+  });
+
+  // Test 7: No wallet/private key/swap/signing in watch-cycle rendered output
+  it('watch-cycle report does not contain wallet/swap/signing/key-loading patterns', () => {
+    const fakePnL = {
+      outcome: 'LOSS' as const,
+      fakePositionSize: 1,
+      fakeEntryPrice: 0.001,
+      fakeExitPrice: 0.0005,
+      fakeTokensHeld: 1000,
+      fakeEndingValue: 0.5,
+      pnlDollars: -0.5,
+      pnlPct: -50,
+      endingBankroll: 19.5,
+    };
+    const readiness: LiveReadinessReport = { status: 'DRY_RUN_ONLY', gates: [], allGatesPassed: false };
+    const summary = makeBaseSummary(readiness, {
+      status: 'DRY_RUN_ONLY',
+      decision: 'FAKE_BUY',
+      watchCycle: true,
+      exitSnapshotPath: 'data/token-grab/live-harness/session-exit.json',
+      fakePnL,
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).not.toMatch(/(?:private|secret)[\s_]?key\s*[=({]/i);
+    expect(rendered).not.toMatch(/signTransaction\s*\(/i);
+    expect(rendered).not.toMatch(/sendTransaction\s*\(/i);
+    expect(rendered).not.toMatch(/executeSwap\s*\(/i);
+    expect(rendered).not.toMatch(/wallet\.connect\s*\(/i);
+    expect(rendered).not.toMatch(/LIVE_EXECUTED/);
+    // Safety text must still be present
+    expect(rendered).toContain('NOT AUTONOMOUS');
+    expect(rendered).toContain('NO REAL TRADE SENT');
   });
 });

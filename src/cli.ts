@@ -1069,6 +1069,7 @@ async function main(): Promise<void> {
         const outDir = getArgValue('--out-dir') ?? 'data/token-grab/live-harness';
         const tsArg = getArgValue('--timestamp');
         const skipSleep = process.argv.includes('--skip-sleep');
+        const watchCycle = process.argv.includes('--watch-cycle');
         const jsonMode = process.argv.includes('--json');
 
         // V1 hard cap — fail-fast before any network calls
@@ -1100,6 +1101,7 @@ async function main(): Promise<void> {
         console.log('  MAX OPEN POSITIONS: 1');
         console.log('  token:auto-paper was NOT run');
         if (!liveIntent) console.log('  [dry-run mode — pass --live-intent to enable live gates]');
+        if (watchCycle) console.log('  [watch-cycle: will sleep and take exit snapshot]');
         if (skipSleep) console.log('  [skip-sleep mode active]');
         console.log(LIVE_WIDE);
         console.log('');
@@ -1171,6 +1173,8 @@ async function main(): Promise<void> {
             laneSummary, watchWorthyCount: 0,
             notAutonomous: true, noRealTradeSent: true, autoPaperNotRun: true,
             skipSleepMode: skipSleep,
+            watchCycle: false,
+            fakeBankroll,
           };
           emitSummary(summary);
           break;
@@ -1260,6 +1264,44 @@ async function main(): Promise<void> {
           });
         }
 
+        // 10. Watch cycle — sleep + exit snapshot (optional, requires --watch-cycle)
+        let exitSnapshotPath: string | undefined;
+        let watchCyclePnL: LiveAssistedPnL | undefined;
+
+        if (watchCycle && liveSelected.hasWatchWorthy) {
+          if (!skipSleep) {
+            console.log(`[watch-cycle] Sleeping ${watchMinutes} minute(s) before exit snapshot...`);
+            await sleep(watchMinutes * 60 * 1000);
+          } else {
+            console.log('[watch-cycle] skip-sleep: proceeding immediately to exit snapshot');
+          }
+
+          exitSnapshotPath = `${outDir}/session-${ts}-exit.json`;
+          console.log('[watch-cycle] Fetching exit snapshots...');
+          const exitResult = await fetchSessionSnapshots({ candidates: liveSelected.candidates, delayMs });
+          writeSnapshotFile(exitSnapshotPath, exitResult.snapshots);
+          console.log(`[watch-cycle] Exit snapshots: ${exitResult.snapshots.length} written, ${exitResult.skipped} skipped.`);
+
+          if (tradePlan && chosen) {
+            const exitSnap = exitResult.snapshots.find(s => s.candidateId === chosen.candidate.id);
+            const fakeTokensHeld = tradePlan.maxLivePosition / tradePlan.entryPrice;
+            watchCyclePnL = calculateFakePnL(
+              tradePlan.maxLivePosition,
+              tradePlan.entryPrice,
+              fakeTokensHeld,
+              exitSnap?.priceUsd,
+              fakeBankroll,
+            );
+            const sign = watchCyclePnL.pnlDollars >= 0 ? '+' : '';
+            if (watchCyclePnL.outcome !== 'UNKNOWN') {
+              console.log(`[watch-cycle] Fake P/L: ${sign}$${watchCyclePnL.pnlDollars.toFixed(4)} / ${sign}${watchCyclePnL.pnlPct.toFixed(2)}% (${watchCyclePnL.outcome})`);
+            } else {
+              console.log('[watch-cycle] Exit price unavailable — P/L unknown');
+            }
+          }
+          console.log('');
+        }
+
         const finalSummary: LiveHarnessSummary = {
           ts,
           outDir,
@@ -1279,6 +1321,10 @@ async function main(): Promise<void> {
           noRealTradeSent: true,
           autoPaperNotRun: true,
           skipSleepMode: skipSleep,
+          watchCycle,
+          fakeBankroll,
+          exitSnapshotPath,
+          fakePnL: watchCyclePnL,
         };
 
         emitSummary(finalSummary);
