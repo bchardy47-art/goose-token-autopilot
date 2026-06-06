@@ -56,6 +56,7 @@ import { mapXEarsReportToSocialSignals } from './token-grab/xEarsAdapter';
 import { loadFreshPoolsFromFile, loadEventSignalsFromFile } from './token-grab/loaders';
 import { fetchGeckoFreshPools, dedupeFreshPools } from './token-grab/geckoFreshPools';
 import { buildTokenGrabAutopsyReport, renderTokenGrabAutopsyReport } from './token-grab/autopsy';
+import { buildBadRejectReview, renderBadRejectReview } from './token-grab/badRejectReview';
 import { loadAutopsyCandidatesFromFile, loadAutopsySnapshotsFromFile, loadAutopsySnapshotsFromFiles } from './token-grab/autopsyLoaders';
 import {
   tokenGrabReportToAutopsyCandidates,
@@ -656,6 +657,29 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(report, null, 2));
         } else {
           console.log(renderTokenGrabReport(report));
+        }
+        break;
+      }
+      case 'token:bad-reject-review': {
+        const sessionPath = getArgValue('--session');
+        if (!sessionPath) throw new Error('token:bad-reject-review requires --session <path>');
+
+        const snapshotPaths = getArgValues('--snapshots');
+        const resolvedSnapshotPaths = snapshotPaths.length > 0
+          ? snapshotPaths
+          : ['fixtures/token-grab/autopsy-snapshots.json'];
+
+        const jsonMode = process.argv.includes('--json');
+
+        const session = loadTokenGrabSession(sessionPath);
+        const snapshots = loadAutopsySnapshotsFromFiles(resolvedSnapshotPaths);
+        const autopsyReport = buildTokenGrabAutopsyReport(session.candidates, snapshots, { mode: 'session-file' });
+        const review = buildBadRejectReview(session.candidates, snapshots, autopsyReport.results);
+
+        if (jsonMode) {
+          console.log(JSON.stringify(review, null, 2));
+        } else {
+          console.log(renderBadRejectReview(review));
         }
         break;
       }
