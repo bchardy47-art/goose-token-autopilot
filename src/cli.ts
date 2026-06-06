@@ -52,6 +52,7 @@ import { startControlCenterServer } from './dashboard/controlCenterServer';
 import { buildXEarsReport, renderXEarsReport, type SocialPost, type XEarsSourceMode } from './social/xEarsAnalyzer';
 import { loadTokenGrabFixtures } from './token-grab/fixtures';
 import { buildTokenGrabReport, renderTokenGrabReport } from './token-grab/report';
+import { mapXEarsReportToSocialSignals } from './token-grab/xEarsAdapter';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -502,6 +503,36 @@ async function main(): Promise<void> {
           process.once('SIGINT', shutdown);
           process.once('SIGTERM', shutdown);
         });
+        break;
+      }
+      case 'token:ears-report': {
+        const limit = parseNumberArg('--limit', 50, { integer: true, min: 1 });
+        const windowMinutes = parseNumberArg('--window-minutes', 90, { min: 1 });
+        const fixturePath = getArgValue('--fixture');
+        const jsonMode = process.argv.includes('--json');
+
+        let xSocialSignals: ReturnType<typeof mapXEarsReportToSocialSignals> = [];
+
+        if (fixturePath) {
+          const raw = fs.readFileSync(fixturePath, 'utf-8');
+          const posts = JSON.parse(raw) as SocialPost[];
+          const xReport = buildXEarsReport(posts.slice(0, limit), { windowMinutes, sourceMode: 'fixture' });
+          xSocialSignals = mapXEarsReportToSocialSignals(xReport);
+        } else if (process.env.X_BEARER_TOKEN) {
+          console.error('[ears-report] Live X API not implemented in V1. Use --fixture <path>.');
+        }
+
+        const report = buildTokenGrabReport({
+          socialSignals: xSocialSignals,
+          eventSignals: [],
+          freshPools: [],
+        });
+
+        if (jsonMode) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(renderTokenGrabReport(report));
+        }
         break;
       }
       case 'token:ears-demo': {
