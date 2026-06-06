@@ -50,6 +50,8 @@ import { buildPaperReadinessReport, renderPaperReadinessReport } from './paper/p
 import { buildTinyPaperPlanReport, renderTinyPaperPlanReport } from './paper/tinyPaperPlanReport';
 import { startControlCenterServer } from './dashboard/controlCenterServer';
 import { buildXEarsReport, renderXEarsReport, type SocialPost, type XEarsSourceMode } from './social/xEarsAnalyzer';
+import { loadTokenGrabFixtures } from './token-grab/fixtures';
+import { buildTokenGrabReport, renderTokenGrabReport } from './token-grab/report';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -500,6 +502,18 @@ async function main(): Promise<void> {
           process.once('SIGINT', shutdown);
           process.once('SIGTERM', shutdown);
         });
+        break;
+      }
+      case 'token:ears-demo': {
+        const jsonMode = process.argv.includes('--json');
+        const fixturesPath = getArgValue('--fixtures-dir');
+        const fixtures = loadTokenGrabFixtures(fixturesPath);
+        const report = buildTokenGrabReport(fixtures);
+        if (jsonMode) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(renderTokenGrabReport(report));
+        }
         break;
       }
       default:
