@@ -68,6 +68,7 @@
     "token:ears-snapshot": "tsx src/cli.ts token:ears-snapshot",
     "token:ears-demo": "tsx src/cli.ts token:ears-demo",
     "token:watch-snapshot": "tsx src/cli.ts token:watch-snapshot",
+    "token:live-assisted-watch": "tsx src/cli.ts token:live-assisted-watch",
     "test": "vitest run"
   },
   "dependencies": {
