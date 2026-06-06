@@ -37,9 +37,31 @@ export interface TrackerSummaryCards {
   closedTrades: number;
 }
 
+export interface TrackerMeta {
+  tokenSource: string;
+  positionsSource: 'live DB' | 'none';
+  radarSource: 'live' | 'fixture';
+  watchlistSource: 'live' | 'fixture';
+  radarCount: number;
+  watchlistCount: number;
+  fixtureFallbackActive: boolean;
+  refreshIntervalSeconds: number;
+  liveTradingLocked: boolean;
+  readOnly: true;
+}
+
+export interface TrackerEvent {
+  at: string;
+  token: string;
+  text: string;
+  plUsd: number | null;
+}
+
 export interface TrackerDashboard {
   statusBar: TrackerStatusBar;
   summary: TrackerSummaryCards;
+  meta: TrackerMeta;
+  recentEvents: TrackerEvent[];
 }
 
 export interface PositionRow {
@@ -146,10 +168,14 @@ function minutesBetween(fromIso: string, toIso: string): number | null {
 
 function ageLabel(minutes: number | null): string {
   if (minutes === null) return 'N/A';
-  if (minutes < 60) return `${Math.round(minutes)}m`;
-  const hours = minutes / 60;
-  if (hours < 24) return `${Math.round(hours * 10) / 10}h`;
-  return `${Math.round((hours / 24) * 10) / 10}d`;
+  const total = Math.max(0, Math.round(minutes));
+  if (total < 60) return `${total}m`;
+  const hours = Math.floor(total / 60);
+  const mins = total % 60;
+  if (hours < 24) return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+  const days = Math.floor(hours / 24);
+  const remHours = hours % 24;
+  return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
 }
 
 function todayStr(generatedAt: string): string {
@@ -239,11 +265,72 @@ export function buildTrackerSummary(db: AppDb, config: AppConfig, generatedAt: s
   };
 }
 
+const REFRESH_INTERVAL_SECONDS = 4;
+
+function buildRecentEvents(db: AppDb, generatedAt: string): TrackerEvent[] {
+  const positions = db.listPositions('PAPER');
+  const events: TrackerEvent[] = [];
+
+  // Latest tracked price observation per open position.
+  for (const p of positions.filter((x) => x.status === 'OPEN')) {
+    const snaps = db.getPerformanceSnapshots(p.id);
+    const last = snaps[snaps.length - 1];
+    if (last) {
+      events.push({
+        at: last.observedAt,
+        token: p.symbol,
+        text: `tracked @ ${last.priceUsd ?? 'n/a'} (${last.unrealizedPnlPct === null ? 'n/a' : round(last.unrealizedPnlPct, 1) + '%'})`,
+        plUsd: last.unrealizedPnlUsd,
+      });
+    } else {
+      events.push({ at: p.openedAt, token: p.symbol, text: `paper position opened — ${p.notes ?? 'entry'}`, plUsd: null });
+    }
+  }
+
+  // Closed-trade exits.
+  for (const p of positions.filter((x) => x.status === 'CLOSED')) {
+    events.push({
+      at: p.closedAt ?? p.openedAt,
+      token: p.symbol,
+      text: `closed — ${p.notes ?? 'exit'}`,
+      plUsd: p.realizedPnlUsd,
+    });
+  }
+
+  return events
+    .filter((e) => e.at)
+    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
+    .slice(0, 6);
+}
+
 export function buildTrackerDashboard(db: AppDb, config: AppConfig): TrackerDashboard {
   const generatedAt = new Date().toISOString();
+  const statusBar = buildTrackerStatusBar(db, config, generatedAt);
+  const summary = buildTrackerSummary(db, config, generatedAt);
+
+  const radar = buildRadarModel(db, config);
+  const watchlist = buildWatchlistModel(db, config);
+  const positionsCount = db.listPositions('PAPER').length;
+  const fixtureFallbackActive = radar.source === 'fixture' || watchlist.source === 'fixture';
+
+  const meta: TrackerMeta = {
+    tokenSource: String(config.tokenSource ?? 'unknown'),
+    positionsSource: positionsCount > 0 ? 'live DB' : 'none',
+    radarSource: radar.source,
+    watchlistSource: watchlist.source,
+    radarCount: radar.candidates.length,
+    watchlistCount: watchlist.entries.length,
+    fixtureFallbackActive,
+    refreshIntervalSeconds: REFRESH_INTERVAL_SECONDS,
+    liveTradingLocked: statusBar.liveTradingLocked,
+    readOnly: true,
+  };
+
   return {
-    statusBar: buildTrackerStatusBar(db, config, generatedAt),
-    summary: buildTrackerSummary(db, config, generatedAt),
+    statusBar,
+    summary,
+    meta,
+    recentEvents: buildRecentEvents(db, generatedAt),
   };
 }
 
