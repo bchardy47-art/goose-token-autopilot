@@ -47,6 +47,8 @@ import { buildRejectedRunnerAutopsy, renderRejectedRunnerAutopsy } from './paper
 import { buildChaseWatchReport, renderChaseWatchReport } from './paper/chaseWatchReport';
 import { buildPaperReadinessReport, renderPaperReadinessReport } from './paper/paperReadinessReport';
 import { buildTinyPaperPlanReport, renderTinyPaperPlanReport } from './paper/tinyPaperPlanReport';
+import { loadTokenGrabFixtures } from './token-grab/fixtures';
+import { buildTokenGrabReport, renderTokenGrabReport } from './token-grab/report';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -455,6 +457,18 @@ async function main(): Promise<void> {
             })
           )
         );
+        break;
+      }
+      case 'token:ears-demo': {
+        const jsonMode = process.argv.includes('--json');
+        const fixturesPath = getArgValue('--fixtures-dir');
+        const fixtures = loadTokenGrabFixtures(fixturesPath);
+        const report = buildTokenGrabReport(fixtures);
+        if (jsonMode) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(renderTokenGrabReport(report));
+        }
         break;
       }
       default:

@@ -1,0 +1,43 @@
+[
+  {
+    "id": "fp001",
+    "chain": "solana",
+    "tokenName": "Goose",
+    "ticker": "GOOSE",
+    "contractAddress": "GooseFakeCAForTestingPurposesNa11111111111",
+    "poolAddress": "GoosePoolFakeAddressForTestingPurposes111",
+    "createdAt": "2026-06-05T10:00:00Z",
+    "liquidityUsd": 45000,
+    "volume5mUsd": 8200,
+    "holders": 87,
+    "source": "fixture",
+    "metadata": {
+      "website": "https://goosetoken.example.com",
+      "x": "https://x.com/fixture/goosetoken",
+      "description": "Community meme token, fair launch, LP burned."
+    }
+  },
+  {
+    "id": "fp002",
+    "chain": "solana",
+    "tokenName": "ScamGem",
+    "ticker": "SCAMGEM",
+    "contractAddress": "ScamGemFakeCAForTestingPurposesNa11111111",
+    "createdAt": "2026-06-05T09:30:00Z",
+    "liquidityUsd": 4800,
+    "volume5mUsd": 320,
+    "holders": 11,
+    "source": "fixture"
+  },
+  {
+    "id": "fp003",
+    "chain": "solana",
+    "tokenName": "RandomCoin999",
+    "ticker": "RND999",
+    "contractAddress": "RandomCoin999FakeCAForTestingPurposes1111",
+    "createdAt": "2026-06-05T10:15:00Z",
+    "liquidityUsd": 9100,
+    "holders": 6,
+    "source": "fixture"
+  }
+]
