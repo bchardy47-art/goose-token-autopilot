@@ -65,6 +65,11 @@ import {
   type TokenGrabSessionFile,
 } from './token-grab/sessionCapture';
 import { fetchSessionSnapshots, writeSnapshotFile } from './token-grab/snapshot';
+import {
+  selectWatchCandidates,
+  renderWatchSnapshotSummary,
+  type WatchSnapshotSummary,
+} from './token-grab/watchSnapshot';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -740,6 +745,80 @@ async function main(): Promise<void> {
         console.log(THIN);
         break;
       }
+
+      case 'token:watch-snapshot': {
+        const sessionPath = getArgValue('--session');
+        const outPath = getArgValue('--out');
+
+        if (!sessionPath) throw new Error('token:watch-snapshot requires --session <path>');
+        if (!outPath) throw new Error('token:watch-snapshot requires --out <path>');
+
+        const includeRejects = process.argv.includes('--include-rejects');
+        const topRejects = parseNumberArg('--top-rejects', 0, { integer: true, min: 0 });
+        const startAt = parseNumberArg('--start-at', 0, { integer: true, min: 0 });
+        const limit = parseNumberArg('--limit', 10, { integer: true, min: 1 });
+        const delayMs = parseNumberArg('--delay-ms', 1500, { integer: true, min: 0 });
+        const timeoutMs = parseNumberArg('--timeout-ms', 10_000, { integer: true, min: 500 });
+
+        const session = loadTokenGrabSession(sessionPath);
+        const selected = selectWatchCandidates(session.candidates, {
+          includeRejects,
+          topRejects,
+          startAt,
+          limit,
+        });
+
+        if (!selected.hasWatchWorthy) {
+          writeSnapshotFile(outPath, []);
+          console.log('No watch-worthy candidates found. Wrote empty snapshot array.');
+          console.log(`Output: ${outPath}`);
+          console.log('');
+          console.log('NO TRADING EXECUTED');
+          break;
+        }
+
+        console.log(`Session   : ${sessionPath}`);
+        console.log(`Output    : ${outPath}`);
+        console.log(`Candidates: ${session.candidates.length} loaded, ${selected.totalWatchWorthy} watch-worthy`);
+        console.log(`Lanes     : ${selected.lanesIncluded.join(', ')}`);
+        if (delayMs > 0) {
+          console.log(`Delay     : ${delayMs}ms between requests`);
+        }
+        console.log('Fetching snapshots from GeckoTerminal...');
+        console.log('');
+
+        const watchResult = await fetchSessionSnapshots({
+          candidates: selected.candidates,
+          delayMs,
+          timeoutMs,
+        });
+
+        writeSnapshotFile(outPath, watchResult.snapshots);
+
+        const watchSummary: WatchSnapshotSummary = {
+          sessionPath,
+          outPath,
+          candidatesLoaded: session.candidates.length,
+          watchWorthyFound: selected.totalWatchWorthy,
+          lanesIncluded: selected.lanesIncluded,
+          startAt,
+          limit,
+          candidatesAttempted: selected.candidates.length,
+          snapshotsWritten: watchResult.snapshots.length,
+          skipped: watchResult.skipped,
+          noTradingExecuted: true,
+        };
+
+        console.log(renderWatchSnapshotSummary(watchSummary));
+
+        if (watchResult.skipReasons.length > 0) {
+          for (const s of watchResult.skipReasons) {
+            console.log(`  ! ${s.ticker} (${s.candidateId}): ${s.reason}`);
+          }
+        }
+        break;
+      }
+
       default:
         throw new Error(`Unknown command: ${command}`);
     }
