@@ -4,6 +4,15 @@ import type { AppDb } from '../db';
 import type { AppConfig } from '../types';
 import { buildControlCenterSummary } from './controlCenterSummary';
 import { buildTokenGrabDashboardModel, renderTokenGrabDashboardPage } from './tokenGrabDashboard';
+import { renderPlTrackerPage } from './plTrackerPage';
+import {
+  buildTrackerDashboard,
+  buildPositionsModel,
+  buildPositionDetail,
+  buildTradesModel,
+  buildRadarModel,
+  buildWatchlistModel,
+} from './plTrackerApi';
 
 function htmlPage(): string {
   return `<!doctype html>
@@ -67,7 +76,7 @@ function htmlPage(): string {
       <div>
         <h1>Goose Token Autopilot</h1>
         <div class="sub">Dashboard Control Center</div>
-        <div class="sub">Last updated: <span id="lastUpdated">loading…</span> · <button id="refreshBtn">Refresh now</button></div>
+        <div class="sub">Last updated: <span id="lastUpdated">loading…</span> · <button id="refreshBtn">Refresh now</button> · <a href="/tracker" style="color:#93c5fd;font-weight:600;">Open P/L Tracker →</a></div>
       </div>
       <div class="header-meta">
         <span class="pill red">REAL TRADING LOCKED</span>
@@ -386,6 +395,56 @@ export async function startControlCenterServer(db: AppDb, config: AppConfig, opt
           earsSummary: model.earsReport.summary,
           autopsySummary: model.autopsyReport.summary,
         }, null, 2));
+        return;
+      }
+
+      // ── Token Grab P/L Tracker (read-only) ──────────────────────────────
+      if (url.pathname === '/tracker') {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(renderPlTrackerPage());
+        return;
+      }
+
+      if (url.pathname === '/api/token-grab/dashboard') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(buildTrackerDashboard(db, config), null, 2));
+        return;
+      }
+
+      if (url.pathname === '/api/token-grab/positions') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(buildPositionsModel(db, config), null, 2));
+        return;
+      }
+
+      const positionDetailMatch = url.pathname.match(/^\/api\/token-grab\/positions\/(\d+)$/);
+      if (positionDetailMatch) {
+        const detail = buildPositionDetail(db, config, Number(positionDetailMatch[1]));
+        if (!detail) {
+          res.writeHead(404, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'position_not_found' }));
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(detail, null, 2));
+        return;
+      }
+
+      if (url.pathname === '/api/token-grab/trades') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(buildTradesModel(db, config), null, 2));
+        return;
+      }
+
+      if (url.pathname === '/api/token-grab/radar') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(buildRadarModel(db, config), null, 2));
+        return;
+      }
+
+      if (url.pathname === '/api/token-grab/watchlist') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(buildWatchlistModel(db, config), null, 2));
         return;
       }
 
