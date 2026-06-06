@@ -1,6 +1,6 @@
 import type { TokenGrabAutopsyCandidate, TokenGrabAutopsySnapshot } from './autopsy';
 import type { TokenGrabLane } from './types';
-import type { LiveAssistedDecision } from './liveAssistedWatch';
+import type { LiveAssistedDecision, LiveAssistedPnL } from './liveAssistedWatch';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -71,6 +71,10 @@ export interface LiveHarnessSummary {
   noRealTradeSent: true;
   autoPaperNotRun: true;
   skipSleepMode: boolean;
+  watchCycle: boolean;
+  fakeBankroll: number;
+  exitSnapshotPath?: string;
+  fakePnL?: LiveAssistedPnL;
 }
 
 export interface EvaluateLiveReadinessGatesInput {
@@ -322,6 +326,29 @@ export function renderLiveHarnessReport(s: LiveHarnessSummary): string {
       const icon = g.passed ? 'PASS' : 'FAIL';
       const reason = g.reason ? `  -> ${g.reason}` : '';
       lines.push(`  [${icon}] ${g.gate}${reason}`);
+    }
+    lines.push('');
+  }
+
+  if (s.watchCycle) {
+    lines.push(THIN);
+    lines.push('Watch Cycle  [DRY-RUN — PAPER ONLY]');
+    lines.push(THIN);
+    if (s.exitSnapshotPath) {
+      lines.push(`  Exit snapshot   : ${s.exitSnapshotPath}`);
+    }
+    if (s.fakePnL) {
+      const exitPriceStr = s.fakePnL.fakeExitPrice != null
+        ? `$${s.fakePnL.fakeExitPrice.toExponential(4)}`
+        : '(unavailable)';
+      lines.push(`  Exit price      : ${exitPriceStr}`);
+      const sign = s.fakePnL.pnlDollars >= 0 ? '+' : '';
+      lines.push(`  Fake P/L        : ${sign}$${s.fakePnL.pnlDollars.toFixed(4)} / ${sign}${s.fakePnL.pnlPct.toFixed(2)}%`);
+      lines.push(`  Outcome         : ${s.fakePnL.outcome}`);
+      lines.push(`  Ending bankroll : $${s.fakePnL.endingBankroll.toFixed(4)}`);
+    } else if (s.decision === 'FAKE_BUY') {
+      lines.push('  Exit price      : (unavailable)');
+      lines.push('  Fake P/L        : UNKNOWN');
     }
     lines.push('');
   }
