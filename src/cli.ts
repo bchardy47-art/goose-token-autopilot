@@ -54,6 +54,7 @@ import { loadTokenGrabFixtures } from './token-grab/fixtures';
 import { buildTokenGrabReport, renderTokenGrabReport } from './token-grab/report';
 import { mapXEarsReportToSocialSignals } from './token-grab/xEarsAdapter';
 import { loadFreshPoolsFromFile, loadEventSignalsFromFile } from './token-grab/loaders';
+import { fetchGeckoFreshPools, dedupeFreshPools } from './token-grab/geckoFreshPools';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -512,6 +513,9 @@ async function main(): Promise<void> {
         const fixturePath = getArgValue('--fixture');
         const freshPoolsPath = getArgValue('--fresh-pools');
         const eventsPath = getArgValue('--events');
+        const useGecko = process.argv.includes('--gecko-fresh-pools');
+        const geckoLimit = parseNumberArg('--gecko-limit', 20, { integer: true, min: 1 });
+        const geckoTimeoutMs = parseNumberArg('--gecko-timeout-ms', 10_000, { integer: true, min: 500 });
         const jsonMode = process.argv.includes('--json');
 
         let xSocialSignals: ReturnType<typeof mapXEarsReportToSocialSignals> = [];
@@ -525,7 +529,11 @@ async function main(): Promise<void> {
           console.error('[ears-report] Live X API not implemented in V1. Use --fixture <path>.');
         }
 
-        const freshPools = freshPoolsPath ? loadFreshPoolsFromFile(freshPoolsPath) : [];
+        const localPools = freshPoolsPath ? loadFreshPoolsFromFile(freshPoolsPath) : [];
+        const geckoPools = useGecko
+          ? await fetchGeckoFreshPools({ limit: geckoLimit, timeoutMs: geckoTimeoutMs })
+          : [];
+        const freshPools = dedupeFreshPools([...localPools, ...geckoPools]);
         const eventSignals = eventsPath ? loadEventSignalsFromFile(eventsPath) : [];
 
         const report = buildTokenGrabReport({
