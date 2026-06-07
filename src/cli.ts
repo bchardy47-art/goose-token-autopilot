@@ -99,6 +99,7 @@ import {
 } from './token-grab/liveHarness';
 import readline from 'node:readline';
 import { buildFieldRunSummary, renderFieldRunSummary } from './token-grab/fieldSummary';
+import { buildPreSignalReport, renderPreSignalReport } from './token-grab/xEarsPreSignal';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -1530,6 +1531,33 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(fieldSummary, null, 2));
         } else {
           console.log(renderFieldRunSummary(fieldSummary));
+        }
+        break;
+      }
+
+      case 'token:presignal-report': {
+        const signalsPath = getArgValue('--signals') ?? 'data/token-grab/x-ears/presignals.json';
+        const psLimit = parseNumberArg('--limit', 20, { integer: true, min: 1 });
+        const psJson = process.argv.includes('--json');
+
+        let rawSignals: unknown = [];
+        try {
+          rawSignals = JSON.parse(fs.readFileSync(signalsPath, 'utf-8')) as unknown;
+        } catch {
+          // file missing or unreadable — report will show 0 signals
+        }
+
+        const psReport = buildPreSignalReport({
+          signalsPath,
+          rawSignals,
+          limit: psLimit,
+          generatedAt: new Date().toISOString(),
+        });
+
+        if (psJson) {
+          console.log(JSON.stringify(psReport, null, 2));
+        } else {
+          console.log(renderPreSignalReport(psReport));
         }
         break;
       }

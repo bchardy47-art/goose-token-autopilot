@@ -71,6 +71,7 @@
     "token:live-assisted-watch": "tsx src/cli.ts token:live-assisted-watch",
     "token:live-harness": "tsx src/cli.ts token:live-harness",
     "token:field-summary": "tsx src/cli.ts token:field-summary",
+    "token:presignal-report": "tsx src/cli.ts token:presignal-report",
     "test": "vitest run"
   },
   "dependencies": {
