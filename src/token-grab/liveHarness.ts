@@ -29,6 +29,8 @@ export type EntryConfirmationVerdict =
   | 'REJECTED_PRICE_WEAK'
   | 'REJECTED_PRICE_DRAWDOWN'
   | 'REJECTED_LIQUIDITY_FADE'
+  | 'REJECTED_CONFIRMED_LIQUIDITY_LOW'
+  | 'REJECTED_CONFIRMED_LIQUIDITY_WEAK'
   | 'REJECTED_MISSING_SNAPSHOT'
   | 'NOT_REQUIRED';
 
@@ -49,6 +51,7 @@ export interface EvaluateEntryConfirmationInput {
   minPriceChangePct: number;
   minLiquidityChangePct: number;
   maxDrawdownPct: number;
+  minConfirmedLiquidityUsd: number;
 }
 
 export interface LiveTradePlan {
@@ -102,6 +105,7 @@ export interface LiveHarnessSummary {
   watchCycleSkipped?: boolean;
   watchCycleSkipReason?: string;
   fakeBankroll: number;
+  confirmMinConfirmedLiquidityUsd?: number;
   exitSnapshotPath?: string;
   fakePnL?: LiveAssistedPnL;
   confirmEntry: boolean;
@@ -187,11 +191,22 @@ export function evaluateEntryConfirmation(
     };
   }
 
-  if (liquidityChangePct !== null && liquidityChangePct < minLiquidityChangePct) {
+  if (confirmLiquidityUsd !== null && confirmLiquidityUsd < input.minConfirmedLiquidityUsd) {
     return {
-      verdict: 'REJECTED_LIQUIDITY_FADE',
+      verdict: 'REJECTED_CONFIRMED_LIQUIDITY_LOW',
       entryPrice, confirmPrice, priceChangePct, entryLiquidityUsd, confirmLiquidityUsd, liquidityChangePct,
-      reason: `Liquidity faded ${liquidityChangePct.toFixed(2)}% — below threshold of ${minLiquidityChangePct}%`,
+      reason: `Confirmed liquidity $${confirmLiquidityUsd.toFixed(0)} below minimum $${input.minConfirmedLiquidityUsd.toFixed(0)}`,
+    };
+  }
+
+  if (liquidityChangePct !== null && liquidityChangePct < minLiquidityChangePct) {
+    const isActuallyFading = liquidityChangePct < 0;
+    return {
+      verdict: isActuallyFading ? 'REJECTED_LIQUIDITY_FADE' : 'REJECTED_CONFIRMED_LIQUIDITY_WEAK',
+      entryPrice, confirmPrice, priceChangePct, entryLiquidityUsd, confirmLiquidityUsd, liquidityChangePct,
+      reason: isActuallyFading
+        ? `Liquidity faded ${liquidityChangePct.toFixed(2)}% — below threshold of ${minLiquidityChangePct}%`
+        : `Liquidity growth ${liquidityChangePct.toFixed(2)}% below required threshold of ${minLiquidityChangePct}%`,
     };
   }
 
@@ -430,6 +445,12 @@ export function renderLiveHarnessReport(s: LiveHarnessSummary): string {
       ? `${ec.priceChangePct >= 0 ? '+' : ''}${ec.priceChangePct.toFixed(2)}%`
       : 'N/A';
     lines.push(`  Price change    : ${pctStr}`);
+    if (ec.confirmLiquidityUsd != null) {
+      lines.push(`  Confirm liq     : $${ec.confirmLiquidityUsd.toFixed(0)}`);
+    }
+    if (s.confirmMinConfirmedLiquidityUsd != null) {
+      lines.push(`  Min confirm liq : $${s.confirmMinConfirmedLiquidityUsd}`);
+    }
     if (ec.liquidityChangePct != null) {
       lines.push(`  Liquidity chg   : ${ec.liquidityChangePct >= 0 ? '+' : ''}${ec.liquidityChangePct.toFixed(2)}%`);
     }
