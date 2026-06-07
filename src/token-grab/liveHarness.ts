@@ -99,6 +99,8 @@ export interface LiveHarnessSummary {
   autoPaperNotRun: true;
   skipSleepMode: boolean;
   watchCycle: boolean;
+  watchCycleSkipped?: boolean;
+  watchCycleSkipReason?: string;
   fakeBankroll: number;
   exitSnapshotPath?: string;
   fakePnL?: LiveAssistedPnL;
@@ -472,21 +474,25 @@ export function renderLiveHarnessReport(s: LiveHarnessSummary): string {
     lines.push(THIN);
     lines.push('Watch Cycle  [DRY-RUN — PAPER ONLY]');
     lines.push(THIN);
-    if (s.exitSnapshotPath) {
-      lines.push(`  Exit snapshot   : ${s.exitSnapshotPath}`);
-    }
-    if (s.fakePnL) {
-      const exitPriceStr = s.fakePnL.fakeExitPrice != null
-        ? `$${s.fakePnL.fakeExitPrice.toExponential(4)}`
-        : '(unavailable)';
-      lines.push(`  Exit price      : ${exitPriceStr}`);
-      const sign = s.fakePnL.pnlDollars >= 0 ? '+' : '';
-      lines.push(`  Fake P/L        : ${sign}$${s.fakePnL.pnlDollars.toFixed(4)} / ${sign}${s.fakePnL.pnlPct.toFixed(2)}%`);
-      lines.push(`  Outcome         : ${s.fakePnL.outcome}`);
-      lines.push(`  Ending bankroll : $${s.fakePnL.endingBankroll.toFixed(4)}`);
-    } else if (s.decision === 'FAKE_BUY') {
-      lines.push('  Exit price      : (unavailable)');
-      lines.push('  Fake P/L        : UNKNOWN');
+    if (s.watchCycleSkipped) {
+      lines.push(`  Skipped         : ${s.watchCycleSkipReason ?? 'No PLAN_ONLY trade plan was created.'}`);
+    } else {
+      if (s.exitSnapshotPath) {
+        lines.push(`  Exit snapshot   : ${s.exitSnapshotPath}`);
+      }
+      if (s.fakePnL) {
+        const exitPriceStr = s.fakePnL.fakeExitPrice != null
+          ? `$${s.fakePnL.fakeExitPrice.toExponential(4)}`
+          : '(unavailable)';
+        lines.push(`  Exit price      : ${exitPriceStr}`);
+        const sign = s.fakePnL.pnlDollars >= 0 ? '+' : '';
+        lines.push(`  Fake P/L        : ${sign}$${s.fakePnL.pnlDollars.toFixed(4)} / ${sign}${s.fakePnL.pnlPct.toFixed(2)}%`);
+        lines.push(`  Outcome         : ${s.fakePnL.outcome}`);
+        lines.push(`  Ending bankroll : $${s.fakePnL.endingBankroll.toFixed(4)}`);
+      } else if (s.decision === 'FAKE_BUY') {
+        lines.push('  Exit price      : (unavailable)');
+        lines.push('  Fake P/L        : UNKNOWN');
+      }
     }
     lines.push('');
   }
