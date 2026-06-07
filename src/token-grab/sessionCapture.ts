@@ -29,6 +29,8 @@ export interface TokenGrabSessionFile {
     dbWrites: false;
     scheduler: false;
   };
+  fieldNote?: string;
+  fieldTags?: string[];
 }
 
 // ── Converter ─────────────────────────────────────────────────────────────────

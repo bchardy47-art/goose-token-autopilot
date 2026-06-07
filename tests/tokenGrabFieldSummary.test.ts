@@ -49,6 +49,7 @@ function makeAggregate(overrides: Partial<FieldRunAggregate> = {}): FieldRunAggr
       MISSING_CONFIRMATION: 0,
       OTHER: 0,
     },
+    tagCounts: {},
     ...overrides,
   };
 }
@@ -521,5 +522,131 @@ describe('fieldSummary — no wallet/private key/swap/signing', () => {
     const summary = makeSummary();
     expect(summary.readOnly).toBe(true);
     expect(summary.tradingExecuted).toBe(0);
+  });
+});
+
+// ── Test 13: loadFieldRunRow reads field notes from session file ───────────────
+
+describe('loadFieldRunRow — field notes', () => {
+  it('reads fieldNote from session file when present', () => {
+    const dir = makeTempDir({
+      'session-20260607-0300.json': {
+        schema: 'token-grab-session-v1',
+        candidates: [],
+        summary: {},
+        fieldNote: 'flat session, low volume',
+      },
+    });
+    try {
+      const row = loadFieldRunRow(dir, '20260607-0300');
+      expect(row.fieldNote).toBe('flat session, low volume');
+    } finally {
+      fs.rmSync(dir, { recursive: true });
+    }
+  });
+
+  it('reads fieldTags from session file when present', () => {
+    const dir = makeTempDir({
+      'session-20260607-0301.json': {
+        schema: 'token-grab-session-v1',
+        candidates: [],
+        summary: {},
+        fieldTags: ['flat', 'no-plan'],
+      },
+    });
+    try {
+      const row = loadFieldRunRow(dir, '20260607-0301');
+      expect(row.fieldTags).toEqual(['flat', 'no-plan']);
+    } finally {
+      fs.rmSync(dir, { recursive: true });
+    }
+  });
+
+  it('returns undefined fieldNote and fieldTags when not in session file', () => {
+    const dir = makeTempDir({
+      'session-20260607-0302.json': { schema: 'token-grab-session-v1', candidates: [], summary: {} },
+    });
+    try {
+      const row = loadFieldRunRow(dir, '20260607-0302');
+      expect(row.fieldNote).toBeUndefined();
+      expect(row.fieldTags).toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true });
+    }
+  });
+});
+
+// ── Test 14: aggregateFieldRuns counts tags ────────────────────────────────────
+
+describe('aggregateFieldRuns — tag counts', () => {
+  it('counts tags from multiple rows', () => {
+    const rows = [
+      makeRow({ fieldTags: ['flat', 'no-plan'] }),
+      makeRow({ fieldTags: ['flat', 'low-vol'] }),
+      makeRow({ fieldTags: ['no-plan'] }),
+    ];
+    const agg = aggregateFieldRuns(rows);
+    expect(agg.tagCounts['flat']).toBe(2);
+    expect(agg.tagCounts['no-plan']).toBe(2);
+    expect(agg.tagCounts['low-vol']).toBe(1);
+  });
+
+  it('tagCounts is empty when no rows have tags', () => {
+    const rows = [makeRow(), makeRow({ hasPlan: true })];
+    const agg = aggregateFieldRuns(rows);
+    expect(Object.keys(agg.tagCounts)).toHaveLength(0);
+  });
+
+  it('rows without fieldTags do not affect tagCounts', () => {
+    const rows = [
+      makeRow({ fieldTags: ['momentum'] }),
+      makeRow(), // no tags
+    ];
+    const agg = aggregateFieldRuns(rows);
+    expect(agg.tagCounts['momentum']).toBe(1);
+    expect(Object.keys(agg.tagCounts)).toHaveLength(1);
+  });
+});
+
+// ── Test 15: renderFieldRunSummary — notes/tags rendering ─────────────────────
+
+describe('renderFieldRunSummary — notes/tags', () => {
+  it('shows Field Notes section when a row has a fieldNote', () => {
+    const summary = makeSummary({
+      rows: [makeRow({ ts: '20260607-0300', fieldNote: 'flat session, low volume' })],
+    });
+    const rendered = renderFieldRunSummary(summary);
+    expect(rendered).toContain('Field Notes');
+    expect(rendered).toContain('flat session, low volume');
+  });
+
+  it('shows tags in Field Notes section', () => {
+    const summary = makeSummary({
+      rows: [makeRow({ ts: '20260607-0300', fieldTags: ['flat', 'no-plan'] })],
+    });
+    const rendered = renderFieldRunSummary(summary);
+    expect(rendered).toContain('Field Notes');
+    expect(rendered).toContain('flat, no-plan');
+  });
+
+  it('shows Tag Counts subsection when tagCounts has entries', () => {
+    const agg = makeAggregate({ tagCounts: { flat: 2, 'no-plan': 1 } });
+    const summary = makeSummary({ aggregate: agg });
+    const rendered = renderFieldRunSummary(summary);
+    expect(rendered).toContain('Tag counts:');
+    expect(rendered).toContain('flat: 2');
+    expect(rendered).toContain('no-plan: 1');
+  });
+
+  it('omits Field Notes section when no rows have notes or tags', () => {
+    const summary = makeSummary({ rows: [makeRow()] });
+    const rendered = renderFieldRunSummary(summary);
+    expect(rendered).not.toContain('Field Notes');
+  });
+
+  it('omits Tag counts when tagCounts is empty', () => {
+    const summary = makeSummary();
+    const rendered = renderFieldRunSummary(summary);
+    expect(rendered).not.toContain('Tag counts:');
   });
 });

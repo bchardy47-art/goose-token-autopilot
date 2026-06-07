@@ -2276,3 +2276,176 @@ describe('Paper Exit Guard — safety patterns absent', () => {
     expect(peg.noRealTradeSent).toBe(true);
   });
 });
+
+// ── Field Notes — saved in summary ────────────────────────────────────────────
+
+describe('LiveHarnessSummary — field notes saved in summary', () => {
+  const noTradeReadiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+
+  it('fieldNote is stored verbatim in LiveHarnessSummary', () => {
+    const summary = makeBaseSummary(noTradeReadiness, {
+      fieldNote: 'flat confirmation, no momentum',
+    });
+    expect(summary.fieldNote).toBe('flat confirmation, no momentum');
+  });
+
+  it('fieldTags is stored as string array in LiveHarnessSummary', () => {
+    const summary = makeBaseSummary(noTradeReadiness, {
+      fieldTags: ['flat', 'no-plan'],
+    });
+    expect(summary.fieldTags).toEqual(['flat', 'no-plan']);
+  });
+
+  it('fieldNote and fieldTags are both optional — absent by default', () => {
+    const summary = makeBaseSummary(noTradeReadiness);
+    expect(summary.fieldNote).toBeUndefined();
+    expect(summary.fieldTags).toBeUndefined();
+  });
+
+  it('fieldNote serializes in JSON output', () => {
+    const summary = makeBaseSummary(noTradeReadiness, {
+      fieldNote: 'test observation',
+      fieldTags: ['test-tag'],
+    });
+    const json = JSON.parse(JSON.stringify(summary));
+    expect(json.fieldNote).toBe('test observation');
+    expect(json.fieldTags).toEqual(['test-tag']);
+  });
+});
+
+// ── Field Notes — tags parsed/trimmed (pure helper behavior) ──────────────────
+
+describe('LiveHarnessSummary — field tags parsing', () => {
+  it('fieldTags can be set with trimmed values', () => {
+    const noTradeReadiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+    const tags = 'flat , no-plan , low-vol'.split(',').map(t => t.trim()).filter(t => t.length > 0);
+    const summary = makeBaseSummary(noTradeReadiness, { fieldTags: tags });
+    expect(summary.fieldTags).toEqual(['flat', 'no-plan', 'low-vol']);
+  });
+
+  it('empty-string tags are filtered out', () => {
+    const tags = 'flat,,no-plan'.split(',').map(t => t.trim()).filter(t => t.length > 0);
+    expect(tags).toEqual(['flat', 'no-plan']);
+  });
+
+  it('single tag becomes a one-element array', () => {
+    const tags = 'flat'.split(',').map(t => t.trim()).filter(t => t.length > 0);
+    expect(tags).toEqual(['flat']);
+  });
+});
+
+// ── Field Notes — report renders notes section ────────────────────────────────
+
+describe('renderLiveHarnessReport — Field Notes section', () => {
+  const noTradeReadiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+
+  it('renders Field Notes section when fieldNote is set', () => {
+    const summary = makeBaseSummary(noTradeReadiness, {
+      fieldNote: 'flat confirmation, no momentum',
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('Field Notes');
+    expect(rendered).toContain('flat confirmation, no momentum');
+  });
+
+  it('renders Field Notes section when fieldTags are set', () => {
+    const summary = makeBaseSummary(noTradeReadiness, {
+      fieldTags: ['flat', 'no-plan'],
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('Field Notes');
+    expect(rendered).toContain('flat, no-plan');
+  });
+
+  it('renders both note and tags when both are set', () => {
+    const summary = makeBaseSummary(noTradeReadiness, {
+      fieldNote: 'low vol',
+      fieldTags: ['flat', 'watch'],
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('Note   : low vol');
+    expect(rendered).toContain('Tags   : flat, watch');
+  });
+
+  it('omits Field Notes section when neither fieldNote nor fieldTags is set', () => {
+    const summary = makeBaseSummary(noTradeReadiness);
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).not.toContain('Field Notes');
+  });
+
+  it('renders metadata disclaimer in Field Notes section', () => {
+    const summary = makeBaseSummary(noTradeReadiness, { fieldNote: 'x' });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('Does not affect decision');
+  });
+});
+
+// ── Field Notes — notes do not affect decision ────────────────────────────────
+
+describe('LiveHarnessSummary — field notes do not affect decision', () => {
+  const noTradeReadiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+
+  it('decision is unchanged when fieldNote is added', () => {
+    const base = makeBaseSummary(noTradeReadiness, { decision: 'NO_BUY' });
+    const withNote = makeBaseSummary(noTradeReadiness, { decision: 'NO_BUY', fieldNote: 'flat session' });
+    expect(base.decision).toBe(withNote.decision);
+  });
+
+  it('status is unchanged when fieldTags are added', () => {
+    const base = makeBaseSummary(noTradeReadiness, { status: 'NO_TRADE' });
+    const withTags = makeBaseSummary(noTradeReadiness, { status: 'NO_TRADE', fieldTags: ['flat'] });
+    expect(base.status).toBe(withTags.status);
+  });
+
+  it('field notes JSON does not contain LIVE_EXECUTED', () => {
+    const summary = makeBaseSummary(noTradeReadiness, {
+      fieldNote: 'flat session',
+      fieldTags: ['flat', 'no-plan'],
+    });
+    const json = JSON.stringify(summary);
+    expect(json).not.toMatch(/LIVE_EXECUTED/);
+  });
+
+  it('rendered report with field notes still contains all safety lines', () => {
+    const summary = makeBaseSummary(noTradeReadiness, {
+      fieldNote: 'test note',
+      fieldTags: ['test'],
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('NOT AUTONOMOUS');
+    expect(rendered).toContain('NO REAL TRADE SENT');
+    expect(rendered).toContain('token:auto-paper was NOT run');
+    expect(rendered).toContain('No signing, swap execution, or key-loading performed in this run');
+  });
+});
+
+// ── Field Notes — no wallet/private key/swap/signing ─────────────────────────
+
+describe('LiveHarnessSummary — field notes safety patterns absent', () => {
+  const noTradeReadiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+
+  it('renderLiveHarnessReport with field notes has no signing/swap/key/LIVE_EXECUTED patterns', () => {
+    const summary = makeBaseSummary(noTradeReadiness, {
+      fieldNote: 'flat session, no momentum seen',
+      fieldTags: ['flat', 'no-plan', 'low-vol'],
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).not.toMatch(/(?:private|secret)[\s_]?key\s*[=({]/i);
+    expect(rendered).not.toMatch(/signTransaction\s*\(/i);
+    expect(rendered).not.toMatch(/sendTransaction\s*\(/i);
+    expect(rendered).not.toMatch(/executeSwap\s*\(/i);
+    expect(rendered).not.toMatch(/wallet\.connect\s*\(/i);
+    expect(rendered).not.toMatch(/LIVE_EXECUTED/);
+  });
+
+  it('field notes JSON has no signing/swap/key patterns', () => {
+    const summary = makeBaseSummary(noTradeReadiness, {
+      fieldNote: 'operator note',
+      fieldTags: ['watch-only'],
+    });
+    const json = JSON.stringify(summary);
+    expect(json).not.toMatch(/signTransaction/i);
+    expect(json).not.toMatch(/executeSwap/i);
+    expect(json).not.toMatch(/LIVE_EXECUTED/);
+  });
+});
