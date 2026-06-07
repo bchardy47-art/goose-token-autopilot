@@ -70,6 +70,7 @@
     "token:watch-snapshot": "tsx src/cli.ts token:watch-snapshot",
     "token:live-assisted-watch": "tsx src/cli.ts token:live-assisted-watch",
     "token:live-harness": "tsx src/cli.ts token:live-harness",
+    "token:field-summary": "tsx src/cli.ts token:field-summary",
     "test": "vitest run"
   },
   "dependencies": {

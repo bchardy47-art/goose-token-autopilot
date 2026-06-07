@@ -98,6 +98,7 @@ import {
   type PaperExitReason,
 } from './token-grab/liveHarness';
 import readline from 'node:readline';
+import { buildFieldRunSummary, renderFieldRunSummary } from './token-grab/fieldSummary';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -1509,6 +1510,27 @@ async function main(): Promise<void> {
         };
 
         emitSummary(finalSummary);
+        break;
+      }
+
+      case 'token:field-summary': {
+        const fieldDir = getArgValue('--dir') ?? 'data/token-grab/live-harness';
+        const fieldLimit = parseNumberArg('--limit', 20, { integer: true, min: 1 });
+        const fieldSince = getArgValue('--since');
+        const fieldJson = process.argv.includes('--json');
+
+        const fieldSummary = buildFieldRunSummary({
+          dir: fieldDir,
+          limit: fieldLimit,
+          since: fieldSince,
+          generatedAt: new Date().toISOString(),
+        });
+
+        if (fieldJson) {
+          console.log(JSON.stringify(fieldSummary, null, 2));
+        } else {
+          console.log(renderFieldRunSummary(fieldSummary));
+        }
         break;
       }
 
