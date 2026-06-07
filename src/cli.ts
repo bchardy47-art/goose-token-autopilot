@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { loadConfig } from './config';
 import { createDb } from './db';
 import { runScan } from './scanner';
@@ -105,7 +106,13 @@ import {
   buildPreSignalBridge,
   loadPreSignals,
   type PreSignalBridgeSummary,
+  type PreSignal,
+  type PreSignalSource,
 } from './token-grab/xEarsPreSignal';
+import {
+  buildEarsCollectorReport,
+  renderEarsCollectorReport,
+} from './token-grab/earsCollector';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -1624,6 +1631,48 @@ async function main(): Promise<void> {
         } else {
           console.log(renderPreSignalReport(psReport));
         }
+        break;
+      }
+
+      case 'token:ears-collect': {
+        const ecInputPath = getArgValue('--input') ?? 'data/token-grab/x-ears/ears-input.txt';
+        const ecOutPath = getArgValue('--out') ?? 'data/token-grab/x-ears/presignals.generated.json';
+        const ecSourceRaw = (getArgValue('--source') ?? 'x_manual') as PreSignalSource;
+        const ecAppend = process.argv.includes('--append');
+
+        let ecRawContent = '';
+        try {
+          ecRawContent = fs.readFileSync(ecInputPath, 'utf-8');
+        } catch (e) {
+          throw new Error(
+            `[token:ears-collect] Cannot read input: ${ecInputPath} — ${(e as Error).message}`,
+          );
+        }
+
+        let ecExisting: PreSignal[] = [];
+        if (ecAppend && fs.existsSync(ecOutPath)) {
+          try {
+            ecExisting = JSON.parse(fs.readFileSync(ecOutPath, 'utf-8')) as PreSignal[];
+          } catch {
+            ecExisting = [];
+          }
+        }
+
+        const ecReport = buildEarsCollectorReport({
+          inputPath: ecInputPath,
+          rawContent: ecRawContent,
+          outputPath: ecOutPath,
+          source: ecSourceRaw,
+          append: ecAppend,
+          existingSignals: ecExisting,
+          generatedAt: new Date().toISOString(),
+        });
+
+        const ecOutDir = path.dirname(ecOutPath);
+        fs.mkdirSync(ecOutDir, { recursive: true });
+        fs.writeFileSync(ecOutPath, JSON.stringify(ecReport.signals, null, 2), 'utf-8');
+
+        console.log(renderEarsCollectorReport(ecReport));
         break;
       }
 
