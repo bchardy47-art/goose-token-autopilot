@@ -113,6 +113,7 @@ import {
   buildEarsCollectorReport,
   renderEarsCollectorReport,
 } from './token-grab/earsCollector';
+import { runWatchCycle, renderWatchCycleReport } from './token-grab/earsWatcher';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -1673,6 +1674,76 @@ async function main(): Promise<void> {
         fs.writeFileSync(ecOutPath, JSON.stringify(ecReport.signals, null, 2), 'utf-8');
 
         console.log(renderEarsCollectorReport(ecReport));
+        break;
+      }
+
+      case 'token:ears-watch': {
+        const ewInputPath = getArgValue('--input') ?? 'data/token-grab/x-ears/ears-input.txt';
+        const ewOutPath = getArgValue('--out') ?? 'data/token-grab/x-ears/presignals.json';
+        const ewSourceRaw = (getArgValue('--source') ?? 'x_manual') as PreSignalSource;
+        const ewCycles = parseNumberArg('--cycles', 1, { integer: true, min: 0 });
+        const ewIntervalSeconds = parseNumberArg('--interval-seconds', 60, { integer: true, min: 1 });
+        const ewDryRun = process.argv.includes('--dry-run');
+        const ewJson = process.argv.includes('--json');
+
+        const ewSleep = (ms: number): Promise<void> =>
+          new Promise(resolve => setTimeout(resolve, ms));
+
+        let ewCycle = 0;
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          ewCycle++;
+          const ewGeneratedAt = new Date().toISOString();
+
+          let ewRawContent = '';
+          try {
+            ewRawContent = fs.readFileSync(ewInputPath, 'utf-8');
+          } catch (e) {
+            throw new Error(
+              `[token:ears-watch] Cannot read input: ${ewInputPath} — ${(e as Error).message}`,
+            );
+          }
+
+          let ewExisting: PreSignal[] = [];
+          if (!ewDryRun && fs.existsSync(ewOutPath)) {
+            try {
+              ewExisting = JSON.parse(fs.readFileSync(ewOutPath, 'utf-8')) as PreSignal[];
+            } catch {
+              ewExisting = [];
+            }
+          }
+
+          const ewOutput = runWatchCycle({
+            rawContent: ewRawContent,
+            existingSignals: ewExisting,
+            source: ewSourceRaw,
+            generatedAt: ewGeneratedAt,
+            cycleNumber: ewCycle,
+            inputPath: ewInputPath,
+            outputPath: ewOutPath,
+            dryRun: ewDryRun,
+          });
+
+          if (!ewDryRun && ewOutput.uniqueSignals.length > 0) {
+            const ewUpdated = [...ewExisting, ...ewOutput.uniqueSignals];
+            const ewOutDir = path.dirname(ewOutPath);
+            fs.mkdirSync(ewOutDir, { recursive: true });
+            fs.writeFileSync(ewOutPath, JSON.stringify(ewUpdated, null, 2), 'utf-8');
+          }
+
+          if (ewJson) {
+            console.log(JSON.stringify(ewOutput, null, 2));
+          } else {
+            console.log(renderWatchCycleReport(ewOutput));
+          }
+
+          // Exit if cycle target reached (0 means run forever)
+          if (ewCycles > 0 && ewCycle >= ewCycles) break;
+
+          // Sleep before next cycle
+          console.log(`\nNext cycle in ${ewIntervalSeconds}s. Press Ctrl+C to stop.\n`);
+          await ewSleep(ewIntervalSeconds * 1000);
+        }
         break;
       }
 
