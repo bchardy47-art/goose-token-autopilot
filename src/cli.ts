@@ -148,6 +148,7 @@ import { runDexWatch, renderDexWatchReport } from './token-grab/dexWatch';
 import { loadWatchReports, buildDexWatchSummary, renderDexWatchSummary } from './token-grab/dexWatchSummary';
 import { buildDexWatchCandidatesReport, renderDexWatchCandidatesReport } from './token-grab/dexWatchCandidates';
 import { buildDexCandidateSimReport, renderDexCandidateSimReport } from './token-grab/dexCandidateSim';
+import { runDexPaperRunner, renderDexPaperRunnerReport } from './token-grab/dexPaperRunner';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2136,6 +2137,58 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(csReport, null, 2));
         } else {
           console.log(renderDexCandidateSimReport(csReport));
+        }
+        break;
+      }
+
+      case 'token:dex-paper-runner': {
+        const prConfig = getArgValue('--dex-config') ?? 'config/dex-ears.example.json';
+        const prSignalsOut = getArgValue('--signals-out') ?? 'data/token-grab/x-ears/presignals.dex.json';
+        const prRunsDir = getArgValue('--runs-dir') ?? 'data/token-grab/dex-watch-runs';
+        const prMinutes = Number(getArgValue('--minutes') ?? '10');
+        const prInterval = Number(getArgValue('--interval-seconds') ?? '60');
+        const prBankroll = Number(getArgValue('--fake-bankroll') ?? '20');
+        const prPosition = Number(getArgValue('--position-size') ?? '1');
+        const prCycles = Number(getArgValue('--cycles') ?? '1');
+        const prJson = process.argv.includes('--json');
+        const prSkipSleep = process.argv.includes('--skip-sleep');
+
+        if (!fs.existsSync(prConfig)) {
+          throw new Error(`[token:dex-paper-runner] Cannot read --dex-config: ${prConfig}`);
+        }
+        if (!Number.isFinite(prMinutes) || prMinutes < 0) {
+          throw new Error(`[token:dex-paper-runner] --minutes must be a non-negative number`);
+        }
+        if (!Number.isFinite(prInterval) || prInterval <= 0) {
+          throw new Error(`[token:dex-paper-runner] --interval-seconds must be a positive number`);
+        }
+        if (!Number.isFinite(prBankroll) || prBankroll < 0) {
+          throw new Error(`[token:dex-paper-runner] --fake-bankroll must be a non-negative number`);
+        }
+        if (!Number.isFinite(prPosition) || prPosition <= 0) {
+          throw new Error(`[token:dex-paper-runner] --position-size must be a positive number`);
+        }
+        if (!Number.isFinite(prCycles) || prCycles < 1) {
+          throw new Error(`[token:dex-paper-runner] --cycles must be >= 1`);
+        }
+
+        const prReport = await runDexPaperRunner({
+          dexConfigPath: prConfig,
+          signalsOut: prSignalsOut,
+          runsDir: prRunsDir,
+          minutes: prMinutes,
+          intervalSeconds: prInterval,
+          fakeBankroll: prBankroll,
+          positionSize: prPosition,
+          cycles: prCycles,
+          sleepImpl: prSkipSleep ? () => Promise.resolve() : undefined,
+          log: prJson ? undefined : (msg: string) => console.error(msg),
+        });
+
+        if (prJson) {
+          console.log(JSON.stringify(prReport, null, 2));
+        } else {
+          console.log(renderDexPaperRunnerReport(prReport));
         }
         break;
       }
