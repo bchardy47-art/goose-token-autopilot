@@ -1068,3 +1068,174 @@ describe('entry confirmation gate — safety text', () => {
     expect(rendered).toContain('token:auto-paper was NOT run');
   });
 });
+
+// ── Watch-cycle skip tests (6 required) ──────────────────────────────────────
+
+// Test 1: NO_BUY + watchCycle does not require exit snapshot
+describe('watch-cycle skip — NO_BUY has no exit snapshot', () => {
+  it('NO_BUY summary with watchCycle true has watchCycleSkipped and no exitSnapshotPath', () => {
+    const readiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+    const summary = makeBaseSummary(readiness, {
+      status: 'NO_TRADE', decision: 'NO_BUY',
+      watchCycle: true,
+      watchCycleSkipped: true,
+      watchCycleSkipReason: 'No PLAN_ONLY trade plan was created.',
+    });
+    expect(summary.watchCycle).toBe(true);
+    expect(summary.watchCycleSkipped).toBe(true);
+    expect(summary.exitSnapshotPath).toBeUndefined();
+    expect(summary.fakePnL).toBeUndefined();
+  });
+
+  it('rendering NO_BUY+watchCycleSkipped does not throw', () => {
+    const readiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+    const summary = makeBaseSummary(readiness, {
+      status: 'NO_TRADE', decision: 'NO_BUY',
+      watchCycle: true,
+      watchCycleSkipped: true,
+      watchCycleSkipReason: 'No PLAN_ONLY trade plan was created.',
+    });
+    expect(() => renderLiveHarnessReport(summary)).not.toThrow();
+  });
+});
+
+// Test 2: NO_BUY report shows watch-cycle skipped reason
+describe('watch-cycle skip — rendered report shows skip reason', () => {
+  it('shows Watch Cycle section with Skipped line when watchCycleSkipped is true', () => {
+    const readiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+    const summary = makeBaseSummary(readiness, {
+      status: 'NO_TRADE', decision: 'NO_BUY',
+      watchCycle: true,
+      watchCycleSkipped: true,
+      watchCycleSkipReason: 'No PLAN_ONLY trade plan was created.',
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('Watch Cycle');
+    expect(rendered).toContain('Skipped');
+    expect(rendered).toContain('No PLAN_ONLY trade plan was created.');
+  });
+
+  it('skipped watch cycle report still contains safety banners', () => {
+    const readiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+    const summary = makeBaseSummary(readiness, {
+      status: 'NO_TRADE', decision: 'NO_BUY',
+      watchCycle: true,
+      watchCycleSkipped: true,
+      watchCycleSkipReason: 'No PLAN_ONLY trade plan was created.',
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('NOT AUTONOMOUS');
+    expect(rendered).toContain('NO REAL TRADE SENT');
+    expect(rendered).toContain('token:auto-paper was NOT run');
+  });
+});
+
+// Test 3: FAKE_BUY + PLAN_ONLY still runs watch-cycle with fake P/L
+describe('watch-cycle skip — FAKE_BUY with PLAN_ONLY runs normally', () => {
+  it('FAKE_BUY + tradePlan + watchCycle renders exit snapshot and P/L (not skipped)', () => {
+    const fakePnL = {
+      outcome: 'GAIN' as const,
+      fakePositionSize: 1,
+      fakeEntryPrice: 0.001,
+      fakeExitPrice: 0.0015,
+      fakeTokensHeld: 1000,
+      fakeEndingValue: 1.5,
+      pnlDollars: 0.5,
+      pnlPct: 50,
+      endingBankroll: 20.5,
+    };
+    const plan = buildLiveTradePlan(makeCandidate(), makeSnapshot(), 1);
+    const readiness: LiveReadinessReport = { status: 'DRY_RUN_ONLY', gates: [], allGatesPassed: false };
+    const summary = makeBaseSummary(readiness, {
+      status: 'DRY_RUN_ONLY', decision: 'FAKE_BUY',
+      tradePlan: plan,
+      watchCycle: true,
+      watchCycleSkipped: undefined,
+      exitSnapshotPath: 'data/token-grab/live-harness/session-exit.json',
+      fakePnL,
+    });
+    expect(summary.watchCycleSkipped).toBeUndefined();
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('Watch Cycle');
+    expect(rendered).not.toContain('Skipped');
+    expect(rendered).toContain('Fake P/L');
+    expect(rendered).toContain('GAIN');
+    expect(rendered).toContain('PLAN_ONLY');
+  });
+});
+
+// Test 4: Confirmation rejection blocks PLAN_ONLY and skips watch-cycle
+describe('watch-cycle skip — confirmation rejection skips watch-cycle', () => {
+  it('rejected confirmation summary has no tradePlan and watchCycleSkipped true', () => {
+    const readiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+    const entryConfirmation = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.001, liquidityUsd: 5000 }),
+    }));
+    expect(entryConfirmation.verdict).not.toBe('CONFIRMED');
+    const summary = makeBaseSummary(readiness, {
+      status: 'NO_TRADE', decision: 'NO_BUY',
+      confirmEntry: true, confirmMinutes: 2, entryConfirmation,
+      watchCycle: true,
+      watchCycleSkipped: true,
+      watchCycleSkipReason: 'No PLAN_ONLY trade plan was created.',
+    });
+    expect(summary.tradePlan).toBeUndefined();
+    expect(summary.watchCycleSkipped).toBe(true);
+    expect(summary.exitSnapshotPath).toBeUndefined();
+  });
+
+  it('rejected confirmation renders Watch Cycle section as skipped', () => {
+    const readiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+    const entryConfirmation = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.001, liquidityUsd: 5000 }),
+    }));
+    const summary = makeBaseSummary(readiness, {
+      status: 'NO_TRADE', decision: 'NO_BUY',
+      confirmEntry: true, confirmMinutes: 2, entryConfirmation,
+      watchCycle: true,
+      watchCycleSkipped: true,
+      watchCycleSkipReason: 'No PLAN_ONLY trade plan was created.',
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('Watch Cycle');
+    expect(rendered).toContain('Skipped');
+    expect(rendered).toContain('Entry Confirmation Gate');
+  });
+});
+
+// Test 5: No LIVE_EXECUTED in watch-cycle skip
+describe('watch-cycle skip — no LIVE_EXECUTED', () => {
+  it('skipped watch-cycle report never contains LIVE_EXECUTED', () => {
+    const readiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+    const summary = makeBaseSummary(readiness, {
+      status: 'NO_TRADE', decision: 'NO_BUY',
+      watchCycle: true,
+      watchCycleSkipped: true,
+      watchCycleSkipReason: 'No PLAN_ONLY trade plan was created.',
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).not.toMatch(/LIVE_EXECUTED/);
+  });
+});
+
+// Test 6: No wallet/private key/swap/signing in watch-cycle skip rendered output
+describe('watch-cycle skip — safety patterns absent', () => {
+  it('skipped watch-cycle report contains no signing/swap/key patterns', () => {
+    const readiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+    const summary = makeBaseSummary(readiness, {
+      status: 'NO_TRADE', decision: 'NO_BUY',
+      watchCycle: true,
+      watchCycleSkipped: true,
+      watchCycleSkipReason: 'No PLAN_ONLY trade plan was created.',
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).not.toMatch(/(?:private|secret)[\s_]?key\s*[=({]/i);
+    expect(rendered).not.toMatch(/signTransaction\s*\(/i);
+    expect(rendered).not.toMatch(/sendTransaction\s*\(/i);
+    expect(rendered).not.toMatch(/executeSwap\s*\(/i);
+    expect(rendered).not.toMatch(/wallet\.connect\s*\(/i);
+    expect(rendered).not.toMatch(/LIVE_EXECUTED/);
+    expect(rendered).toContain('NOT AUTONOMOUS');
+    expect(rendered).toContain('NO REAL TRADE SENT');
+  });
+});

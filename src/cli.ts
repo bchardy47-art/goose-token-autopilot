@@ -1268,7 +1268,11 @@ async function main(): Promise<void> {
               maxOpenPositions: 1, candidatesDetected: allCandidates.length, laneSummary,
               watchWorthyCount: liveSelected.totalWatchWorthy,
               notAutonomous: true, noRealTradeSent: true, autoPaperNotRun: true,
-              skipSleepMode: skipSleep, watchCycle: false, fakeBankroll,
+              skipSleepMode: skipSleep,
+              watchCycle,
+              watchCycleSkipped: watchCycle ? true : undefined,
+              watchCycleSkipReason: watchCycle ? 'No PLAN_ONLY trade plan was created.' : undefined,
+              fakeBankroll,
               confirmEntry, confirmMinutes, confirmSnapshotPath, entryConfirmation,
             };
             emitSummary(rejSummary);
@@ -1331,42 +1335,51 @@ async function main(): Promise<void> {
           });
         }
 
-        // 10. Watch cycle — sleep + exit snapshot (optional, requires --watch-cycle)
+        // 10. Watch cycle — sleep + exit snapshot (optional, requires --watch-cycle and PLAN_ONLY)
         let exitSnapshotPath: string | undefined;
         let watchCyclePnL: LiveAssistedPnL | undefined;
+        let watchCycleSkipped = false;
+        let watchCycleSkipReason: string | undefined;
 
-        if (watchCycle && liveSelected.hasWatchWorthy) {
-          if (!skipSleep) {
-            console.log(`[watch-cycle] Sleeping ${watchMinutes} minute(s) before exit snapshot...`);
-            await sleep(watchMinutes * 60 * 1000);
-          } else {
-            console.log('[watch-cycle] skip-sleep: proceeding immediately to exit snapshot');
-          }
-
-          exitSnapshotPath = `${outDir}/session-${ts}-exit.json`;
-          console.log('[watch-cycle] Fetching exit snapshots...');
-          const exitResult = await fetchSessionSnapshots({ candidates: liveSelected.candidates, delayMs });
-          writeSnapshotFile(exitSnapshotPath, exitResult.snapshots);
-          console.log(`[watch-cycle] Exit snapshots: ${exitResult.snapshots.length} written, ${exitResult.skipped} skipped.`);
-
-          if (tradePlan && chosen) {
-            const exitSnap = exitResult.snapshots.find(s => s.candidateId === chosen.candidate.id);
-            const fakeTokensHeld = tradePlan.maxLivePosition / tradePlan.entryPrice;
-            watchCyclePnL = calculateFakePnL(
-              tradePlan.maxLivePosition,
-              tradePlan.entryPrice,
-              fakeTokensHeld,
-              exitSnap?.priceUsd,
-              fakeBankroll,
-            );
-            const sign = watchCyclePnL.pnlDollars >= 0 ? '+' : '';
-            if (watchCyclePnL.outcome !== 'UNKNOWN') {
-              console.log(`[watch-cycle] Fake P/L: ${sign}$${watchCyclePnL.pnlDollars.toFixed(4)} / ${sign}${watchCyclePnL.pnlPct.toFixed(2)}% (${watchCyclePnL.outcome})`);
+        if (watchCycle) {
+          if (!tradePlan) {
+            watchCycleSkipped = true;
+            watchCycleSkipReason = 'No PLAN_ONLY trade plan was created.';
+            console.log('[watch-cycle] Skipped — No PLAN_ONLY trade plan was created.');
+            console.log('');
+          } else if (liveSelected.hasWatchWorthy) {
+            if (!skipSleep) {
+              console.log(`[watch-cycle] Sleeping ${watchMinutes} minute(s) before exit snapshot...`);
+              await sleep(watchMinutes * 60 * 1000);
             } else {
-              console.log('[watch-cycle] Exit price unavailable — P/L unknown');
+              console.log('[watch-cycle] skip-sleep: proceeding immediately to exit snapshot');
             }
+
+            exitSnapshotPath = `${outDir}/session-${ts}-exit.json`;
+            console.log('[watch-cycle] Fetching exit snapshots...');
+            const exitResult = await fetchSessionSnapshots({ candidates: liveSelected.candidates, delayMs });
+            writeSnapshotFile(exitSnapshotPath, exitResult.snapshots);
+            console.log(`[watch-cycle] Exit snapshots: ${exitResult.snapshots.length} written, ${exitResult.skipped} skipped.`);
+
+            if (chosen) {
+              const exitSnap = exitResult.snapshots.find(s => s.candidateId === chosen.candidate.id);
+              const fakeTokensHeld = tradePlan.maxLivePosition / tradePlan.entryPrice;
+              watchCyclePnL = calculateFakePnL(
+                tradePlan.maxLivePosition,
+                tradePlan.entryPrice,
+                fakeTokensHeld,
+                exitSnap?.priceUsd,
+                fakeBankroll,
+              );
+              const sign = watchCyclePnL.pnlDollars >= 0 ? '+' : '';
+              if (watchCyclePnL.outcome !== 'UNKNOWN') {
+                console.log(`[watch-cycle] Fake P/L: ${sign}$${watchCyclePnL.pnlDollars.toFixed(4)} / ${sign}${watchCyclePnL.pnlPct.toFixed(2)}% (${watchCyclePnL.outcome})`);
+              } else {
+                console.log('[watch-cycle] Exit price unavailable — P/L unknown');
+              }
+            }
+            console.log('');
           }
-          console.log('');
         }
 
         const finalSummary: LiveHarnessSummary = {
@@ -1389,6 +1402,8 @@ async function main(): Promise<void> {
           autoPaperNotRun: true,
           skipSleepMode: skipSleep,
           watchCycle,
+          watchCycleSkipped: watchCycleSkipped || undefined,
+          watchCycleSkipReason,
           fakeBankroll,
           exitSnapshotPath,
           fakePnL: watchCyclePnL,
