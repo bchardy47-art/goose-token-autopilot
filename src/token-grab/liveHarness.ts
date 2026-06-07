@@ -102,6 +102,54 @@ export interface LiveReadinessReport {
   allGatesPassed: boolean;
 }
 
+// ── Paper Exit Guard types ────────────────────────────────────────────────────
+
+export type PaperExitReason =
+  | 'HARD_STOP'
+  | 'TAKE_PROFIT'
+  | 'TRAILING_STOP'
+  | 'MOMENTUM_FLOOR'
+  | 'MAX_HOLD'
+  | 'NOT_RUN';
+
+export interface PaperExitState {
+  checksRun: number;
+  currentPrice?: number;
+  currentPnLPct?: number;
+  peakPnLPct?: number;
+  peakPrice?: number;
+  trailingActive: boolean;
+}
+
+export interface EvaluatePaperExitGuardInput {
+  state: PaperExitState;
+  hardStopPct: number;
+  takeProfitPct: number;
+  trailingActivatePct: number;
+  trailingDropPct: number;
+  momentumFloorEnabled: boolean;
+  confirmPrice?: number;
+}
+
+export interface PaperExitGuardSummary {
+  enabled: boolean;
+  intervalSeconds: number;
+  checksRun: number;
+  exitReason: PaperExitReason;
+  entryPrice: number;
+  confirmPrice?: number;
+  exitPrice?: number;
+  exitPnLPct?: number;
+  peakPrice?: number;
+  peakPnLPct?: number;
+  hardStopPct: number;
+  takeProfitPct: number;
+  trailingActivatePct: number;
+  trailingDropPct: number;
+  momentumFloorEnabled: boolean;
+  noRealTradeSent: true;
+}
+
 export interface LiveHarnessSummary {
   ts: string;
   outDir: string;
@@ -132,6 +180,8 @@ export interface LiveHarnessSummary {
   confirmMinutes: number;
   confirmSnapshotPath?: string;
   entryConfirmation?: EntryConfirmationResult;
+  paperExitGuardEnabled?: boolean;
+  paperExitGuard?: PaperExitGuardSummary;
 }
 
 export interface EvaluateLiveReadinessGatesInput {
@@ -492,6 +542,115 @@ export function evaluateLiveReadinessGates(
 }
 
 /**
+ * Returns the paper P/L percentage from entry price to current price.
+ * Pure — no I/O, no side effects.
+ */
+export function calculatePaperPnLPct(entryPrice: number, currentPrice: number): number {
+  return calculatePctChange(entryPrice, currentPrice);
+}
+
+/**
+ * Updates paper exit state with a new price observation.
+ * Pure — no I/O, no side effects.
+ */
+export function updatePaperExitState(
+  state: PaperExitState,
+  currentPrice: number,
+  entryPrice: number,
+  trailingActivatePct: number,
+): PaperExitState {
+  const currentPnLPct = calculatePaperPnLPct(entryPrice, currentPrice);
+  const prevPeak = state.peakPnLPct ?? currentPnLPct;
+  const newPeakPnLPct = Math.max(prevPeak, currentPnLPct);
+  const newPeakPrice = newPeakPnLPct > prevPeak ? currentPrice : (state.peakPrice ?? currentPrice);
+  const newTrailingActive = state.trailingActive || newPeakPnLPct >= trailingActivatePct;
+
+  return {
+    checksRun: state.checksRun + 1,
+    currentPrice,
+    currentPnLPct,
+    peakPnLPct: newPeakPnLPct,
+    peakPrice: newPeakPrice,
+    trailingActive: newTrailingActive,
+  };
+}
+
+/**
+ * Evaluates paper exit conditions for the current state.
+ * Returns the exit reason if a condition is met, or null to continue holding.
+ * Does not handle MAX_HOLD — the caller decides when the loop is exhausted.
+ * Pure — no I/O, no side effects.
+ */
+export function evaluatePaperExitGuard(
+  input: EvaluatePaperExitGuardInput,
+): PaperExitReason | null {
+  const { state, hardStopPct, takeProfitPct, trailingDropPct, momentumFloorEnabled, confirmPrice } = input;
+  const { currentPnLPct, peakPnLPct, trailingActive, currentPrice } = state;
+
+  if (currentPnLPct == null) return null;
+
+  if (currentPnLPct <= hardStopPct) return 'HARD_STOP';
+  if (currentPnLPct >= takeProfitPct) return 'TAKE_PROFIT';
+
+  if (trailingActive && peakPnLPct != null) {
+    if (currentPnLPct <= peakPnLPct - trailingDropPct) return 'TRAILING_STOP';
+  }
+
+  if (momentumFloorEnabled && confirmPrice != null && currentPrice != null) {
+    if (currentPrice < confirmPrice) return 'MOMENTUM_FLOOR';
+  }
+
+  return null;
+}
+
+/**
+ * Renders the Paper Exit Guard summary section.
+ * Pure — no I/O, no side effects. No real trade references.
+ */
+export function renderPaperExitGuardSummary(s: PaperExitGuardSummary): string {
+  const THIN = '─'.repeat(64);
+  const lines: string[] = [];
+
+  lines.push(THIN);
+  lines.push('Paper Exit Guard  [PAPER-ONLY — NO REAL TRADE SENT]');
+  lines.push(THIN);
+  lines.push(`  Enabled         : ${s.enabled}`);
+  lines.push(`  Interval        : ${s.intervalSeconds}s`);
+  lines.push(`  Checks run      : ${s.checksRun}`);
+  lines.push(`  Exit reason     : ${s.exitReason}`);
+
+  const entryPStr = `$${s.entryPrice.toExponential(4)}`;
+  lines.push(`  Entry price     : ${entryPStr}`);
+
+  if (s.confirmPrice != null) {
+    lines.push(`  Confirm price   : $${s.confirmPrice.toExponential(4)}`);
+  }
+
+  if (s.exitPrice != null) {
+    lines.push(`  Exit price      : $${s.exitPrice.toExponential(4)}`);
+  }
+
+  if (s.exitPnLPct != null) {
+    const sign = s.exitPnLPct >= 0 ? '+' : '';
+    lines.push(`  Paper exit P/L  : ${sign}${s.exitPnLPct.toFixed(2)}%`);
+  }
+
+  if (s.peakPnLPct != null) {
+    const sign = s.peakPnLPct >= 0 ? '+' : '';
+    lines.push(`  Peak P/L        : ${sign}${s.peakPnLPct.toFixed(2)}%`);
+  }
+
+  lines.push(`  Hard stop       : ${s.hardStopPct}%`);
+  lines.push(`  Take profit     : +${s.takeProfitPct}%`);
+  lines.push(`  Trailing activates at : +${s.trailingActivatePct}%`);
+  lines.push(`  Trailing drop   : ${s.trailingDropPct} pts`);
+  lines.push(`  Momentum floor  : ${s.momentumFloorEnabled ? 'enabled' : 'disabled'}`);
+  lines.push('  NO REAL TRADE SENT');
+
+  return lines.join('\n');
+}
+
+/**
  * Renders the live harness summary as a terminal report.
  * Always includes safety confirmation lines.
  * No wallet, swap, signing, or key references.
@@ -654,6 +813,11 @@ export function renderLiveHarnessReport(s: LiveHarnessSummary): string {
         lines.push('  Fake P/L        : UNKNOWN');
       }
     }
+    lines.push('');
+  }
+
+  if (s.paperExitGuardEnabled && s.paperExitGuard) {
+    lines.push(renderPaperExitGuardSummary(s.paperExitGuard));
     lines.push('');
   }
 
