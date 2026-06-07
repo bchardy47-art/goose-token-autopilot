@@ -1,0 +1,8 @@
+# ears-collector-input.txt — test fixture for token:ears-collect pipeline smoke
+$GOOSE token launch on Raydium — CA: 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU
+Large account mentioning a new frog AI token launch $FROGAI https://x.com/example/status/100
+Breaking news: AI meme coin $BRAINROT is trending and going viral
+Community raid underway for $PEPE2, army mobilizing — LFG WAGMI
+$FROGAI spotted by multiple callers — ticker repetition signal
+$FROGAI again — launch likely imminent on pump.fun
+Just a generic observation with no ticker or signal keywords
