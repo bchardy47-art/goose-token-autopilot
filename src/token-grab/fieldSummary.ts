@@ -27,6 +27,8 @@ export interface FieldRunRow {
   exitReason?: string;
   fakePnLPct?: number;
   rejectionPattern?: RejectionPattern;
+  fieldNote?: string;
+  fieldTags?: string[];
 }
 
 export interface FieldRunAggregate {
@@ -44,6 +46,7 @@ export interface FieldRunAggregate {
   losersCount: number;
   flatCount: number;
   rejectionPatternCounts: Record<RejectionPattern, number>;
+  tagCounts: Record<string, number>;
 }
 
 export interface FieldRunSummary {
@@ -155,6 +158,8 @@ export function classifyRejectionPattern(
 interface SessionFile {
   candidates?: Array<{ tokenName?: string; ticker?: string }>;
   summary?: { earlyVelocityWatch?: number; freshLaunchCandidates?: number; rejectedNoise?: number };
+  fieldNote?: string;
+  fieldTags?: string[];
 }
 
 interface SnapshotArray extends Array<{
@@ -306,6 +311,9 @@ export function loadFieldRunRow(dir: string, ts: string): FieldRunRow {
         )
       : undefined;
 
+  const fieldNote = session?.fieldNote;
+  const fieldTags = session?.fieldTags;
+
   return {
     ts,
     tokenSelected,
@@ -322,6 +330,8 @@ export function loadFieldRunRow(dir: string, ts: string): FieldRunRow {
     exitReason,
     fakePnLPct,
     rejectionPattern,
+    fieldNote,
+    fieldTags,
   };
 }
 
@@ -354,6 +364,7 @@ export function aggregateFieldRuns(rows: FieldRunRow[]): FieldRunAggregate {
       MISSING_CONFIRMATION: 0,
       OTHER: 0,
     },
+    tagCounts: {},
   };
 
   for (const row of rows) {
@@ -395,6 +406,12 @@ export function aggregateFieldRuns(rows: FieldRunRow[]): FieldRunAggregate {
 
     if (row.rejectionPattern) {
       agg.rejectionPatternCounts[row.rejectionPattern]++;
+    }
+
+    if (row.fieldTags) {
+      for (const tag of row.fieldTags) {
+        agg.tagCounts[tag] = (agg.tagCounts[tag] ?? 0) + 1;
+      }
     }
   }
 
@@ -522,6 +539,24 @@ export function renderFieldRunSummary(s: FieldRunSummary): string {
   }
   lines.push('');
 
+  // Field notes listing — only if any row has notes or tags
+  const rowsWithNotes = s.rows.filter(r => r.fieldNote !== undefined || (r.fieldTags && r.fieldTags.length > 0));
+  if (rowsWithNotes.length > 0) {
+    lines.push(THIN);
+    lines.push('Field Notes');
+    lines.push(THIN);
+    for (const row of rowsWithNotes) {
+      lines.push(`  ${row.ts}`);
+      if (row.fieldNote !== undefined) {
+        lines.push(`    Note : ${row.fieldNote}`);
+      }
+      if (row.fieldTags && row.fieldTags.length > 0) {
+        lines.push(`    Tags : ${row.fieldTags.join(', ')}`);
+      }
+    }
+    lines.push('');
+  }
+
   // Aggregates
   lines.push(THIN);
   lines.push('Aggregate Counts');
@@ -545,6 +580,12 @@ export function renderFieldRunSummary(s: FieldRunSummary): string {
   lines.push(`  Winners (P/L > +1%)   : ${a.winnersCount}`);
   lines.push(`  Losers  (P/L < -1%)   : ${a.losersCount}`);
   lines.push(`  Flat                  : ${a.flatCount}`);
+  if (Object.keys(a.tagCounts).length > 0) {
+    lines.push('  Tag counts:');
+    for (const [tag, count] of Object.entries(a.tagCounts)) {
+      lines.push(`    ${tag}: ${count}`);
+    }
+  }
   lines.push('');
 
   // Rejection patterns

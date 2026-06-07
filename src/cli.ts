@@ -1100,6 +1100,11 @@ async function main(): Promise<void> {
         const paperExitTrailingDropPct = parseNumberArg('--paper-exit-trailing-drop-pct', 20);
         const paperExitMomentumFloor = process.argv.includes('--paper-exit-momentum-floor');
         const preSignalsPath = getArgValue('--pre-signals');
+        const fieldNote = getArgValue('--field-note');
+        const fieldTagsRaw = getArgValue('--field-tags');
+        const fieldTags = fieldTagsRaw
+          ? fieldTagsRaw.split(',').map(t => t.trim()).filter(t => t.length > 0)
+          : undefined;
 
         // V1 hard cap — fail-fast before any network calls
         assertMaxLivePosition(maxLivePosition);
@@ -1157,6 +1162,8 @@ async function main(): Promise<void> {
             dbWrites: false,
             scheduler: false,
           },
+          fieldNote,
+          fieldTags,
         };
         saveTokenGrabSession(sessionPath, liveSession);
 
@@ -1229,6 +1236,8 @@ async function main(): Promise<void> {
             confirmMinConfirmedLiquidityUsd,
             confirmEntry, confirmMinutes,
             preSignalBridge,
+            fieldNote,
+            fieldTags,
           };
           emitSummary(summary);
           break;
@@ -1328,6 +1337,8 @@ async function main(): Promise<void> {
               preSignalAnnotation: rejChosenMatch
                 ? { preSignalMatch: true, preSignalReason: rejChosenMatch.matchReason, preSignalConfidence: rejChosenMatch.signalConfidence, preSignalSource: rejChosenMatch.signalSource, laneLabel: 'PRE_SIGNAL_MATCH', watchOnly: true, planOnlyNotGranted: true }
                 : undefined,
+              fieldNote,
+              fieldTags,
             };
             emitSummary(rejSummary);
             break;
@@ -1560,6 +1571,8 @@ async function main(): Promise<void> {
               planOnlyNotGranted: true as const,
             };
           })(),
+          fieldNote,
+          fieldTags,
         };
 
         emitSummary(finalSummary);

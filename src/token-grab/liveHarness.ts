@@ -197,6 +197,8 @@ export interface LiveHarnessSummary {
   paperExitGuard?: PaperExitGuardSummary;
   preSignalAnnotation?: PreSignalAnnotation;
   preSignalBridge?: PreSignalBridgeSummary;
+  fieldNote?: string;
+  fieldTags?: string[];
 }
 
 export interface EvaluateLiveReadinessGatesInput {
@@ -864,6 +866,20 @@ export function renderLiveHarnessReport(s: LiveHarnessSummary): string {
     lines.push(`  Source          : ${psa.preSignalSource}`);
     lines.push(`  Lane label      : ${psa.laneLabel}`);
     lines.push(`  PLAN_ONLY       : NOT GRANTED — existing confirmation gates still required`);
+    lines.push('');
+  }
+
+  if (s.fieldNote !== undefined || (s.fieldTags && s.fieldTags.length > 0)) {
+    lines.push(THIN);
+    lines.push('Field Notes  [OPERATOR NOTE — metadata only]');
+    lines.push(THIN);
+    if (s.fieldNote !== undefined) {
+      lines.push(`  Note   : ${s.fieldNote}`);
+    }
+    if (s.fieldTags && s.fieldTags.length > 0) {
+      lines.push(`  Tags   : ${s.fieldTags.join(', ')}`);
+    }
+    lines.push('  Does not affect decision, PLAN_ONLY, pre-signal matching, or exit guard');
     lines.push('');
   }
 
