@@ -1,0 +1,36 @@
+{
+  "feeds": [
+    {
+      "name": "CoinDesk",
+      "url": "https://www.coindesk.com/arc/outboundfeeds/rss/",
+      "source": "news_manual"
+    },
+    {
+      "name": "CryptoPanic",
+      "url": "https://cryptopanic.com/news/rss/",
+      "source": "news_manual"
+    },
+    {
+      "name": "The Block",
+      "url": "https://www.theblock.co/rss.xml",
+      "source": "news_manual"
+    }
+  ],
+  "keywords": [
+    "launch",
+    "meme",
+    "token",
+    "CA",
+    "Raydium",
+    "pump.fun",
+    "Solana",
+    "viral",
+    "trending",
+    "contract",
+    "listed",
+    "liquidity",
+    "pumpfun",
+    "memecoin"
+  ],
+  "maxItemsPerFeed": 20
+}
