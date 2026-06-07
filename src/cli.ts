@@ -145,6 +145,7 @@ import {
   renderDexEarsReport,
 } from './token-grab/dexEars';
 import { runDexWatch, renderDexWatchReport } from './token-grab/dexWatch';
+import { loadWatchReports, buildDexWatchSummary, renderDexWatchSummary } from './token-grab/dexWatchSummary';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2029,6 +2030,7 @@ async function main(): Promise<void> {
         const dwDryRun = process.argv.includes('--dry-run');
         const dwJson = process.argv.includes('--json');
         const dwSkipSleep = process.argv.includes('--skip-sleep');
+        const dwSave = getArgValue('--save');
 
         if (!Number.isFinite(dwMinutes) || dwMinutes < 0) {
           throw new Error(`[token:ears-dex-watch] --minutes must be a non-negative number`);
@@ -2050,10 +2052,36 @@ async function main(): Promise<void> {
           log: dwJson ? undefined : (msg: string) => console.error(msg),
         });
 
+        if (dwSave) {
+          fs.mkdirSync(path.dirname(dwSave), { recursive: true });
+          fs.writeFileSync(dwSave, JSON.stringify(dwReport, null, 2), 'utf-8');
+          if (!dwJson) console.error(`Saved watch report to ${dwSave}`);
+        }
+
         if (dwJson) {
           console.log(JSON.stringify(dwReport, null, 2));
         } else {
           console.log(renderDexWatchReport(dwReport));
+        }
+        break;
+      }
+
+      case 'token:dex-watch-summary': {
+        const dsDir = getArgValue('--dir') ?? 'data/token-grab/dex-watch-runs';
+        const dsLimit = Number(getArgValue('--limit') ?? '20');
+        const dsJson = process.argv.includes('--json');
+
+        if (!Number.isFinite(dsLimit) || dsLimit <= 0) {
+          throw new Error(`[token:dex-watch-summary] --limit must be a positive number`);
+        }
+
+        const dsReports = loadWatchReports(dsDir, dsLimit);
+        const dsSummary = buildDexWatchSummary(dsReports, dsDir);
+
+        if (dsJson) {
+          console.log(JSON.stringify(dsSummary, null, 2));
+        } else {
+          console.log(renderDexWatchSummary(dsSummary));
         }
         break;
       }
