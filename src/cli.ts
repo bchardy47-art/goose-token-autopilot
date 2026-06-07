@@ -136,6 +136,14 @@ import {
   renderAutomatedEarsReport,
   type ConnectorResult,
 } from './token-grab/automatedEars';
+import {
+  loadDexEarsConfig,
+  fetchLatestProfiles,
+  fetchLatestBoosts,
+  fetchTopBoosts,
+  buildDexEarsReport,
+  renderDexEarsReport,
+} from './token-grab/dexEars';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -1950,6 +1958,64 @@ async function main(): Promise<void> {
           if (autoCycle < autoCycles) {
             await sleep(autoIntervalSeconds * 1000);
           }
+        }
+        break;
+      }
+
+      case 'token:ears-dex': {
+        const dexConfigPath = getArgValue('--config') ?? 'config/dex-ears.example.json';
+        const dexOutPath = getArgValue('--out') ?? 'data/token-grab/x-ears/presignals.json';
+        const dexDryRun = process.argv.includes('--dry-run');
+        const dexJson = process.argv.includes('--json');
+        const dexChainArg = getArgValue('--chain');
+        const dexMinConfArg = getArgValue('--min-confidence') as 'low' | 'medium' | 'high' | undefined;
+        const dexGeneratedAt = new Date().toISOString();
+
+        const dexConfig = loadDexEarsConfig(dexConfigPath);
+        const dexChain = dexChainArg ?? dexConfig.chain;
+        const dexMinConf = dexMinConfArg ?? dexConfig.minConfidence;
+
+        let dexExisting: PreSignal[] = [];
+        if (!dexDryRun && fs.existsSync(dexOutPath)) {
+          try {
+            dexExisting = JSON.parse(fs.readFileSync(dexOutPath, 'utf-8')) as PreSignal[];
+          } catch {
+            dexExisting = [];
+          }
+        }
+
+        const dexEndpointResults = await Promise.all([
+          dexConfig.endpoints.latestProfiles
+            ? fetchLatestProfiles(dexConfig.maxItemsPerEndpoint, dexConfig.timeoutMs)
+            : Promise.resolve(null),
+          dexConfig.endpoints.latestBoosts
+            ? fetchLatestBoosts(dexConfig.maxItemsPerEndpoint, dexConfig.timeoutMs)
+            : Promise.resolve(null),
+          dexConfig.endpoints.topBoosts
+            ? fetchTopBoosts(dexConfig.maxItemsPerEndpoint, dexConfig.timeoutMs)
+            : Promise.resolve(null),
+        ]);
+
+        const dexReport = buildDexEarsReport({
+          endpointResults: dexEndpointResults.filter((r): r is NonNullable<typeof r> => r !== null),
+          existingSignals: dexExisting,
+          generatedAt: dexGeneratedAt,
+          chain: dexChain,
+          minConfidence: dexMinConf,
+          dryRun: dexDryRun,
+          outputPath: dexOutPath,
+        });
+
+        if (!dexDryRun && dexReport.uniqueSignals.length > 0) {
+          const dexUpdated = [...dexExisting, ...dexReport.uniqueSignals];
+          fs.mkdirSync(path.dirname(dexOutPath), { recursive: true });
+          fs.writeFileSync(dexOutPath, JSON.stringify(dexUpdated, null, 2), 'utf-8');
+        }
+
+        if (dexJson) {
+          console.log(JSON.stringify(dexReport, null, 2));
+        } else {
+          console.log(renderDexEarsReport(dexReport));
         }
         break;
       }

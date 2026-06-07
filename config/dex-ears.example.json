@@ -1,0 +1,11 @@
+{
+  "chain": "solana",
+  "minConfidence": "medium",
+  "maxItemsPerEndpoint": 50,
+  "timeoutMs": 10000,
+  "endpoints": {
+    "latestProfiles": true,
+    "latestBoosts": true,
+    "topBoosts": true
+  }
+}

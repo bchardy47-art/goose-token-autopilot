@@ -79,6 +79,7 @@
     "token:ears-rss": "tsx src/cli.ts token:ears-rss",
     "token:ears-ingest": "tsx src/cli.ts token:ears-ingest",
     "token:ears-auto": "tsx src/cli.ts token:ears-auto",
+    "token:ears-dex": "tsx src/cli.ts token:ears-dex",
     "test": "vitest run"
   },
   "dependencies": {
