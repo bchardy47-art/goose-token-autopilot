@@ -78,6 +78,7 @@
     "token:ears-watch-once": "tsx src/cli.ts token:ears-watch --cycles 1",
     "token:ears-rss": "tsx src/cli.ts token:ears-rss",
     "token:ears-ingest": "tsx src/cli.ts token:ears-ingest",
+    "token:ears-auto": "tsx src/cli.ts token:ears-auto",
     "test": "vitest run"
   },
   "dependencies": {
