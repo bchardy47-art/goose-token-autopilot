@@ -10,10 +10,16 @@ import {
   buildConfirmedEntryQualityDiagnostics,
   calculatePctChange,
   renderLiveHarnessReport,
+  calculatePaperPnLPct,
+  updatePaperExitState,
+  evaluatePaperExitGuard,
+  renderPaperExitGuardSummary,
   type EvaluateLiveReadinessGatesInput,
   type EvaluateEntryConfirmationInput,
   type LiveHarnessSummary,
   type LiveReadinessReport,
+  type PaperExitState,
+  type PaperExitGuardSummary,
 } from '../src/token-grab/liveHarness';
 import type { TokenGrabAutopsyCandidate, TokenGrabAutopsySnapshot } from '../src/token-grab/autopsy';
 
@@ -1858,5 +1864,415 @@ describe('confirmed entry quality diagnostics — safety patterns absent', () =>
     expect(rendered).toContain('NOT AUTONOMOUS');
     expect(rendered).toContain('NO REAL TRADE SENT');
     expect(rendered).toContain('token:auto-paper was NOT run');
+  });
+});
+
+// ── Paper Exit Guard tests (12 required) ──────────────────────────────────────
+
+function makePegState(overrides: Partial<PaperExitState> = {}): PaperExitState {
+  return {
+    checksRun: 1,
+    trailingActive: false,
+    currentPrice: 0.001,
+    currentPnLPct: 0,
+    peakPnLPct: 0,
+    peakPrice: 0.001,
+    ...overrides,
+  };
+}
+
+function makePegSummary(overrides: Partial<PaperExitGuardSummary> = {}): PaperExitGuardSummary {
+  return {
+    enabled: true,
+    intervalSeconds: 60,
+    checksRun: 3,
+    exitReason: 'MAX_HOLD',
+    entryPrice: 0.001,
+    exitPrice: 0.0012,
+    exitPnLPct: 20,
+    peakPrice: 0.0015,
+    peakPnLPct: 50,
+    hardStopPct: -25,
+    takeProfitPct: 50,
+    trailingActivatePct: 30,
+    trailingDropPct: 20,
+    momentumFloorEnabled: false,
+    noRealTradeSent: true,
+    ...overrides,
+  };
+}
+
+// Test 1: calculatePaperPnLPct returns correct gain/loss
+describe('calculatePaperPnLPct', () => {
+  it('returns 0 when entry and current price are equal', () => {
+    expect(calculatePaperPnLPct(0.001, 0.001)).toBe(0);
+  });
+
+  it('returns +100 when current price is double entry price', () => {
+    expect(calculatePaperPnLPct(0.001, 0.002)).toBeCloseTo(100, 5);
+  });
+
+  it('returns -50 when current price is half of entry price', () => {
+    expect(calculatePaperPnLPct(0.001, 0.0005)).toBeCloseTo(-50, 5);
+  });
+
+  it('returns correct loss for -25% scenario', () => {
+    expect(calculatePaperPnLPct(1.0, 0.75)).toBeCloseTo(-25, 5);
+  });
+
+  it('returns correct gain for +50% scenario', () => {
+    expect(calculatePaperPnLPct(1.0, 1.5)).toBeCloseTo(50, 5);
+  });
+});
+
+// Test 2: HARD_STOP triggers at or below -25%
+describe('evaluatePaperExitGuard — HARD_STOP', () => {
+  it('triggers HARD_STOP at exactly -25%', () => {
+    const state = makePegState({ currentPnLPct: -25 });
+    const result = evaluatePaperExitGuard({ state, hardStopPct: -25, takeProfitPct: 50, trailingActivatePct: 30, trailingDropPct: 20, momentumFloorEnabled: false });
+    expect(result).toBe('HARD_STOP');
+  });
+
+  it('triggers HARD_STOP below -25%', () => {
+    const state = makePegState({ currentPnLPct: -40 });
+    const result = evaluatePaperExitGuard({ state, hardStopPct: -25, takeProfitPct: 50, trailingActivatePct: 30, trailingDropPct: 20, momentumFloorEnabled: false });
+    expect(result).toBe('HARD_STOP');
+  });
+
+  it('does not trigger HARD_STOP at -24.99%', () => {
+    const state = makePegState({ currentPnLPct: -24.99 });
+    const result = evaluatePaperExitGuard({ state, hardStopPct: -25, takeProfitPct: 50, trailingActivatePct: 30, trailingDropPct: 20, momentumFloorEnabled: false });
+    expect(result).toBeNull();
+  });
+});
+
+// Test 3: TAKE_PROFIT triggers at or above +50%
+describe('evaluatePaperExitGuard — TAKE_PROFIT', () => {
+  it('triggers TAKE_PROFIT at exactly +50%', () => {
+    const state = makePegState({ currentPnLPct: 50 });
+    const result = evaluatePaperExitGuard({ state, hardStopPct: -25, takeProfitPct: 50, trailingActivatePct: 30, trailingDropPct: 20, momentumFloorEnabled: false });
+    expect(result).toBe('TAKE_PROFIT');
+  });
+
+  it('triggers TAKE_PROFIT above +50%', () => {
+    const state = makePegState({ currentPnLPct: 120 });
+    const result = evaluatePaperExitGuard({ state, hardStopPct: -25, takeProfitPct: 50, trailingActivatePct: 30, trailingDropPct: 20, momentumFloorEnabled: false });
+    expect(result).toBe('TAKE_PROFIT');
+  });
+
+  it('does not trigger TAKE_PROFIT at +49.99%', () => {
+    const state = makePegState({ currentPnLPct: 49.99 });
+    const result = evaluatePaperExitGuard({ state, hardStopPct: -25, takeProfitPct: 50, trailingActivatePct: 30, trailingDropPct: 20, momentumFloorEnabled: false });
+    expect(result).toBeNull();
+  });
+});
+
+// Test 4: TRAILING_STOP activates after +30% peak and exits after 20-point drop
+describe('evaluatePaperExitGuard — TRAILING_STOP', () => {
+  it('does not trigger trailing stop when trailingActive is false', () => {
+    const state = makePegState({ currentPnLPct: 5, peakPnLPct: 35, trailingActive: false });
+    const result = evaluatePaperExitGuard({ state, hardStopPct: -25, takeProfitPct: 50, trailingActivatePct: 30, trailingDropPct: 20, momentumFloorEnabled: false });
+    expect(result).toBeNull();
+  });
+
+  it('triggers TRAILING_STOP when trailingActive and current drops 25pts from peak of 35', () => {
+    const state = makePegState({ currentPnLPct: 10, peakPnLPct: 35, trailingActive: true });
+    // 35 - 20 = 15; currentPnLPct 10 <= 15 → TRAILING_STOP
+    const result = evaluatePaperExitGuard({ state, hardStopPct: -25, takeProfitPct: 50, trailingActivatePct: 30, trailingDropPct: 20, momentumFloorEnabled: false });
+    expect(result).toBe('TRAILING_STOP');
+  });
+
+  it('does not trigger TRAILING_STOP when drop is below threshold', () => {
+    const state = makePegState({ currentPnLPct: 16, peakPnLPct: 35, trailingActive: true });
+    // 35 - 20 = 15; currentPnLPct 16 > 15 → no exit
+    const result = evaluatePaperExitGuard({ state, hardStopPct: -25, takeProfitPct: 50, trailingActivatePct: 30, trailingDropPct: 20, momentumFloorEnabled: false });
+    expect(result).toBeNull();
+  });
+
+  it('updatePaperExitState activates trailing when peak reaches trailingActivatePct', () => {
+    let state: PaperExitState = { checksRun: 0, trailingActive: false };
+    state = updatePaperExitState(state, 1.35, 1.0, 30);
+    expect(state.trailingActive).toBe(true);
+    expect(state.peakPnLPct).toBeCloseTo(35, 5);
+    expect(state.checksRun).toBe(1);
+  });
+
+  it('trailing does not activate when peak is below trailingActivatePct', () => {
+    let state: PaperExitState = { checksRun: 0, trailingActive: false };
+    state = updatePaperExitState(state, 1.25, 1.0, 30);
+    expect(state.trailingActive).toBe(false);
+    expect(state.peakPnLPct).toBeCloseTo(25, 5);
+  });
+
+  it('trailing full cycle: +35% activates, drop to +10% triggers TRAILING_STOP', () => {
+    const entryPrice = 1.0;
+    let state: PaperExitState = { checksRun: 0, trailingActive: false };
+
+    state = updatePaperExitState(state, 1.35, entryPrice, 30);
+    expect(state.trailingActive).toBe(true);
+    let exit = evaluatePaperExitGuard({ state, hardStopPct: -25, takeProfitPct: 50, trailingActivatePct: 30, trailingDropPct: 20, momentumFloorEnabled: false });
+    expect(exit).toBeNull();
+
+    state = updatePaperExitState(state, 1.10, entryPrice, 30);
+    exit = evaluatePaperExitGuard({ state, hardStopPct: -25, takeProfitPct: 50, trailingActivatePct: 30, trailingDropPct: 20, momentumFloorEnabled: false });
+    expect(exit).toBe('TRAILING_STOP');
+  });
+});
+
+// Test 5: MOMENTUM_FLOOR exits when current price falls below confirmation price
+describe('evaluatePaperExitGuard — MOMENTUM_FLOOR', () => {
+  it('triggers MOMENTUM_FLOOR when currentPrice < confirmPrice', () => {
+    const state = makePegState({ currentPrice: 0.0009, currentPnLPct: -10 });
+    const result = evaluatePaperExitGuard({
+      state, hardStopPct: -25, takeProfitPct: 50, trailingActivatePct: 30, trailingDropPct: 20,
+      momentumFloorEnabled: true, confirmPrice: 0.001,
+    });
+    expect(result).toBe('MOMENTUM_FLOOR');
+  });
+
+  it('does not trigger MOMENTUM_FLOOR when currentPrice >= confirmPrice', () => {
+    const state = makePegState({ currentPrice: 0.001, currentPnLPct: 0 });
+    const result = evaluatePaperExitGuard({
+      state, hardStopPct: -25, takeProfitPct: 50, trailingActivatePct: 30, trailingDropPct: 20,
+      momentumFloorEnabled: true, confirmPrice: 0.001,
+    });
+    expect(result).toBeNull();
+  });
+
+  it('falls through to HARD_STOP (not MOMENTUM_FLOOR) when flag is disabled', () => {
+    const state = makePegState({ currentPrice: 0.0005, currentPnLPct: -50 });
+    const result = evaluatePaperExitGuard({
+      state, hardStopPct: -25, takeProfitPct: 50, trailingActivatePct: 30, trailingDropPct: 20,
+      momentumFloorEnabled: false, confirmPrice: 0.001,
+    });
+    expect(result).toBe('HARD_STOP');
+  });
+
+  it('does not trigger MOMENTUM_FLOOR when confirmPrice is not provided', () => {
+    const state = makePegState({ currentPrice: 0.0005, currentPnLPct: -10 });
+    const result = evaluatePaperExitGuard({
+      state, hardStopPct: -25, takeProfitPct: 50, trailingActivatePct: 30, trailingDropPct: 20,
+      momentumFloorEnabled: true, confirmPrice: undefined,
+    });
+    expect(result).toBeNull();
+  });
+});
+
+// Test 6: MAX_HOLD returns when no other exit hit
+describe('evaluatePaperExitGuard — MAX_HOLD via loop exhaustion', () => {
+  it('returns null when no condition met — caller assigns MAX_HOLD', () => {
+    const state = makePegState({ currentPnLPct: 10, peakPnLPct: 10, trailingActive: false });
+    const result = evaluatePaperExitGuard({ state, hardStopPct: -25, takeProfitPct: 50, trailingActivatePct: 30, trailingDropPct: 20, momentumFloorEnabled: false });
+    expect(result).toBeNull();
+  });
+
+  it('simulates full loop without exit → caller assigns MAX_HOLD', () => {
+    const entryPrice = 1.0;
+    let state: PaperExitState = { checksRun: 0, trailingActive: false };
+    const prices = [1.05, 1.10, 1.08];
+    let exitReason: string | null = null;
+
+    for (let i = 0; i < prices.length; i++) {
+      state = updatePaperExitState(state, prices[i]!, entryPrice, 30);
+      exitReason = evaluatePaperExitGuard({ state, hardStopPct: -25, takeProfitPct: 50, trailingActivatePct: 30, trailingDropPct: 20, momentumFloorEnabled: false });
+      if (exitReason !== null) break;
+    }
+    if (exitReason === null) exitReason = 'MAX_HOLD';
+    expect(exitReason).toBe('MAX_HOLD');
+    expect(state.checksRun).toBe(3);
+  });
+});
+
+// Test 7: Paper exit guard does not run when no PLAN_ONLY
+describe('Paper Exit Guard — guard not active when no PLAN_ONLY', () => {
+  it('LiveHarnessSummary without tradePlan has no paperExitGuard', () => {
+    const readiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+    const summary = makeBaseSummary(readiness, {
+      status: 'NO_TRADE',
+      decision: 'NO_BUY',
+      watchCycle: true,
+      watchCycleSkipped: true,
+      watchCycleSkipReason: 'No PLAN_ONLY trade plan was created.',
+    });
+    expect(summary.tradePlan).toBeUndefined();
+    expect(summary.paperExitGuard).toBeUndefined();
+  });
+
+  it('paperExitGuardEnabled is absent in default summary', () => {
+    const readiness: LiveReadinessReport = { status: 'DRY_RUN_ONLY', gates: [], allGatesPassed: false };
+    const summary = makeBaseSummary(readiness, { status: 'DRY_RUN_ONLY', decision: 'FAKE_BUY' });
+    expect(summary.paperExitGuardEnabled).toBeUndefined();
+    expect(summary.paperExitGuard).toBeUndefined();
+  });
+});
+
+// Test 8: Existing watch-cycle behavior unchanged without --paper-exit-guard
+describe('Paper Exit Guard — standard watch-cycle unaffected when guard absent', () => {
+  it('summary with watchCycle but no paperExitGuard still has fakePnL', () => {
+    const fakePnL = {
+      outcome: 'GAIN' as const,
+      fakePositionSize: 1,
+      fakeEntryPrice: 0.001,
+      fakeExitPrice: 0.002,
+      fakeTokensHeld: 1000,
+      fakeEndingValue: 2,
+      pnlDollars: 1,
+      pnlPct: 100,
+      endingBankroll: 21,
+    };
+    const readiness: LiveReadinessReport = { status: 'DRY_RUN_ONLY', gates: [], allGatesPassed: false };
+    const summary = makeBaseSummary(readiness, {
+      status: 'DRY_RUN_ONLY',
+      decision: 'FAKE_BUY',
+      watchCycle: true,
+      exitSnapshotPath: 'data/token-grab/live-harness/session-20260606-1800-exit.json',
+      fakePnL,
+    });
+    expect(summary.paperExitGuard).toBeUndefined();
+    expect(summary.fakePnL?.outcome).toBe('GAIN');
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('Fake P/L');
+    expect(rendered).not.toContain('Paper Exit Guard');
+  });
+});
+
+// Test 9: Rendered report includes Paper Exit Guard section
+describe('renderLiveHarnessReport — Paper Exit Guard section', () => {
+  it('renders Paper Exit Guard section when paperExitGuardEnabled is true', () => {
+    const readiness: LiveReadinessReport = { status: 'DRY_RUN_ONLY', gates: [], allGatesPassed: false };
+    const peg = makePegSummary({ exitReason: 'HARD_STOP', exitPnLPct: -28, peakPnLPct: 5 });
+    const summary = makeBaseSummary(readiness, {
+      status: 'DRY_RUN_ONLY',
+      decision: 'FAKE_BUY',
+      watchCycle: true,
+      paperExitGuardEnabled: true,
+      paperExitGuard: peg,
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('Paper Exit Guard');
+    expect(rendered).toContain('HARD_STOP');
+    expect(rendered).toContain('PAPER-ONLY');
+  });
+
+  it('does not render Paper Exit Guard section when paperExitGuardEnabled is absent', () => {
+    const readiness: LiveReadinessReport = { status: 'DRY_RUN_ONLY', gates: [], allGatesPassed: false };
+    const summary = makeBaseSummary(readiness, { status: 'DRY_RUN_ONLY', decision: 'FAKE_BUY' });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).not.toContain('Paper Exit Guard');
+  });
+
+  it('renders exit P/L and peak P/L with sign in Paper Exit Guard section', () => {
+    const readiness: LiveReadinessReport = { status: 'DRY_RUN_ONLY', gates: [], allGatesPassed: false };
+    const peg = makePegSummary({ exitPnLPct: -52.39, peakPnLPct: 3.14, exitReason: 'HARD_STOP' });
+    const summary = makeBaseSummary(readiness, {
+      status: 'DRY_RUN_ONLY',
+      decision: 'FAKE_BUY',
+      watchCycle: true,
+      paperExitGuardEnabled: true,
+      paperExitGuard: peg,
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('-52.39%');
+    expect(rendered).toContain('+3.14%');
+  });
+
+  it('renderPaperExitGuardSummary renders all thresholds and safety line', () => {
+    const peg = makePegSummary({ exitReason: 'TAKE_PROFIT', exitPnLPct: 55, peakPnLPct: 58 });
+    const rendered = renderPaperExitGuardSummary(peg);
+    expect(rendered).toContain('TAKE_PROFIT');
+    expect(rendered).toContain('Hard stop');
+    expect(rendered).toContain('Take profit');
+    expect(rendered).toContain('Trailing activates');
+    expect(rendered).toContain('Trailing drop');
+    expect(rendered).toContain('Momentum floor');
+    expect(rendered).toContain('NO REAL TRADE SENT');
+  });
+});
+
+// Test 10: Report includes NO REAL TRADE SENT in Paper Exit Guard section
+describe('Paper Exit Guard — NO REAL TRADE SENT always present', () => {
+  it('renderPaperExitGuardSummary always contains NO REAL TRADE SENT', () => {
+    const rendered = renderPaperExitGuardSummary(makePegSummary());
+    expect(rendered).toContain('NO REAL TRADE SENT');
+  });
+
+  it('renderLiveHarnessReport with paperExitGuard contains NO REAL TRADE SENT', () => {
+    const readiness: LiveReadinessReport = { status: 'DRY_RUN_ONLY', gates: [], allGatesPassed: false };
+    const summary = makeBaseSummary(readiness, {
+      status: 'DRY_RUN_ONLY',
+      decision: 'FAKE_BUY',
+      watchCycle: true,
+      paperExitGuardEnabled: true,
+      paperExitGuard: makePegSummary(),
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('NO REAL TRADE SENT');
+    expect(rendered).toContain('token:auto-paper was NOT run');
+  });
+});
+
+// Test 11: No LIVE_EXECUTED in Paper Exit Guard output
+describe('Paper Exit Guard — no LIVE_EXECUTED', () => {
+  it('renderPaperExitGuardSummary never contains LIVE_EXECUTED', () => {
+    const rendered = renderPaperExitGuardSummary(makePegSummary({ exitReason: 'TRAILING_STOP' }));
+    expect(rendered).not.toMatch(/LIVE_EXECUTED/);
+  });
+
+  it('renderLiveHarnessReport with paperExitGuard never contains LIVE_EXECUTED', () => {
+    const readiness: LiveReadinessReport = { status: 'DRY_RUN_ONLY', gates: [], allGatesPassed: false };
+    const summary = makeBaseSummary(readiness, {
+      status: 'DRY_RUN_ONLY',
+      decision: 'FAKE_BUY',
+      watchCycle: true,
+      paperExitGuardEnabled: true,
+      paperExitGuard: makePegSummary({ exitReason: 'MAX_HOLD' }),
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).not.toMatch(/LIVE_EXECUTED/);
+  });
+
+  it('PaperExitGuardSummary type does not include LIVE_EXECUTED field', () => {
+    const peg = makePegSummary();
+    expect('LIVE_EXECUTED' in peg).toBe(false);
+    expect(peg.exitReason).not.toBe('LIVE_EXECUTED');
+  });
+});
+
+// Test 12: No wallet/private key/swap/signing in Paper Exit Guard output
+describe('Paper Exit Guard — safety patterns absent', () => {
+  it('renderPaperExitGuardSummary contains no signing/swap/key patterns', () => {
+    const rendered = renderPaperExitGuardSummary(makePegSummary());
+    expect(rendered).not.toMatch(/(?:private|secret)[\s_]?key\s*[=({]/i);
+    expect(rendered).not.toMatch(/signTransaction\s*\(/i);
+    expect(rendered).not.toMatch(/sendTransaction\s*\(/i);
+    expect(rendered).not.toMatch(/executeSwap\s*\(/i);
+    expect(rendered).not.toMatch(/wallet\.connect\s*\(/i);
+    expect(rendered).not.toMatch(/swap\s*\(/i);
+  });
+
+  it('renderLiveHarnessReport with paperExitGuard has no signing/swap/key/LIVE_EXECUTED patterns', () => {
+    const readiness: LiveReadinessReport = { status: 'DRY_RUN_ONLY', gates: [], allGatesPassed: false };
+    const summary = makeBaseSummary(readiness, {
+      status: 'DRY_RUN_ONLY',
+      decision: 'FAKE_BUY',
+      watchCycle: true,
+      paperExitGuardEnabled: true,
+      paperExitGuard: makePegSummary(),
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).not.toMatch(/(?:private|secret)[\s_]?key\s*[=({]/i);
+    expect(rendered).not.toMatch(/signTransaction\s*\(/i);
+    expect(rendered).not.toMatch(/sendTransaction\s*\(/i);
+    expect(rendered).not.toMatch(/executeSwap\s*\(/i);
+    expect(rendered).not.toMatch(/wallet\.connect\s*\(/i);
+    expect(rendered).not.toMatch(/LIVE_EXECUTED/);
+    expect(rendered).toContain('NOT AUTONOMOUS');
+    expect(rendered).toContain('NO REAL TRADE SENT');
+    expect(rendered).toContain('token:auto-paper was NOT run');
+  });
+
+  it('noRealTradeSent field is literally true in PaperExitGuardSummary', () => {
+    const peg = makePegSummary();
+    expect(peg.noRealTradeSent).toBe(true);
   });
 });

@@ -88,9 +88,14 @@ import {
   evaluateLiveReadinessGates,
   evaluateEntryConfirmation,
   renderLiveHarnessReport,
+  updatePaperExitState,
+  evaluatePaperExitGuard,
   type LiveTradePlan,
   type LiveHarnessSummary,
   type EntryConfirmationResult,
+  type PaperExitGuardSummary,
+  type PaperExitState,
+  type PaperExitReason,
 } from './token-grab/liveHarness';
 import readline from 'node:readline';
 
@@ -1079,6 +1084,13 @@ async function main(): Promise<void> {
         const confirmMaxDrawdownPct = parseNumberArg('--confirm-max-drawdown-pct', -10);
         const confirmMinConfirmedLiquidityUsd = parseNumberArg('--confirm-min-confirmed-liquidity', 2500, { min: 0 });
         const jsonMode = process.argv.includes('--json');
+        const paperExitGuardEnabled = process.argv.includes('--paper-exit-guard');
+        const paperExitIntervalSeconds = parseNumberArg('--paper-exit-interval-seconds', 60, { min: 1 });
+        const paperExitHardStopPct = parseNumberArg('--paper-exit-hard-stop-pct', -25);
+        const paperExitTakeProfitPct = parseNumberArg('--paper-exit-take-profit-pct', 50);
+        const paperExitTrailingActivatePct = parseNumberArg('--paper-exit-trailing-activate-pct', 30);
+        const paperExitTrailingDropPct = parseNumberArg('--paper-exit-trailing-drop-pct', 20);
+        const paperExitMomentumFloor = process.argv.includes('--paper-exit-momentum-floor');
 
         // V1 hard cap — fail-fast before any network calls
         assertMaxLivePosition(maxLivePosition);
@@ -1344,6 +1356,7 @@ async function main(): Promise<void> {
         let watchCyclePnL: LiveAssistedPnL | undefined;
         let watchCycleSkipped = false;
         let watchCycleSkipReason: string | undefined;
+        let paperExitGuardResult: PaperExitGuardSummary | undefined;
 
         if (watchCycle) {
           if (!tradePlan) {
@@ -1351,21 +1364,96 @@ async function main(): Promise<void> {
             watchCycleSkipReason = 'No PLAN_ONLY trade plan was created.';
             console.log('[watch-cycle] Skipped — No PLAN_ONLY trade plan was created.');
             console.log('');
-          } else if (liveSelected.hasWatchWorthy) {
-            if (!skipSleep) {
-              console.log(`[watch-cycle] Sleeping ${watchMinutes} minute(s) before exit snapshot...`);
-              await sleep(watchMinutes * 60 * 1000);
+          } else if (liveSelected.hasWatchWorthy && chosen) {
+            const entryPrice = tradePlan.entryPrice;
+            const confirmPriceForFloor = entryConfirmation?.confirmPrice ?? undefined;
+
+            if (paperExitGuardEnabled) {
+              // Paper exit guard: interval-based simulation
+              const maxChecks = Math.max(1, Math.ceil((watchMinutes * 60) / paperExitIntervalSeconds));
+              console.log(`[paper-exit-guard] Starting interval simulation: ${maxChecks} checks × ${paperExitIntervalSeconds}s`);
+
+              let pegState: PaperExitState = { checksRun: 0, trailingActive: false };
+              let pegReason: PaperExitReason | null = null;
+
+              for (let i = 0; i < maxChecks; i++) {
+                if (!skipSleep) {
+                  await sleep(paperExitIntervalSeconds * 1000);
+                }
+
+                const checkResult = await fetchSessionSnapshots({ candidates: [chosen.candidate], delayMs });
+                const checkSnap = checkResult.snapshots.find(s => s.candidateId === chosen.candidate.id);
+
+                if (checkSnap?.priceUsd) {
+                  pegState = updatePaperExitState(pegState, checkSnap.priceUsd, entryPrice, paperExitTrailingActivatePct);
+                  pegReason = evaluatePaperExitGuard({
+                    state: pegState,
+                    hardStopPct: paperExitHardStopPct,
+                    takeProfitPct: paperExitTakeProfitPct,
+                    trailingActivatePct: paperExitTrailingActivatePct,
+                    trailingDropPct: paperExitTrailingDropPct,
+                    momentumFloorEnabled: paperExitMomentumFloor,
+                    confirmPrice: confirmPriceForFloor,
+                  });
+                  const sign = (pegState.currentPnLPct ?? 0) >= 0 ? '+' : '';
+                  console.log(`[paper-exit-guard] check ${i + 1}/${maxChecks}: P/L ${sign}${(pegState.currentPnLPct ?? 0).toFixed(2)}% trailing=${pegState.trailingActive}`);
+                } else {
+                  pegState = { ...pegState, checksRun: pegState.checksRun + 1 };
+                  console.log(`[paper-exit-guard] check ${i + 1}/${maxChecks}: price unavailable`);
+                }
+
+                if (pegReason !== null) {
+                  console.log(`[paper-exit-guard] Exit triggered: ${pegReason}`);
+                  break;
+                }
+              }
+
+              if (pegReason === null) pegReason = 'MAX_HOLD';
+
+              paperExitGuardResult = {
+                enabled: true,
+                intervalSeconds: paperExitIntervalSeconds,
+                checksRun: pegState.checksRun,
+                exitReason: pegReason,
+                entryPrice,
+                confirmPrice: confirmPriceForFloor,
+                exitPrice: pegState.currentPrice,
+                exitPnLPct: pegState.currentPnLPct,
+                peakPrice: pegState.peakPrice,
+                peakPnLPct: pegState.peakPnLPct,
+                hardStopPct: paperExitHardStopPct,
+                takeProfitPct: paperExitTakeProfitPct,
+                trailingActivatePct: paperExitTrailingActivatePct,
+                trailingDropPct: paperExitTrailingDropPct,
+                momentumFloorEnabled: paperExitMomentumFloor,
+                noRealTradeSent: true,
+              };
+
+              // Also record a final exit snapshot for the record
+              exitSnapshotPath = `${outDir}/session-${ts}-exit.json`;
+              const lastCheckResult = await fetchSessionSnapshots({ candidates: liveSelected.candidates, delayMs });
+              writeSnapshotFile(exitSnapshotPath, lastCheckResult.snapshots);
+
+              if (pegState.currentPnLPct != null) {
+                const sign = pegState.currentPnLPct >= 0 ? '+' : '';
+                console.log(`[paper-exit-guard] Exit P/L: ${sign}${pegState.currentPnLPct.toFixed(2)}% reason=${pegReason}`);
+              }
+              console.log('');
             } else {
-              console.log('[watch-cycle] skip-sleep: proceeding immediately to exit snapshot');
-            }
+              // Standard watch-cycle: single sleep + exit snapshot
+              if (!skipSleep) {
+                console.log(`[watch-cycle] Sleeping ${watchMinutes} minute(s) before exit snapshot...`);
+                await sleep(watchMinutes * 60 * 1000);
+              } else {
+                console.log('[watch-cycle] skip-sleep: proceeding immediately to exit snapshot');
+              }
 
-            exitSnapshotPath = `${outDir}/session-${ts}-exit.json`;
-            console.log('[watch-cycle] Fetching exit snapshots...');
-            const exitResult = await fetchSessionSnapshots({ candidates: liveSelected.candidates, delayMs });
-            writeSnapshotFile(exitSnapshotPath, exitResult.snapshots);
-            console.log(`[watch-cycle] Exit snapshots: ${exitResult.snapshots.length} written, ${exitResult.skipped} skipped.`);
+              exitSnapshotPath = `${outDir}/session-${ts}-exit.json`;
+              console.log('[watch-cycle] Fetching exit snapshots...');
+              const exitResult = await fetchSessionSnapshots({ candidates: liveSelected.candidates, delayMs });
+              writeSnapshotFile(exitSnapshotPath, exitResult.snapshots);
+              console.log(`[watch-cycle] Exit snapshots: ${exitResult.snapshots.length} written, ${exitResult.skipped} skipped.`);
 
-            if (chosen) {
               const exitSnap = exitResult.snapshots.find(s => s.candidateId === chosen.candidate.id);
               const fakeTokensHeld = tradePlan.maxLivePosition / tradePlan.entryPrice;
               watchCyclePnL = calculateFakePnL(
@@ -1381,8 +1469,8 @@ async function main(): Promise<void> {
               } else {
                 console.log('[watch-cycle] Exit price unavailable — P/L unknown');
               }
+              console.log('');
             }
-            console.log('');
           }
         }
 
@@ -1416,6 +1504,8 @@ async function main(): Promise<void> {
           confirmMinutes,
           confirmSnapshotPath,
           entryConfirmation,
+          paperExitGuardEnabled: paperExitGuardEnabled || undefined,
+          paperExitGuard: paperExitGuardResult,
         };
 
         emitSummary(finalSummary);
