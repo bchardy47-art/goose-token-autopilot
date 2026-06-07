@@ -82,6 +82,7 @@
     "token:ears-dex": "tsx src/cli.ts token:ears-dex",
     "token:ears-dex-watch": "tsx src/cli.ts token:ears-dex-watch",
     "token:dex-watch-summary": "tsx src/cli.ts token:dex-watch-summary",
+    "token:dex-watch-candidates": "tsx src/cli.ts token:dex-watch-candidates",
     "test": "vitest run"
   },
   "dependencies": {
