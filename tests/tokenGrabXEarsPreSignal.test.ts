@@ -6,10 +6,12 @@ import {
   matchPreSignalToCandidate,
   matchAllPreSignals,
   buildPreSignalReport,
+  buildPreSignalBridge,
   renderPreSignalReport,
   type PreSignal,
   type PreSignalCandidate,
   type PreSignalReport,
+  type BridgeCandidate,
 } from '../src/token-grab/xEarsPreSignal';
 
 // ── Factories ─────────────────────────────────────────────────────────────────
@@ -604,5 +606,179 @@ describe('xEarsPreSignal — no wallet/private key/swap/signing', () => {
     const report = makeReport();
     expect(report.readOnly).toBe(true);
     expect(report.tradingExecuted).toBe(0);
+  });
+});
+
+// ── Bridge tests (live-harness integration) ───────────────────────────────────
+
+function makeBridgeCandidate(overrides: Partial<BridgeCandidate> = {}): BridgeCandidate {
+  return { ticker: 'TEST', name: 'Test Token', contract: undefined, ...overrides };
+}
+
+describe('buildPreSignalBridge — no signals', () => {
+  it('returns empty bridge when no signals provided', () => {
+    const bridge = buildPreSignalBridge([], [makeBridgeCandidate()], 'presignals.json');
+    expect(bridge.signalsLoaded).toBe(0);
+    expect(bridge.matchCount).toBe(0);
+    expect(bridge.matchedCandidates).toHaveLength(0);
+    expect(bridge.watchOnly).toBe(true);
+    expect(bridge.readOnly).toBe(true);
+    expect(bridge.tradingExecuted).toBe(0);
+  });
+
+  it('returns empty bridge when no candidates provided', () => {
+    const bridge = buildPreSignalBridge([makeSignal()], [], 'presignals.json');
+    expect(bridge.signalsLoaded).toBe(1);
+    expect(bridge.matchCount).toBe(0);
+    expect(bridge.matchedCandidates).toHaveLength(0);
+  });
+
+  it('returns empty bridge when both empty', () => {
+    const bridge = buildPreSignalBridge([], [], 'presignals.json');
+    expect(bridge.signalsLoaded).toBe(0);
+    expect(bridge.matchCount).toBe(0);
+  });
+});
+
+describe('buildPreSignalBridge — contract match', () => {
+  it('annotates candidate when contract matches exactly (STRONG)', () => {
+    const contract = '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU';
+    const signal = makeSignal({ contract, symbol: 'NOMATCH_X1', name: 'NOMATCH Name A' });
+    const candidate = makeBridgeCandidate({ ticker: 'GOOSE', contract });
+    const bridge = buildPreSignalBridge([signal], [candidate], 'presignals.json');
+    expect(bridge.matchCount).toBe(1);
+    expect(bridge.matchedCandidates[0]?.candidateTicker).toBe('GOOSE');
+    expect(bridge.matchedCandidates[0]?.matchReason).toBe('EXACT_CONTRACT');
+    expect(bridge.matchedCandidates[0]?.matchStrength).toBe('STRONG');
+    expect(bridge.matchedCandidates[0]?.watchOnly).toBe(true);
+    expect(bridge.matchedCandidates[0]?.planOnlyNotGranted).toBe(true);
+  });
+
+  it('prefers STRONG contract match over MEDIUM symbol match when both apply', () => {
+    const contract = '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU';
+    const sigContract = makeSignal({ id: 'sig-c', contract, symbol: 'GOOSE', name: 'NOMATCH' });
+    const sigSymbol = makeSignal({ id: 'sig-s', contract: null, symbol: 'GOOSE', name: 'NOMATCH' });
+    const candidate = makeBridgeCandidate({ ticker: 'GOOSE', contract });
+    const bridge = buildPreSignalBridge([sigContract, sigSymbol], [candidate], 'presignals.json');
+    expect(bridge.matchCount).toBe(1);
+    expect(bridge.matchedCandidates[0]?.matchStrength).toBe('STRONG');
+    expect(bridge.matchedCandidates[0]?.matchReason).toBe('EXACT_CONTRACT');
+  });
+});
+
+describe('buildPreSignalBridge — symbol match', () => {
+  it('annotates candidate when ticker matches signal symbol', () => {
+    const signal = makeSignal({ symbol: '$FROGAI', contract: null, name: 'NOMATCH AAA' });
+    const candidate = makeBridgeCandidate({ ticker: 'FROGAI', name: 'NOMATCH BBB', contract: undefined });
+    const bridge = buildPreSignalBridge([signal], [candidate], 'presignals.json');
+    expect(bridge.matchCount).toBe(1);
+    expect(bridge.matchedCandidates[0]?.matchReason).toBe('SYMBOL_MATCH');
+    expect(bridge.matchedCandidates[0]?.matchStrength).toBe('MEDIUM');
+    expect(bridge.matchedCandidates[0]?.candidateTicker).toBe('FROGAI');
+  });
+
+  it('annotates multiple candidates when multiple symbols match', () => {
+    const signals = [
+      makeSignal({ id: 's1', symbol: 'ALPHA', contract: null, name: 'NOMATCH 1' }),
+      makeSignal({ id: 's2', symbol: 'BETA', contract: null, name: 'NOMATCH 2' }),
+    ];
+    const candidates = [
+      makeBridgeCandidate({ ticker: 'ALPHA', name: 'NOMATCH A', contract: undefined }),
+      makeBridgeCandidate({ ticker: 'BETA', name: 'NOMATCH B', contract: undefined }),
+      makeBridgeCandidate({ ticker: 'GAMMA', name: 'NOMATCH C', contract: undefined }),
+    ];
+    const bridge = buildPreSignalBridge(signals, candidates, 'presignals.json');
+    expect(bridge.matchCount).toBe(2);
+    const tickers = bridge.matchedCandidates.map(m => m.candidateTicker);
+    expect(tickers).toContain('ALPHA');
+    expect(tickers).toContain('BETA');
+    expect(tickers).not.toContain('GAMMA');
+  });
+
+  it('stores signalSource and signalConfidence on match', () => {
+    const signal = makeSignal({ symbol: 'GOOSE', source: 'news_manual', confidence: 'high', contract: null, name: 'NOMATCH' });
+    const candidate = makeBridgeCandidate({ ticker: 'GOOSE' });
+    const bridge = buildPreSignalBridge([signal], [candidate], 'presignals.json');
+    expect(bridge.matchedCandidates[0]?.signalSource).toBe('news_manual');
+    expect(bridge.matchedCandidates[0]?.signalConfidence).toBe('high');
+  });
+});
+
+describe('buildPreSignalBridge — PRE_SIGNAL_MATCH is WATCH ONLY', () => {
+  it('planOnlyNotGranted is always true on every match', () => {
+    const signals = [
+      makeSignal({ symbol: 'ALPHA', contract: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU' }),
+      makeSignal({ id: 's2', symbol: 'BETA', contract: null, name: 'NOMATCH B' }),
+    ];
+    const candidates = [
+      makeBridgeCandidate({ ticker: 'ALPHA', contract: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU' }),
+      makeBridgeCandidate({ ticker: 'BETA', name: 'NOMATCH B', contract: undefined }),
+    ];
+    const bridge = buildPreSignalBridge(signals, candidates, 'presignals.json');
+    for (const m of bridge.matchedCandidates) {
+      expect(m.planOnlyNotGranted).toBe(true);
+      expect(m.watchOnly).toBe(true);
+    }
+  });
+
+  it('bridge readOnly is always true', () => {
+    const bridge = buildPreSignalBridge(
+      [makeSignal({ symbol: 'GOOSE', contract: null })],
+      [makeBridgeCandidate({ ticker: 'GOOSE' })],
+      'presignals.json',
+    );
+    expect(bridge.readOnly).toBe(true);
+    expect(bridge.tradingExecuted).toBe(0);
+  });
+
+  it('bridge JSON never contains LIVE_EXECUTED', () => {
+    const bridge = buildPreSignalBridge(
+      [makeSignal({ symbol: 'GOOSE', contract: null })],
+      [makeBridgeCandidate({ ticker: 'GOOSE' })],
+      'presignals.json',
+    );
+    expect(JSON.stringify(bridge)).not.toMatch(/LIVE_EXECUTED/);
+  });
+
+  it('bridge JSON never contains wallet/signing/swap patterns', () => {
+    const bridge = buildPreSignalBridge(
+      [makeSignal({ symbol: 'GOOSE', contract: null })],
+      [makeBridgeCandidate({ ticker: 'GOOSE' })],
+      'presignals.json',
+    );
+    const json = JSON.stringify(bridge);
+    expect(json).not.toMatch(/signTransaction/i);
+    expect(json).not.toMatch(/sendTransaction/i);
+    expect(json).not.toMatch(/executeSwap/i);
+    expect(json).not.toMatch(/wallet\.connect/i);
+    expect(json).not.toMatch(/privateKey/i);
+  });
+});
+
+describe('buildPreSignalBridge — confirmation gates still required', () => {
+  it('bridge does not include a PLAN_ONLY field or status', () => {
+    const bridge = buildPreSignalBridge(
+      [makeSignal({ symbol: 'GOOSE', contract: null })],
+      [makeBridgeCandidate({ ticker: 'GOOSE' })],
+      'presignals.json',
+    );
+    const json = JSON.stringify(bridge);
+    expect(json).not.toContain('PLAN_ONLY');
+  });
+
+  it('bridge signalsPath is recorded correctly', () => {
+    const bridge = buildPreSignalBridge([], [], 'data/token-grab/x-ears/presignals.json');
+    expect(bridge.signalsPath).toBe('data/token-grab/x-ears/presignals.json');
+  });
+
+  it('one match per candidate even if multiple signals match', () => {
+    const signals = [
+      makeSignal({ id: 'sig-a', symbol: 'GOOSE', contract: null, name: 'NOMATCH A' }),
+      makeSignal({ id: 'sig-b', symbol: 'GOOSE', contract: null, name: 'NOMATCH B' }),
+    ];
+    const candidate = makeBridgeCandidate({ ticker: 'GOOSE' });
+    const bridge = buildPreSignalBridge(signals, [candidate], 'presignals.json');
+    expect(bridge.matchCount).toBe(1);
+    expect(bridge.matchedCandidates).toHaveLength(1);
   });
 });
