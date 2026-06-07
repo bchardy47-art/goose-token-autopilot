@@ -6,6 +6,7 @@ import {
   filterByKeywords,
   buildRssAdapterReport,
   renderRssAdapterReport,
+  passesQualityFilter,
 } from '../src/token-grab/rssEarsAdapter';
 import type { RssAdapterInput, FeedResult, RssFeedItem } from '../src/token-grab/rssEarsAdapter';
 import type { PreSignal } from '../src/token-grab/xEarsPreSignal';
@@ -321,5 +322,138 @@ describe('renderRssAdapterReport', () => {
     expect(rendered).not.toContain('privateKey');
     expect(rendered).not.toContain('signTransaction');
     expect(rendered).not.toContain('sendTransaction');
+  });
+});
+
+// ── passesQualityFilter ───────────────────────────────────────────────────────
+
+describe('passesQualityFilter', () => {
+  it('rejects generic crypto headline with no launch evidence', () => {
+    const item: RssFeedItem = {
+      title: 'Bitcoin price drops 5% amid market uncertainty',
+      description: 'Crypto markets see broad selloff as investors take profits.',
+    };
+    const result = passesQualityFilter(item);
+    expect(result.passed).toBe(false);
+    expect(result.reason).toBe('no_quality_signal');
+  });
+
+  it('accepts Solana token launch mention', () => {
+    const item: RssFeedItem = {
+      title: 'New Solana token launches on Raydium',
+      description: 'Fresh token listed with liquidity added.',
+    };
+    expect(passesQualityFilter(item).passed).toBe(true);
+  });
+
+  it('accepts item with contract address', () => {
+    const item: RssFeedItem = {
+      title: 'CA: 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU just posted',
+      description: 'New contract dropped in signal channel.',
+    };
+    expect(passesQualityFilter(item).passed).toBe(true);
+  });
+
+  it('accepts item with $TICKER symbol', () => {
+    const item: RssFeedItem = {
+      title: 'Whale spotted accumulating $FROGAI',
+      description: 'Large wallet buying up $FROGAI aggressively.',
+    };
+    expect(passesQualityFilter(item).passed).toBe(true);
+  });
+
+  it('accepts meme coin trending with token language', () => {
+    const item: RssFeedItem = {
+      title: 'Viral meme coin surges 500%',
+      description: 'This memecoin is trending across social media.',
+    };
+    expect(passesQualityFilter(item).passed).toBe(true);
+  });
+
+  it('rejects meme/viral without any token language', () => {
+    const item: RssFeedItem = {
+      title: 'Viral meme goes trending on social media',
+      description: 'A funny video about frogs is going viral.',
+    };
+    const result = passesQualityFilter(item);
+    expect(result.passed).toBe(false);
+    expect(result.reason).toBe('meme_without_token_language');
+  });
+
+  it('rejects broad market news with no token evidence', () => {
+    const item: RssFeedItem = {
+      title: 'Fed signals rate hold as inflation cools',
+      description: 'Markets react positively to central bank guidance on interest rates.',
+    };
+    const result = passesQualityFilter(item);
+    expect(result.passed).toBe(false);
+    expect(result.reason).toBe('no_quality_signal');
+  });
+});
+
+// ── buildRssAdapterReport quality tracking ────────────────────────────────────
+
+describe('buildRssAdapterReport quality tracking', () => {
+  it('tracks qualityPassed and qualityRejected counts', () => {
+    // Build a feed with one passing item and one failing item
+    const items: RssFeedItem[] = [
+      { title: 'New $GOOSE token launches on Raydium', description: 'Listed with liquidity.' },
+      { title: 'Bitcoin market update', description: 'BTC trades sideways.' },
+    ];
+    const input = makeAdapterInput({
+      feedResults: [{
+        feed: { name: 'Test', url: 'https://test.com', source: 'news_manual' },
+        items,
+      }],
+      config: { feeds: [], keywords: ['launch', 'market', 'trades', 'token', 'GOOSE'], maxItemsPerFeed: 20 },
+    });
+    const report = buildRssAdapterReport(input);
+    expect(report.qualityPassed).toBeGreaterThan(0);
+    expect(report.qualityRejected).toBeGreaterThan(0);
+    expect(report.qualityPassed + report.qualityRejected).toBe(report.keywordMatches);
+  });
+
+  it('populates rejectedReasonCounts for rejected items', () => {
+    const items: RssFeedItem[] = [
+      { title: 'Bitcoin market falls', description: 'Broad crypto selloff continues.' },
+      { title: 'Fed holds rates steady', description: 'No change expected in monetary policy.' },
+    ];
+    const input = makeAdapterInput({
+      feedResults: [{
+        feed: { name: 'Test', url: 'https://test.com', source: 'news_manual' },
+        items,
+      }],
+      config: { feeds: [], keywords: ['market', 'bitcoin', 'crypto', 'rates', 'monetary'], maxItemsPerFeed: 20 },
+    });
+    const report = buildRssAdapterReport(input);
+    expect(report.qualityRejected).toBe(2);
+    expect(report.rejectedReasonCounts['no_quality_signal']).toBe(2);
+  });
+});
+
+// ── renderRssAdapterReport quality lines ──────────────────────────────────────
+
+describe('renderRssAdapterReport quality display', () => {
+  it('shows Quality passed and Quality rejected lines', () => {
+    const report = buildRssAdapterReport(makeAdapterInput());
+    const rendered = renderRssAdapterReport(report);
+    expect(rendered).toContain('Quality passed');
+    expect(rendered).toContain('Quality rejected');
+  });
+
+  it('shows rejection reason breakdown when items are rejected', () => {
+    const items: RssFeedItem[] = [
+      { title: 'Bitcoin market update', description: 'Broad market moves.' },
+    ];
+    const input = makeAdapterInput({
+      feedResults: [{
+        feed: { name: 'Test', url: 'https://test.com', source: 'news_manual' },
+        items,
+      }],
+      config: { feeds: [], keywords: ['market', 'bitcoin', 'broad'], maxItemsPerFeed: 20 },
+    });
+    const report = buildRssAdapterReport(input);
+    const rendered = renderRssAdapterReport(report);
+    expect(rendered).toContain('no_quality_signal');
   });
 });
