@@ -1074,9 +1074,10 @@ async function main(): Promise<void> {
         const watchCycle = process.argv.includes('--watch-cycle');
         const confirmEntry = process.argv.includes('--confirm-entry');
         const confirmMinutes = parseNumberArg('--confirm-minutes', 2, { min: 0.01 });
-        const confirmMinPriceChangePct = parseNumberArg('--confirm-min-price-change-pct', 5);
-        const confirmMinLiquidityChangePct = parseNumberArg('--confirm-min-liquidity-change-pct', 0);
+        const confirmMinPriceChangePct = parseNumberArg('--confirm-min-price-change-pct', confirmEntry ? 20 : 5);
+        const confirmMinLiquidityChangePct = parseNumberArg('--confirm-min-liquidity-change-pct', confirmEntry ? 10 : 0);
         const confirmMaxDrawdownPct = parseNumberArg('--confirm-max-drawdown-pct', -10);
+        const confirmMinConfirmedLiquidityUsd = parseNumberArg('--confirm-min-confirmed-liquidity', 2500, { min: 0 });
         const jsonMode = process.argv.includes('--json');
 
         // V1 hard cap — fail-fast before any network calls
@@ -1183,6 +1184,7 @@ async function main(): Promise<void> {
             skipSleepMode: skipSleep,
             watchCycle: false,
             fakeBankroll,
+            confirmMinConfirmedLiquidityUsd,
             confirmEntry, confirmMinutes,
           };
           emitSummary(summary);
@@ -1248,6 +1250,7 @@ async function main(): Promise<void> {
             minPriceChangePct: confirmMinPriceChangePct,
             minLiquidityChangePct: confirmMinLiquidityChangePct,
             maxDrawdownPct: confirmMaxDrawdownPct,
+            minConfirmedLiquidityUsd: confirmMinConfirmedLiquidityUsd,
           });
 
           console.log(`[confirm-entry] Verdict: ${entryConfirmation.verdict}`);
@@ -1273,6 +1276,7 @@ async function main(): Promise<void> {
               watchCycleSkipped: watchCycle ? true : undefined,
               watchCycleSkipReason: watchCycle ? 'No PLAN_ONLY trade plan was created.' : undefined,
               fakeBankroll,
+              confirmMinConfirmedLiquidityUsd,
               confirmEntry, confirmMinutes, confirmSnapshotPath, entryConfirmation,
             };
             emitSummary(rejSummary);
@@ -1405,6 +1409,7 @@ async function main(): Promise<void> {
           watchCycleSkipped: watchCycleSkipped || undefined,
           watchCycleSkipReason,
           fakeBankroll,
+          confirmMinConfirmedLiquidityUsd,
           exitSnapshotPath,
           fakePnL: watchCyclePnL,
           confirmEntry,

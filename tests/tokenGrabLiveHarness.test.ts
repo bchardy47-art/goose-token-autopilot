@@ -103,6 +103,7 @@ function makeConfirmInput(
     minPriceChangePct: 5,
     minLiquidityChangePct: 0,
     maxDrawdownPct: -10,
+    minConfirmedLiquidityUsd: 2500,
     ...overrides,
   };
 }
@@ -1237,5 +1238,273 @@ describe('watch-cycle skip — safety patterns absent', () => {
     expect(rendered).not.toMatch(/LIVE_EXECUTED/);
     expect(rendered).toContain('NOT AUTONOMOUS');
     expect(rendered).toContain('NO REAL TRADE SENT');
+  });
+});
+
+// ── Confirmed Entry Quality Gate tests (12 required) ─────────────────────────
+
+// Test 1: Stricter price threshold (default 20% when --confirm-entry)
+describe('confirmed entry quality gate — price threshold 20', () => {
+  it('rejects +18% price gain when threshold is 20', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.00118, liquidityUsd: 5200 }),
+      minPriceChangePct: 20,
+    }));
+    expect(result.verdict).toBe('REJECTED_PRICE_WEAK');
+    expect(result.priceChangePct).toBeCloseTo(18, 0);
+  });
+
+  it('passes +22% price gain when threshold is 20', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.00122, liquidityUsd: 5200 }),
+      minPriceChangePct: 20,
+    }));
+    expect(result.verdict).toBe('CONFIRMED');
+  });
+});
+
+// Test 2: Stricter liquidity-change threshold (default 10% when --confirm-entry)
+describe('confirmed entry quality gate — liquidity growth threshold 10', () => {
+  it('rejects +7.29% liquidity growth when threshold is 10 → REJECTED_CONFIRMED_LIQUIDITY_WEAK', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.00122, liquidityUsd: 5365 }), // +7.3% liq, +22% price
+      minPriceChangePct: 20,
+      minLiquidityChangePct: 10,
+    }));
+    expect(result.verdict).toBe('REJECTED_CONFIRMED_LIQUIDITY_WEAK');
+    expect(result.liquidityChangePct).toBeCloseTo(7.3, 0);
+  });
+
+  it('passes +11% liquidity growth when threshold is 10', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.00122, liquidityUsd: 5550 }), // +11% liq, +22% price
+      minPriceChangePct: 20,
+      minLiquidityChangePct: 10,
+    }));
+    expect(result.verdict).toBe('CONFIRMED');
+  });
+});
+
+// Test 3: Default confirmed liquidity threshold is 2500
+describe('confirmed entry quality gate — absolute liquidity floor 2500', () => {
+  it('rejects when confirmLiquidityUsd is below 2500', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.00122, liquidityUsd: 2400 }),
+      minPriceChangePct: 20,
+      minLiquidityChangePct: 0,
+      minConfirmedLiquidityUsd: 2500,
+    }));
+    expect(result.verdict).toBe('REJECTED_CONFIRMED_LIQUIDITY_LOW');
+    expect(result.confirmLiquidityUsd).toBe(2400);
+  });
+
+  it('passes when confirmLiquidityUsd is exactly 2500 with flat liquidity', () => {
+    // entry liq 2400, confirm liq 2500 → +4.17% change (above 0% threshold), floor exactly met
+    const result = evaluateEntryConfirmation({
+      entrySnapshot: makeSnapshot({ priceUsd: 0.001, liquidityUsd: 2400 }),
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.00122, liquidityUsd: 2500 }),
+      minPriceChangePct: 20,
+      minLiquidityChangePct: 0,
+      maxDrawdownPct: -10,
+      minConfirmedLiquidityUsd: 2500,
+    });
+    expect(result.verdict).toBe('CONFIRMED');
+    expect(result.confirmLiquidityUsd).toBe(2500);
+  });
+});
+
+// Test 4: WORLDS-like fixture passes
+describe('confirmed entry quality gate — WORLDS-like fixture', () => {
+  it('WORLDS-like: +28% price, +16% liq, $3598 confirmed liq → CONFIRMED', () => {
+    // WORLDS evidence: price +28.19%, liquidity +16.15%, entry liquidity $3,598
+    const entryLiq = 3098; // entry (3598 / 1.1615 ≈ 3098)
+    const result = evaluateEntryConfirmation({
+      entrySnapshot: makeSnapshot({ priceUsd: 0.001, liquidityUsd: entryLiq }),
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.001282, liquidityUsd: 3598 }),
+      minPriceChangePct: 20,
+      minLiquidityChangePct: 10,
+      maxDrawdownPct: -10,
+      minConfirmedLiquidityUsd: 2500,
+    });
+    expect(result.verdict).toBe('CONFIRMED');
+    expect(result.priceChangePct).toBeGreaterThan(20);
+    expect(result.liquidityChangePct).toBeGreaterThan(10);
+    expect(result.confirmLiquidityUsd).toBeGreaterThan(2500);
+  });
+});
+
+// Test 5: JRE-like fixture fails confirmed liquidity low
+describe('confirmed entry quality gate — JRE-like fixture, liquidity too low', () => {
+  it('JRE-like: $1233 confirmed liq < $2500 floor → REJECTED_CONFIRMED_LIQUIDITY_LOW', () => {
+    // JRE evidence: price +27.49%, liquidity +7.29%, confirmed liquidity $1,233
+    const entryLiq = 1150; // approx entry (1233 / 1.0729 ≈ 1150)
+    const result = evaluateEntryConfirmation({
+      entrySnapshot: makeSnapshot({ priceUsd: 0.001, liquidityUsd: entryLiq }),
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.001275, liquidityUsd: 1233 }),
+      minPriceChangePct: 20,
+      minLiquidityChangePct: 10,
+      maxDrawdownPct: -10,
+      minConfirmedLiquidityUsd: 2500,
+    });
+    expect(result.verdict).toBe('REJECTED_CONFIRMED_LIQUIDITY_LOW');
+    expect(result.confirmLiquidityUsd).toBe(1233);
+    expect(result.reason).toMatch(/1233/);
+  });
+});
+
+// Test 6: JRE-like fixture fails liquidity growth weak
+describe('confirmed entry quality gate — JRE-like fixture, liquidity growth weak', () => {
+  it('JRE-like: +7.29% liq growth < 10% threshold → REJECTED_CONFIRMED_LIQUIDITY_WEAK', () => {
+    // Same JRE metrics but confirmed liq above floor (so we reach the growth check)
+    const entryLiq = 2800;
+    const result = evaluateEntryConfirmation({
+      entrySnapshot: makeSnapshot({ priceUsd: 0.001, liquidityUsd: entryLiq }),
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.001275, liquidityUsd: 3004 }), // +7.3% liq
+      minPriceChangePct: 20,
+      minLiquidityChangePct: 10,
+      maxDrawdownPct: -10,
+      minConfirmedLiquidityUsd: 2500,
+    });
+    expect(result.verdict).toBe('REJECTED_CONFIRMED_LIQUIDITY_WEAK');
+    expect(result.liquidityChangePct).toBeCloseTo(7.3, 0);
+    expect(result.reason).toMatch(/below required threshold/i);
+  });
+});
+
+// Test 7: Confirmed price strong but liquidity too low rejects
+describe('confirmed entry quality gate — strong price, thin confirmed liquidity', () => {
+  it('price +30%, liq growth +20%, but confirmed liq $2000 < $2500 → REJECTED_CONFIRMED_LIQUIDITY_LOW', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.0013, liquidityUsd: 2000 }), // +30% price, -60% from 5000
+      minPriceChangePct: 20,
+      minLiquidityChangePct: 10,
+      minConfirmedLiquidityUsd: 2500,
+    }));
+    expect(result.verdict).toBe('REJECTED_CONFIRMED_LIQUIDITY_LOW');
+    expect(result.priceChangePct).toBeGreaterThan(20);
+    expect(result.confirmLiquidityUsd).toBe(2000);
+  });
+});
+
+// Test 8: Confirmed liquidity high but growth weak rejects
+describe('confirmed entry quality gate — high confirmed liquidity, weak growth', () => {
+  it('price +30%, confirmed liq $5200 > $2500, but growth +4% < 10% → REJECTED_CONFIRMED_LIQUIDITY_WEAK', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.0013, liquidityUsd: 5200 }), // +30% price, +4% liq
+      minPriceChangePct: 20,
+      minLiquidityChangePct: 10,
+      minConfirmedLiquidityUsd: 2500,
+    }));
+    expect(result.verdict).toBe('REJECTED_CONFIRMED_LIQUIDITY_WEAK');
+    expect(result.confirmLiquidityUsd).toBeGreaterThan(2500);
+    expect(result.liquidityChangePct).toBeGreaterThan(0);
+    expect(result.liquidityChangePct).toBeLessThan(10);
+  });
+});
+
+// Test 9: Rejected quality gate prevents PLAN_ONLY
+describe('confirmed entry quality gate — rejected gate blocks PLAN_ONLY', () => {
+  it('summary with REJECTED_CONFIRMED_LIQUIDITY_LOW has no tradePlan', () => {
+    const readiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+    const entryConfirmation = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.0013, liquidityUsd: 2000 }),
+      minPriceChangePct: 20,
+      minLiquidityChangePct: 10,
+      minConfirmedLiquidityUsd: 2500,
+    }));
+    expect(entryConfirmation.verdict).toBe('REJECTED_CONFIRMED_LIQUIDITY_LOW');
+    const summary = makeBaseSummary(readiness, {
+      status: 'NO_TRADE', decision: 'NO_BUY',
+      confirmEntry: true, confirmMinutes: 2, entryConfirmation,
+    });
+    expect(summary.tradePlan).toBeUndefined();
+  });
+
+  it('summary with REJECTED_CONFIRMED_LIQUIDITY_WEAK has no tradePlan', () => {
+    const readiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+    const entryConfirmation = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.0013, liquidityUsd: 5200 }),
+      minPriceChangePct: 20,
+      minLiquidityChangePct: 10,
+      minConfirmedLiquidityUsd: 2500,
+    }));
+    expect(entryConfirmation.verdict).toBe('REJECTED_CONFIRMED_LIQUIDITY_WEAK');
+    const summary = makeBaseSummary(readiness, {
+      status: 'NO_TRADE', decision: 'NO_BUY',
+      confirmEntry: true, confirmMinutes: 2, entryConfirmation,
+    });
+    expect(summary.tradePlan).toBeUndefined();
+  });
+});
+
+// Test 10: Passing quality gate allows PLAN_ONLY
+describe('confirmed entry quality gate — passing gate allows PLAN_ONLY', () => {
+  it('CONFIRMED verdict allows PLAN_ONLY trade plan with stricter thresholds', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.00122, liquidityUsd: 5550 }),
+      minPriceChangePct: 20,
+      minLiquidityChangePct: 10,
+      minConfirmedLiquidityUsd: 2500,
+    }));
+    expect(result.verdict).toBe('CONFIRMED');
+    const plan = buildLiveTradePlan(makeCandidate(), makeSnapshot(), 1);
+    expect(plan.status).toBe('PLAN_ONLY');
+  });
+});
+
+// Test 11: No LIVE_EXECUTED in quality gate verdicts or rendered output
+describe('confirmed entry quality gate — no LIVE_EXECUTED', () => {
+  it('quality gate verdict list does not include LIVE_EXECUTED', () => {
+    const verdicts = [
+      'CONFIRMED', 'REJECTED_PRICE_WEAK', 'REJECTED_PRICE_DRAWDOWN',
+      'REJECTED_LIQUIDITY_FADE', 'REJECTED_CONFIRMED_LIQUIDITY_LOW',
+      'REJECTED_CONFIRMED_LIQUIDITY_WEAK', 'REJECTED_MISSING_SNAPSHOT', 'NOT_REQUIRED',
+    ];
+    expect(verdicts.includes('LIVE_EXECUTED')).toBe(false);
+  });
+
+  it('rendered report with quality gate rejection never contains LIVE_EXECUTED', () => {
+    const readiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+    const entryConfirmation = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.0013, liquidityUsd: 2000 }),
+      minPriceChangePct: 20,
+      minLiquidityChangePct: 10,
+      minConfirmedLiquidityUsd: 2500,
+    }));
+    const summary = makeBaseSummary(readiness, {
+      status: 'NO_TRADE', decision: 'NO_BUY',
+      confirmEntry: true, confirmMinutes: 2, entryConfirmation,
+      confirmMinConfirmedLiquidityUsd: 2500,
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).not.toMatch(/LIVE_EXECUTED/);
+  });
+});
+
+// Test 12: No wallet/private key/swap/signing in quality gate rendered output
+describe('confirmed entry quality gate — safety patterns absent', () => {
+  it('quality gate report contains no signing/swap/key patterns', () => {
+    const readiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+    const entryConfirmation = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.0013, liquidityUsd: 2000 }),
+      minPriceChangePct: 20,
+      minLiquidityChangePct: 10,
+      minConfirmedLiquidityUsd: 2500,
+    }));
+    const summary = makeBaseSummary(readiness, {
+      status: 'NO_TRADE', decision: 'NO_BUY',
+      confirmEntry: true, confirmMinutes: 2, entryConfirmation,
+      confirmMinConfirmedLiquidityUsd: 2500,
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).not.toMatch(/(?:private|secret)[\s_]?key\s*[=({]/i);
+    expect(rendered).not.toMatch(/signTransaction\s*\(/i);
+    expect(rendered).not.toMatch(/sendTransaction\s*\(/i);
+    expect(rendered).not.toMatch(/executeSwap\s*\(/i);
+    expect(rendered).not.toMatch(/wallet\.connect\s*\(/i);
+    expect(rendered).not.toMatch(/LIVE_EXECUTED/);
+    expect(rendered).toContain('NOT AUTONOMOUS');
+    expect(rendered).toContain('NO REAL TRADE SENT');
+    expect(rendered).toContain('token:auto-paper was NOT run');
   });
 });
