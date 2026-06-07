@@ -7,6 +7,7 @@ import {
   buildLiveTradePlan,
   evaluateLiveReadinessGates,
   evaluateEntryConfirmation,
+  buildConfirmedEntryQualityDiagnostics,
   calculatePctChange,
   renderLiveHarnessReport,
   type EvaluateLiveReadinessGatesInput,
@@ -1497,6 +1498,357 @@ describe('confirmed entry quality gate — safety patterns absent', () => {
       confirmMinConfirmedLiquidityUsd: 2500,
     });
     const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).not.toMatch(/(?:private|secret)[\s_]?key\s*[=({]/i);
+    expect(rendered).not.toMatch(/signTransaction\s*\(/i);
+    expect(rendered).not.toMatch(/sendTransaction\s*\(/i);
+    expect(rendered).not.toMatch(/executeSwap\s*\(/i);
+    expect(rendered).not.toMatch(/wallet\.connect\s*\(/i);
+    expect(rendered).not.toMatch(/LIVE_EXECUTED/);
+    expect(rendered).toContain('NOT AUTONOMOUS');
+    expect(rendered).toContain('NO REAL TRADE SENT');
+    expect(rendered).toContain('token:auto-paper was NOT run');
+  });
+});
+
+// ── Confirmed Entry Quality Diagnostics tests (12 required) ──────────────────
+
+// Test 1: WORLDS-like fixture diagnostics show all checks PASS
+describe('confirmed entry quality diagnostics — WORLDS-like fixture', () => {
+  it('WORLDS-like: +28% price, +16% liq, $3598 liq — all diagnostics pass', () => {
+    const entryLiq = 3098; // 3598 / 1.1615 ≈ 3098
+    const result = evaluateEntryConfirmation({
+      entrySnapshot: makeSnapshot({ priceUsd: 0.001, liquidityUsd: entryLiq, volumeUsd: 2230 }),
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.001282, liquidityUsd: 3598, volumeUsd: 2917, observedAt: '2026-06-06T18:11:00Z' }),
+      minPriceChangePct: 20,
+      minLiquidityChangePct: 10,
+      maxDrawdownPct: -10,
+      minConfirmedLiquidityUsd: 2500,
+    });
+    expect(result.verdict).toBe('CONFIRMED');
+    expect(result.qualityDiagnostics).toBeDefined();
+    const diag = result.qualityDiagnostics!;
+    expect(diag.pricePass).toBe(true);
+    expect(diag.liquidityGrowthPass).toBe(true);
+    expect(diag.confirmedLiquidityPass).toBe(true);
+    expect(diag.drawdownPass).toBe(true);
+    expect(diag.overallPass).toBe(true);
+    expect(diag.failReasons).toHaveLength(0);
+  });
+});
+
+// Test 2: JRE-like low-liquidity fixture diagnostics show confirmedLiquidityPass false
+describe('confirmed entry quality diagnostics — JRE-like, low confirmed liquidity', () => {
+  it('JRE-like: $1233 confirmed liq < $2500 floor — confirmedLiquidityPass is false', () => {
+    const entryLiq = 1150; // 1233 / 1.0729 ≈ 1150
+    const result = evaluateEntryConfirmation({
+      entrySnapshot: makeSnapshot({ priceUsd: 0.001, liquidityUsd: entryLiq }),
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.001275, liquidityUsd: 1233, observedAt: '2026-06-06T18:11:00Z' }),
+      minPriceChangePct: 20,
+      minLiquidityChangePct: 10,
+      maxDrawdownPct: -10,
+      minConfirmedLiquidityUsd: 2500,
+    });
+    expect(result.qualityDiagnostics).toBeDefined();
+    const diag = result.qualityDiagnostics!;
+    expect(diag.confirmedLiquidityPass).toBe(false);
+    expect(diag.overallPass).toBe(false);
+    expect(diag.failReasons.some(r => r.includes('1233') || r.includes('floor'))).toBe(true);
+  });
+});
+
+// Test 3: JRE-like weak-liquidity-growth fixture diagnostics show liquidityGrowthPass false
+describe('confirmed entry quality diagnostics — JRE-like, weak liquidity growth', () => {
+  it('JRE-like: +7.29% liq growth < 10% threshold — liquidityGrowthPass is false', () => {
+    const result = evaluateEntryConfirmation({
+      entrySnapshot: makeSnapshot({ priceUsd: 0.001, liquidityUsd: 2800 }),
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.001275, liquidityUsd: 3004, observedAt: '2026-06-06T18:11:00Z' }),
+      minPriceChangePct: 20,
+      minLiquidityChangePct: 10,
+      maxDrawdownPct: -10,
+      minConfirmedLiquidityUsd: 2500,
+    });
+    expect(result.qualityDiagnostics).toBeDefined();
+    const diag = result.qualityDiagnostics!;
+    expect(diag.liquidityGrowthPass).toBe(false);
+    expect(diag.overallPass).toBe(false);
+    expect(diag.failReasons.some(r => r.includes('liquidity growth'))).toBe(true);
+  });
+});
+
+// Test 4: Diagnostics include failReasons for rejected entries
+describe('confirmed entry quality diagnostics — failReasons populated for rejections', () => {
+  it('REJECTED_PRICE_WEAK includes price-related failReason', () => {
+    // 6% price gain < 20% threshold
+    const result = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.00106, liquidityUsd: 5200 }),
+      minPriceChangePct: 20,
+    }));
+    expect(result.verdict).toBe('REJECTED_PRICE_WEAK');
+    expect(result.qualityDiagnostics).toBeDefined();
+    const diag = result.qualityDiagnostics!;
+    expect(diag.failReasons.length).toBeGreaterThan(0);
+    expect(diag.failReasons.some(r => r.includes('price gain'))).toBe(true);
+  });
+
+  it('REJECTED_CONFIRMED_LIQUIDITY_LOW includes liquidity floor failReason', () => {
+    // entry 5000 liq, confirm 2000 liq, floor 2500 → 2000 < 2500
+    const result = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.0013, liquidityUsd: 2000 }),
+      minPriceChangePct: 20,
+      minLiquidityChangePct: 10,
+      minConfirmedLiquidityUsd: 2500,
+    }));
+    expect(result.qualityDiagnostics).toBeDefined();
+    const diag = result.qualityDiagnostics!;
+    expect(diag.failReasons.some(r => r.includes('floor') || r.includes('2000') || r.includes('below'))).toBe(true);
+  });
+});
+
+// Test 5: Diagnostics overallPass true only when all required quality checks pass
+describe('confirmed entry quality diagnostics — overallPass', () => {
+  it('overallPass is true when CONFIRMED', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput());
+    expect(result.verdict).toBe('CONFIRMED');
+    expect(result.qualityDiagnostics?.overallPass).toBe(true);
+  });
+
+  it('overallPass is false for REJECTED_PRICE_WEAK', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.001, liquidityUsd: 5000 }),
+    }));
+    expect(result.verdict).toBe('REJECTED_PRICE_WEAK');
+    expect(result.qualityDiagnostics?.overallPass).toBe(false);
+  });
+
+  it('overallPass is false for REJECTED_CONFIRMED_LIQUIDITY_LOW', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.0013, liquidityUsd: 2000 }),
+      minPriceChangePct: 20,
+      minConfirmedLiquidityUsd: 2500,
+    }));
+    expect(result.qualityDiagnostics?.overallPass).toBe(false);
+  });
+});
+
+// Test 6: Report renders Confirmed Entry Quality Diagnostics block
+describe('confirmed entry quality diagnostics — renderer shows block', () => {
+  it('renders Confirmed Entry Quality Diagnostics section when confirmEntry is true and diagnostics exist', () => {
+    const readiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+    const entryConfirmation = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.001, liquidityUsd: 5000 }),
+    }));
+    const summary = makeBaseSummary(readiness, {
+      status: 'NO_TRADE', decision: 'NO_BUY',
+      confirmEntry: true, confirmMinutes: 2, entryConfirmation,
+      confirmMinConfirmedLiquidityUsd: 2500,
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('Confirmed Entry Quality Diagnostics');
+  });
+
+  it('does not render diagnostics block when confirmEntry is false', () => {
+    const readiness: LiveReadinessReport = { status: 'DRY_RUN_ONLY', gates: [], allGatesPassed: false };
+    const summary = makeBaseSummary(readiness, { status: 'DRY_RUN_ONLY', decision: 'FAKE_BUY' });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).not.toContain('Confirmed Entry Quality Diagnostics');
+  });
+
+  it('diagnostics block shows PASS for CONFIRMED result', () => {
+    const readiness: LiveReadinessReport = { status: 'DRY_RUN_ONLY', gates: [], allGatesPassed: false };
+    const entryConfirmation = evaluateEntryConfirmation(makeConfirmInput());
+    const summary = makeBaseSummary(readiness, {
+      status: 'DRY_RUN_ONLY', decision: 'FAKE_BUY',
+      confirmEntry: true, confirmMinutes: 2, entryConfirmation,
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('Confirmed Entry Quality Diagnostics');
+    expect(rendered).toContain('Overall        : PASS');
+  });
+
+  it('diagnostics block shows FAIL for rejected result', () => {
+    const readiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+    const entryConfirmation = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.001, liquidityUsd: 5000 }),
+    }));
+    const summary = makeBaseSummary(readiness, {
+      status: 'NO_TRADE', decision: 'NO_BUY',
+      confirmEntry: true, confirmMinutes: 2, entryConfirmation,
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('Confirmed Entry Quality Diagnostics');
+    expect(rendered).toContain('Overall        : FAIL');
+    expect(rendered).toContain('Fail reasons');
+  });
+});
+
+// Test 7: Report includes thresholds and actual values
+describe('confirmed entry quality diagnostics — renderer shows thresholds and actuals', () => {
+  it('renders price threshold in diagnostics block', () => {
+    const readiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+    const entryConfirmation = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.001, liquidityUsd: 5000 }),
+      minPriceChangePct: 20,
+      minLiquidityChangePct: 10,
+    }));
+    const summary = makeBaseSummary(readiness, {
+      status: 'NO_TRADE', decision: 'NO_BUY',
+      confirmEntry: true, confirmMinutes: 2, entryConfirmation,
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('required +20%');
+    expect(rendered).toContain('required +10%');
+  });
+
+  it('renders confirmed liquidity floor threshold in diagnostics block', () => {
+    const readiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+    const entryConfirmation = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.001, liquidityUsd: 5000 }),
+      minPriceChangePct: 20,
+      minConfirmedLiquidityUsd: 2500,
+    }));
+    const summary = makeBaseSummary(readiness, {
+      status: 'NO_TRADE', decision: 'NO_BUY',
+      confirmEntry: true, confirmMinutes: 2, entryConfirmation,
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('required $2500');
+  });
+});
+
+// Test 8: PLAN_ONLY trade plan includes diagnostics when confirmation passes
+describe('confirmed entry quality diagnostics — included in PLAN_ONLY trade plan', () => {
+  it('buildLiveTradePlan stores qualityDiagnostics when provided', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput());
+    expect(result.verdict).toBe('CONFIRMED');
+    expect(result.qualityDiagnostics).toBeDefined();
+    const plan = buildLiveTradePlan(makeCandidate(), makeSnapshot(), 1, result.qualityDiagnostics);
+    expect(plan.qualityDiagnostics).toBeDefined();
+    expect(plan.qualityDiagnostics!.overallPass).toBe(true);
+    expect(plan.status).toBe('PLAN_ONLY');
+  });
+
+  it('buildLiveTradePlan qualityDiagnostics is undefined when not provided', () => {
+    const plan = buildLiveTradePlan(makeCandidate(), makeSnapshot(), 1);
+    expect(plan.qualityDiagnostics).toBeUndefined();
+  });
+
+  it('plan with diagnostics serializes to JSON with qualityDiagnostics', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput());
+    const plan = buildLiveTradePlan(makeCandidate(), makeSnapshot(), 1, result.qualityDiagnostics);
+    const json = JSON.parse(JSON.stringify(plan));
+    expect(json.status).toBe('PLAN_ONLY');
+    expect(json.qualityDiagnostics).toBeDefined();
+    expect(json.qualityDiagnostics.overallPass).toBe(true);
+    expect(json.qualityDiagnostics.failReasons).toHaveLength(0);
+  });
+});
+
+// Test 9: Rejected confirmation includes diagnostics but no PLAN_ONLY
+describe('confirmed entry quality diagnostics — rejected case has diagnostics, no plan', () => {
+  it('REJECTED_PRICE_WEAK result has qualityDiagnostics defined', () => {
+    const result = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.001, liquidityUsd: 5000 }),
+      minPriceChangePct: 20,
+    }));
+    expect(result.verdict).toBe('REJECTED_PRICE_WEAK');
+    expect(result.qualityDiagnostics).toBeDefined();
+    expect(result.qualityDiagnostics!.overallPass).toBe(false);
+  });
+
+  it('summary with rejected confirmation has no tradePlan but entryConfirmation with diagnostics', () => {
+    const readiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+    const entryConfirmation = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.001, liquidityUsd: 5000 }),
+      minPriceChangePct: 20,
+    }));
+    expect(entryConfirmation.qualityDiagnostics).toBeDefined();
+    const summary = makeBaseSummary(readiness, {
+      status: 'NO_TRADE', decision: 'NO_BUY',
+      confirmEntry: true, confirmMinutes: 2, entryConfirmation,
+    });
+    expect(summary.tradePlan).toBeUndefined();
+    expect(summary.entryConfirmation?.qualityDiagnostics).toBeDefined();
+  });
+});
+
+// Test 10: Volume fields are optional and do not block decisions
+describe('confirmed entry quality diagnostics — volume fields optional', () => {
+  it('diagnostics computed correctly when snapshots have no volumeUsd', () => {
+    const result = evaluateEntryConfirmation({
+      entrySnapshot: makeSnapshot({ priceUsd: 0.001, liquidityUsd: 5000, volumeUsd: undefined }),
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.0013, liquidityUsd: 5550, volumeUsd: undefined, observedAt: '2026-06-06T18:03:00Z' }),
+      minPriceChangePct: 20,
+      minLiquidityChangePct: 10,
+      maxDrawdownPct: -10,
+      minConfirmedLiquidityUsd: 2500,
+    });
+    expect(result.verdict).toBe('CONFIRMED');
+    expect(result.qualityDiagnostics).toBeDefined();
+    const diag = result.qualityDiagnostics!;
+    expect(diag.volumeEntryUsd).toBeUndefined();
+    expect(diag.volumeConfirmUsd).toBeUndefined();
+    expect(diag.entryVolumeToLiquidityRatio).toBeUndefined();
+    expect(diag.confirmVolumeToLiquidityRatio).toBeUndefined();
+    expect(diag.overallPass).toBe(true);
+  });
+
+  it('volume fields present and vol/liq ratio renders when volumeUsd is in snapshots', () => {
+    const entryLiq = 3098;
+    const result = evaluateEntryConfirmation({
+      entrySnapshot: makeSnapshot({ priceUsd: 0.001, liquidityUsd: entryLiq, volumeUsd: 2230 }),
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.001282, liquidityUsd: 3598, volumeUsd: 2917, observedAt: '2026-06-06T18:11:00Z' }),
+      minPriceChangePct: 20,
+      minLiquidityChangePct: 10,
+      maxDrawdownPct: -10,
+      minConfirmedLiquidityUsd: 2500,
+    });
+    expect(result.qualityDiagnostics?.volumeEntryUsd).toBe(2230);
+    expect(result.qualityDiagnostics?.volumeConfirmUsd).toBe(2917);
+    expect(result.qualityDiagnostics?.entryVolumeToLiquidityRatio).toBeCloseTo(2230 / 3098, 4);
+    expect(result.qualityDiagnostics?.confirmVolumeToLiquidityRatio).toBeCloseTo(2917 / 3598, 4);
+
+    // Renders vol/liq ratio line in report
+    const readiness: LiveReadinessReport = { status: 'DRY_RUN_ONLY', gates: [], allGatesPassed: false };
+    const summary = makeBaseSummary(readiness, {
+      status: 'DRY_RUN_ONLY', decision: 'FAKE_BUY',
+      confirmEntry: true, confirmMinutes: 2, entryConfirmation: result,
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('Vol/liq ratio');
+    expect(rendered).toContain('entry →');
+  });
+});
+
+// Test 11: No LIVE_EXECUTED in diagnostics block rendered output
+describe('confirmed entry quality diagnostics — no LIVE_EXECUTED', () => {
+  it('diagnostics block rendered output never contains LIVE_EXECUTED', () => {
+    const readiness: LiveReadinessReport = { status: 'NO_TRADE', gates: [], allGatesPassed: false };
+    const entryConfirmation = evaluateEntryConfirmation(makeConfirmInput({
+      confirmSnapshot: makeSnapshot({ priceUsd: 0.0013, liquidityUsd: 5550 }),
+      minPriceChangePct: 20,
+      minLiquidityChangePct: 10,
+    }));
+    const summary = makeBaseSummary(readiness, {
+      status: 'NO_TRADE', decision: 'NO_BUY',
+      confirmEntry: true, confirmMinutes: 2, entryConfirmation,
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('Confirmed Entry Quality Diagnostics');
+    expect(rendered).not.toMatch(/LIVE_EXECUTED/);
+  });
+});
+
+// Test 12: No wallet/private key/swap/signing in diagnostics block rendered output
+describe('confirmed entry quality diagnostics — safety patterns absent', () => {
+  it('diagnostics block rendered output contains no signing/swap/key patterns', () => {
+    const readiness: LiveReadinessReport = { status: 'DRY_RUN_ONLY', gates: [], allGatesPassed: false };
+    const entryConfirmation = evaluateEntryConfirmation(makeConfirmInput());
+    const summary = makeBaseSummary(readiness, {
+      status: 'DRY_RUN_ONLY', decision: 'FAKE_BUY',
+      confirmEntry: true, confirmMinutes: 2, entryConfirmation,
+    });
+    const rendered = renderLiveHarnessReport(summary);
+    expect(rendered).toContain('Confirmed Entry Quality Diagnostics');
     expect(rendered).not.toMatch(/(?:private|secret)[\s_]?key\s*[=({]/i);
     expect(rendered).not.toMatch(/signTransaction\s*\(/i);
     expect(rendered).not.toMatch(/sendTransaction\s*\(/i);
