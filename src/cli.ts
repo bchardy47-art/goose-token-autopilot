@@ -147,6 +147,7 @@ import {
 import { runDexWatch, renderDexWatchReport } from './token-grab/dexWatch';
 import { loadWatchReports, buildDexWatchSummary, renderDexWatchSummary } from './token-grab/dexWatchSummary';
 import { buildDexWatchCandidatesReport, renderDexWatchCandidatesReport } from './token-grab/dexWatchCandidates';
+import { buildDexCandidateSimReport, renderDexCandidateSimReport } from './token-grab/dexCandidateSim';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2103,6 +2104,38 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(dcReport, null, 2));
         } else {
           console.log(renderDexWatchCandidatesReport(dcReport));
+        }
+        break;
+      }
+
+      case 'token:dex-candidate-sim': {
+        const csDir = getArgValue('--dir') ?? 'data/token-grab/dex-watch-runs';
+        const csLimit = Number(getArgValue('--limit') ?? '20');
+        const csBankroll = Number(getArgValue('--fake-bankroll') ?? '20');
+        const csPosition = Number(getArgValue('--position-size') ?? '1');
+        const csJson = process.argv.includes('--json');
+
+        if (!Number.isFinite(csLimit) || csLimit <= 0) {
+          throw new Error(`[token:dex-candidate-sim] --limit must be a positive number`);
+        }
+        if (!Number.isFinite(csBankroll) || csBankroll < 0) {
+          throw new Error(`[token:dex-candidate-sim] --fake-bankroll must be a non-negative number`);
+        }
+        if (!Number.isFinite(csPosition) || csPosition <= 0) {
+          throw new Error(`[token:dex-candidate-sim] --position-size must be a positive number`);
+        }
+
+        const csReports = loadWatchReports(csDir, csLimit);
+        const csReport = buildDexCandidateSimReport(csReports, {
+          dir: csDir,
+          fakeBankroll: csBankroll,
+          positionSize: csPosition,
+        });
+
+        if (csJson) {
+          console.log(JSON.stringify(csReport, null, 2));
+        } else {
+          console.log(renderDexCandidateSimReport(csReport));
         }
         break;
       }
