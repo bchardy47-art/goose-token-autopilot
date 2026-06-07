@@ -76,6 +76,7 @@
     "token:ears-pipeline-smoke": "tsx src/cli.ts token:ears-collect --input tests/fixtures/ears-collector-input.txt --out data/token-grab/x-ears/presignals.generated.json --source x_manual && tsx src/cli.ts token:presignal-report --signals data/token-grab/x-ears/presignals.generated.json --limit 20 && tsx src/cli.ts token:live-harness --fake-bankroll 20 --max-live-position 1 --watch-minutes 1 --gecko-limit 20 --delay-ms 5000 --watch-cycle --confirm-entry --confirm-minutes 0.1 --paper-exit-guard --paper-exit-interval-seconds 1 --pre-signals data/token-grab/x-ears/presignals.generated.json --field-note ears-pipeline-smoke --field-tags ears,pipeline,smoke --skip-sleep --dry-run",
     "token:ears-watch": "tsx src/cli.ts token:ears-watch",
     "token:ears-watch-once": "tsx src/cli.ts token:ears-watch --cycles 1",
+    "token:ears-rss": "tsx src/cli.ts token:ears-rss",
     "test": "vitest run"
   },
   "dependencies": {

@@ -114,6 +114,13 @@ import {
   renderEarsCollectorReport,
 } from './token-grab/earsCollector';
 import { runWatchCycle, renderWatchCycleReport } from './token-grab/earsWatcher';
+import {
+  loadRssConfig,
+  fetchFeedItems,
+  buildRssAdapterReport,
+  renderRssAdapterReport,
+  type FeedResult,
+} from './token-grab/rssEarsAdapter';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -1743,6 +1750,54 @@ async function main(): Promise<void> {
           // Sleep before next cycle
           console.log(`\nNext cycle in ${ewIntervalSeconds}s. Press Ctrl+C to stop.\n`);
           await ewSleep(ewIntervalSeconds * 1000);
+        }
+        break;
+      }
+
+      case 'token:ears-rss': {
+        const rssConfigPath = getArgValue('--config') ?? 'config/rss-feeds.example.json';
+        const rssOutPath = getArgValue('--out') ?? 'data/token-grab/x-ears/presignals.json';
+        const rssDryRun = process.argv.includes('--dry-run');
+        const rssJson = process.argv.includes('--json');
+        const rssGeneratedAt = new Date().toISOString();
+
+        const rssConfig = loadRssConfig(rssConfigPath);
+
+        let rssExisting: PreSignal[] = [];
+        if (!rssDryRun && fs.existsSync(rssOutPath)) {
+          try {
+            rssExisting = JSON.parse(fs.readFileSync(rssOutPath, 'utf-8')) as PreSignal[];
+          } catch {
+            rssExisting = [];
+          }
+        }
+
+        const rssFeedResults: FeedResult[] = [];
+        for (const feed of rssConfig.feeds) {
+          const result = await fetchFeedItems(feed, rssConfig.maxItemsPerFeed);
+          rssFeedResults.push({ feed, ...result });
+        }
+
+        const rssReport = buildRssAdapterReport({
+          feedResults: rssFeedResults,
+          existingSignals: rssExisting,
+          config: rssConfig,
+          generatedAt: rssGeneratedAt,
+          dryRun: rssDryRun,
+          outputPath: rssOutPath,
+        });
+
+        if (!rssDryRun && rssReport.uniqueSignals.length > 0) {
+          const rssUpdated = [...rssExisting, ...rssReport.uniqueSignals];
+          const rssOutDir = path.dirname(rssOutPath);
+          fs.mkdirSync(rssOutDir, { recursive: true });
+          fs.writeFileSync(rssOutPath, JSON.stringify(rssUpdated, null, 2), 'utf-8');
+        }
+
+        if (rssJson) {
+          console.log(JSON.stringify(rssReport, null, 2));
+        } else {
+          console.log(renderRssAdapterReport(rssReport));
         }
         break;
       }
