@@ -144,6 +144,7 @@ import {
   buildDexEarsReport,
   renderDexEarsReport,
 } from './token-grab/dexEars';
+import { runDexWatch, renderDexWatchReport } from './token-grab/dexWatch';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2016,6 +2017,43 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(dexReport, null, 2));
         } else {
           console.log(renderDexEarsReport(dexReport));
+        }
+        break;
+      }
+
+      case 'token:ears-dex-watch': {
+        const dwSignals = getArgValue('--signals') ?? 'data/token-grab/x-ears/presignals.dex.json';
+        const dwMinutes = Number(getArgValue('--minutes') ?? '10');
+        const dwInterval = Number(getArgValue('--interval-seconds') ?? '60');
+        const dwChain = getArgValue('--chain') ?? 'solana';
+        const dwDryRun = process.argv.includes('--dry-run');
+        const dwJson = process.argv.includes('--json');
+        const dwSkipSleep = process.argv.includes('--skip-sleep');
+
+        if (!Number.isFinite(dwMinutes) || dwMinutes < 0) {
+          throw new Error(`[token:ears-dex-watch] --minutes must be a non-negative number`);
+        }
+        if (!Number.isFinite(dwInterval) || dwInterval <= 0) {
+          throw new Error(`[token:ears-dex-watch] --interval-seconds must be a positive number`);
+        }
+        if (!fs.existsSync(dwSignals)) {
+          throw new Error(`[token:ears-dex-watch] Cannot read signals: ${dwSignals}`);
+        }
+
+        const dwReport = await runDexWatch({
+          signalsPath: dwSignals,
+          minutes: dwMinutes,
+          intervalSeconds: dwInterval,
+          chain: dwChain,
+          dryRun: dwDryRun,
+          sleepImpl: dwSkipSleep ? () => Promise.resolve() : undefined,
+          log: dwJson ? undefined : (msg: string) => console.error(msg),
+        });
+
+        if (dwJson) {
+          console.log(JSON.stringify(dwReport, null, 2));
+        } else {
+          console.log(renderDexWatchReport(dwReport));
         }
         break;
       }
