@@ -44,6 +44,7 @@ export interface DexWatchOutcome {
 }
 
 export interface DexWatchReport {
+  generatedAt?: string;
   signalsRead: number;
   signalsWatched: number;
   contractsFiltered: number;
@@ -233,6 +234,7 @@ export interface BuildDexWatchReportInput {
   minutes: number;
   intervalSeconds: number;
   dryRun: boolean;
+  generatedAt?: string;
 }
 
 export function buildDexWatchReport(input: BuildDexWatchReportInput): DexWatchReport {
@@ -253,6 +255,7 @@ export function buildDexWatchReport(input: BuildDexWatchReportInput): DexWatchRe
     .slice(0, 10);
 
   return {
+    generatedAt: input.generatedAt,
     signalsRead: input.signalsRead,
     signalsWatched: outcomes.length,
     contractsFiltered: outcomes.length,
@@ -463,6 +466,7 @@ export async function runDexWatch(options: RunDexWatchOptions): Promise<DexWatch
   }
 
   return buildDexWatchReport({
+    generatedAt: nowFn().toISOString(),
     signalsRead: all.length,
     outcomes,
     chain,
