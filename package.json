@@ -84,6 +84,7 @@
     "token:dex-watch-summary": "tsx src/cli.ts token:dex-watch-summary",
     "token:dex-watch-candidates": "tsx src/cli.ts token:dex-watch-candidates",
     "token:dex-candidate-sim": "tsx src/cli.ts token:dex-candidate-sim",
+    "token:dex-paper-runner": "tsx src/cli.ts token:dex-paper-runner",
     "test": "vitest run"
   },
   "dependencies": {
