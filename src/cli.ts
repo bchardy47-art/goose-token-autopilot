@@ -121,6 +121,11 @@ import {
   renderRssAdapterReport,
   type FeedResult,
 } from './token-grab/rssEarsAdapter';
+import {
+  parseSourceFile,
+  buildEarsIngestReport,
+  renderEarsIngestReport,
+} from './token-grab/earsIngest';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -1798,6 +1803,71 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(rssReport, null, 2));
         } else {
           console.log(renderRssAdapterReport(rssReport));
+        }
+        break;
+      }
+
+      case 'token:ears-ingest': {
+        const ingestSourcesDir = getArgValue('--sources-dir') ?? 'data/token-grab/x-ears/source-drops';
+        const ingestOutPath = getArgValue('--out') ?? 'data/token-grab/x-ears/presignals.json';
+        const ingestDefaultSource = (getArgValue('--source') ?? 'x_manual') as PreSignalSource;
+        const ingestAppend = process.argv.includes('--append');
+        const ingestDryRun = process.argv.includes('--dry-run');
+        const ingestJson = process.argv.includes('--json');
+        const ingestGeneratedAt = new Date().toISOString();
+
+        // Read all supported files from sources dir
+        const INGEST_EXTS = new Set(['.txt', '.md', '.json']);
+        let dirEntries: string[] = [];
+        try {
+          dirEntries = fs.readdirSync(ingestSourcesDir)
+            .filter(f => INGEST_EXTS.has(path.extname(f).toLowerCase()))
+            .sort();
+        } catch (e) {
+          throw new Error(`[token:ears-ingest] Cannot read sources dir: ${ingestSourcesDir} — ${(e as Error).message}`);
+        }
+
+        const ingestSourceFiles = dirEntries.map(filename => {
+          const fullPath = path.join(ingestSourcesDir, filename);
+          try {
+            const content = fs.readFileSync(fullPath, 'utf-8');
+            return parseSourceFile(fullPath, content, ingestDefaultSource);
+          } catch (e) {
+            return { filename: fullPath, source: ingestDefaultSource, items: [], error: (e as Error).message };
+          }
+        });
+
+        // Load existing signals for append/dedup
+        let ingestExisting: PreSignal[] = [];
+        if (ingestAppend && fs.existsSync(ingestOutPath)) {
+          try {
+            ingestExisting = JSON.parse(fs.readFileSync(ingestOutPath, 'utf-8')) as PreSignal[];
+          } catch {
+            ingestExisting = [];
+          }
+        }
+
+        const ingestReport = buildEarsIngestReport({
+          sourceFiles: ingestSourceFiles,
+          existingSignals: ingestExisting,
+          generatedAt: ingestGeneratedAt,
+          dryRun: ingestDryRun,
+          outputPath: ingestOutPath,
+        });
+
+        if (!ingestDryRun && ingestReport.uniqueSignals.length > 0) {
+          const ingestWritten = ingestAppend
+            ? [...ingestExisting, ...ingestReport.uniqueSignals]
+            : ingestReport.uniqueSignals;
+          const ingestOutDir = path.dirname(ingestOutPath);
+          fs.mkdirSync(ingestOutDir, { recursive: true });
+          fs.writeFileSync(ingestOutPath, JSON.stringify(ingestWritten, null, 2), 'utf-8');
+        }
+
+        if (ingestJson) {
+          console.log(JSON.stringify(ingestReport, null, 2));
+        } else {
+          console.log(renderEarsIngestReport(ingestReport));
         }
         break;
       }
