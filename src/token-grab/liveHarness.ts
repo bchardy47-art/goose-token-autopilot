@@ -34,6 +34,24 @@ export type EntryConfirmationVerdict =
   | 'REJECTED_MISSING_SNAPSHOT'
   | 'NOT_REQUIRED';
 
+export interface ConfirmedEntryQualityDiagnostics {
+  minPriceChangePct: number;
+  minLiquidityChangePct: number;
+  minConfirmedLiquidityUsd: number;
+  maxDrawdownPct: number;
+  drawdownPass: boolean;
+  pricePass: boolean;
+  confirmedLiquidityPass: boolean;
+  liquidityGrowthPass: boolean;
+  volumeEntryUsd?: number;
+  volumeConfirmUsd?: number;
+  volumeChangePct?: number;
+  entryVolumeToLiquidityRatio?: number;
+  confirmVolumeToLiquidityRatio?: number;
+  overallPass: boolean;
+  failReasons: string[];
+}
+
 export interface EntryConfirmationResult {
   verdict: EntryConfirmationVerdict;
   entryPrice: number | null;
@@ -43,6 +61,7 @@ export interface EntryConfirmationResult {
   confirmLiquidityUsd: number | null;
   liquidityChangePct: number | null;
   reason: string;
+  qualityDiagnostics?: ConfirmedEntryQualityDiagnostics;
 }
 
 export interface EvaluateEntryConfirmationInput {
@@ -68,6 +87,7 @@ export interface LiveTradePlan {
   exitRule: string;
   status: 'PLAN_ONLY';
   planCreatedAt: string;
+  qualityDiagnostics?: ConfirmedEntryQualityDiagnostics;
 }
 
 export interface LiveReadinessGateResult {
@@ -137,6 +157,79 @@ export function calculatePctChange(from: number, to: number): number {
 }
 
 /**
+ * Builds per-criterion pass/fail diagnostics for a confirmed entry.
+ * Volume fields are computed from snapshot data when available and are informational only — not blocking.
+ * Pure — no I/O, no side effects.
+ */
+export function buildConfirmedEntryQualityDiagnostics(
+  input: EvaluateEntryConfirmationInput,
+  priceChangePct: number,
+  liquidityChangePct: number | null,
+  confirmLiquidityUsd: number | null,
+): ConfirmedEntryQualityDiagnostics {
+  const { minPriceChangePct, minLiquidityChangePct, maxDrawdownPct, minConfirmedLiquidityUsd, entrySnapshot, confirmSnapshot } = input;
+
+  const drawdownPass = priceChangePct >= maxDrawdownPct;
+  const pricePass = priceChangePct >= minPriceChangePct;
+  const confirmedLiquidityPass = confirmLiquidityUsd == null || confirmLiquidityUsd >= minConfirmedLiquidityUsd;
+  const liquidityGrowthPass = liquidityChangePct == null || liquidityChangePct >= minLiquidityChangePct;
+
+  const failReasons: string[] = [];
+  if (!drawdownPass) {
+    failReasons.push(`price drawdown ${priceChangePct.toFixed(2)}% beyond threshold ${maxDrawdownPct}%`);
+  }
+  if (!pricePass) {
+    failReasons.push(`price gain ${priceChangePct.toFixed(2)}% below required ${minPriceChangePct}%`);
+  }
+  if (!confirmedLiquidityPass && confirmLiquidityUsd != null) {
+    failReasons.push(`confirmed liquidity $${confirmLiquidityUsd.toFixed(0)} below floor $${minConfirmedLiquidityUsd.toFixed(0)}`);
+  }
+  if (!liquidityGrowthPass && liquidityChangePct != null) {
+    failReasons.push(`liquidity growth ${liquidityChangePct.toFixed(2)}% below required ${minLiquidityChangePct}%`);
+  }
+
+  const overallPass = drawdownPass && pricePass && confirmedLiquidityPass && liquidityGrowthPass;
+
+  const volumeEntryUsd = entrySnapshot?.volumeUsd;
+  const volumeConfirmUsd = confirmSnapshot?.volumeUsd;
+  const entryLiqUsd = entrySnapshot?.liquidityUsd;
+  const confirmLiqUsd = confirmSnapshot?.liquidityUsd;
+
+  let volumeChangePct: number | undefined;
+  if (volumeEntryUsd != null && volumeConfirmUsd != null && volumeEntryUsd > 0) {
+    volumeChangePct = calculatePctChange(volumeEntryUsd, volumeConfirmUsd);
+  }
+
+  let entryVolumeToLiquidityRatio: number | undefined;
+  if (volumeEntryUsd != null && entryLiqUsd != null && entryLiqUsd > 0) {
+    entryVolumeToLiquidityRatio = volumeEntryUsd / entryLiqUsd;
+  }
+
+  let confirmVolumeToLiquidityRatio: number | undefined;
+  if (volumeConfirmUsd != null && confirmLiqUsd != null && confirmLiqUsd > 0) {
+    confirmVolumeToLiquidityRatio = volumeConfirmUsd / confirmLiqUsd;
+  }
+
+  return {
+    minPriceChangePct,
+    minLiquidityChangePct,
+    minConfirmedLiquidityUsd,
+    maxDrawdownPct,
+    drawdownPass,
+    pricePass,
+    confirmedLiquidityPass,
+    liquidityGrowthPass,
+    volumeEntryUsd,
+    volumeConfirmUsd,
+    volumeChangePct,
+    entryVolumeToLiquidityRatio,
+    confirmVolumeToLiquidityRatio,
+    overallPass,
+    failReasons,
+  };
+}
+
+/**
  * Evaluates the entry confirmation gate — checks that a second snapshot taken
  * after the entry shows sufficient price strength and liquidity health.
  * Pure — no I/O, no side effects.
@@ -175,10 +268,15 @@ export function evaluateEntryConfirmation(
       ? calculatePctChange(entryLiquidityUsd, confirmLiquidityUsd)
       : null;
 
+  // Build quality diagnostics for all subsequent returns (informational — does not affect verdict order).
+  const qualityDiagnostics = buildConfirmedEntryQualityDiagnostics(
+    input, priceChangePct, liquidityChangePct, confirmLiquidityUsd,
+  );
+
   if (priceChangePct < maxDrawdownPct) {
     return {
       verdict: 'REJECTED_PRICE_DRAWDOWN',
-      entryPrice, confirmPrice, priceChangePct, entryLiquidityUsd, confirmLiquidityUsd, liquidityChangePct,
+      entryPrice, confirmPrice, priceChangePct, entryLiquidityUsd, confirmLiquidityUsd, liquidityChangePct, qualityDiagnostics,
       reason: `Price dropped ${priceChangePct.toFixed(2)}% — beyond drawdown threshold of ${maxDrawdownPct}%`,
     };
   }
@@ -186,7 +284,7 @@ export function evaluateEntryConfirmation(
   if (priceChangePct < minPriceChangePct) {
     return {
       verdict: 'REJECTED_PRICE_WEAK',
-      entryPrice, confirmPrice, priceChangePct, entryLiquidityUsd, confirmLiquidityUsd, liquidityChangePct,
+      entryPrice, confirmPrice, priceChangePct, entryLiquidityUsd, confirmLiquidityUsd, liquidityChangePct, qualityDiagnostics,
       reason: `Price gain ${priceChangePct.toFixed(2)}% below confirmation threshold of ${minPriceChangePct}%`,
     };
   }
@@ -194,7 +292,7 @@ export function evaluateEntryConfirmation(
   if (confirmLiquidityUsd !== null && confirmLiquidityUsd < input.minConfirmedLiquidityUsd) {
     return {
       verdict: 'REJECTED_CONFIRMED_LIQUIDITY_LOW',
-      entryPrice, confirmPrice, priceChangePct, entryLiquidityUsd, confirmLiquidityUsd, liquidityChangePct,
+      entryPrice, confirmPrice, priceChangePct, entryLiquidityUsd, confirmLiquidityUsd, liquidityChangePct, qualityDiagnostics,
       reason: `Confirmed liquidity $${confirmLiquidityUsd.toFixed(0)} below minimum $${input.minConfirmedLiquidityUsd.toFixed(0)}`,
     };
   }
@@ -203,7 +301,7 @@ export function evaluateEntryConfirmation(
     const isActuallyFading = liquidityChangePct < 0;
     return {
       verdict: isActuallyFading ? 'REJECTED_LIQUIDITY_FADE' : 'REJECTED_CONFIRMED_LIQUIDITY_WEAK',
-      entryPrice, confirmPrice, priceChangePct, entryLiquidityUsd, confirmLiquidityUsd, liquidityChangePct,
+      entryPrice, confirmPrice, priceChangePct, entryLiquidityUsd, confirmLiquidityUsd, liquidityChangePct, qualityDiagnostics,
       reason: isActuallyFading
         ? `Liquidity faded ${liquidityChangePct.toFixed(2)}% — below threshold of ${minLiquidityChangePct}%`
         : `Liquidity growth ${liquidityChangePct.toFixed(2)}% below required threshold of ${minLiquidityChangePct}%`,
@@ -215,7 +313,7 @@ export function evaluateEntryConfirmation(
     : '';
   return {
     verdict: 'CONFIRMED',
-    entryPrice, confirmPrice, priceChangePct, entryLiquidityUsd, confirmLiquidityUsd, liquidityChangePct,
+    entryPrice, confirmPrice, priceChangePct, entryLiquidityUsd, confirmLiquidityUsd, liquidityChangePct, qualityDiagnostics,
     reason: `Price +${priceChangePct.toFixed(2)}% confirmed${liqStr}`,
   };
 }
@@ -253,6 +351,7 @@ export function buildLiveTradePlan(
   candidate: TokenGrabAutopsyCandidate,
   snapshot: TokenGrabAutopsySnapshot,
   maxLivePosition: number,
+  qualityDiagnostics?: ConfirmedEntryQualityDiagnostics,
 ): LiveTradePlan {
   return {
     candidateId: candidate.id,
@@ -268,6 +367,7 @@ export function buildLiveTradePlan(
     exitRule: 'Manual exit only in V1. No auto-sell. No stop-loss execution.',
     status: 'PLAN_ONLY',
     planCreatedAt: snapshot.observedAt,
+    qualityDiagnostics,
   };
 }
 
@@ -461,6 +561,45 @@ export function renderLiveHarnessReport(s: LiveHarnessSummary): string {
       lines.push(`  Reject reason   : ${ec.reason}`);
     }
     lines.push('');
+
+    // Quality diagnostics block (shown whenever confirmation ran, pass or fail)
+    if (ec.qualityDiagnostics) {
+      const diag = ec.qualityDiagnostics;
+      lines.push(THIN);
+      lines.push('Confirmed Entry Quality Diagnostics');
+      lines.push(THIN);
+
+      const priceStr = ec.priceChangePct != null
+        ? `${ec.priceChangePct >= 0 ? '+' : ''}${ec.priceChangePct.toFixed(2)}%`
+        : 'N/A';
+      lines.push(`  Price          : ${diag.pricePass ? 'PASS' : 'FAIL'} ${priceStr} / required +${diag.minPriceChangePct}%`);
+
+      const liqChangeStr = ec.liquidityChangePct != null
+        ? `${ec.liquidityChangePct >= 0 ? '+' : ''}${ec.liquidityChangePct.toFixed(2)}%`
+        : 'N/A';
+      lines.push(`  Liquidity growth: ${diag.liquidityGrowthPass ? 'PASS' : 'FAIL'} ${liqChangeStr} / required +${diag.minLiquidityChangePct}%`);
+
+      const liqAmountStr = ec.confirmLiquidityUsd != null ? `$${ec.confirmLiquidityUsd.toFixed(0)}` : 'N/A';
+      lines.push(`  Confirmed liq  : ${diag.confirmedLiquidityPass ? 'PASS' : 'FAIL'} ${liqAmountStr} / required $${diag.minConfirmedLiquidityUsd}`);
+
+      lines.push(`  Drawdown       : ${diag.drawdownPass ? 'PASS' : 'FAIL'}`);
+
+      if (diag.entryVolumeToLiquidityRatio != null || diag.confirmVolumeToLiquidityRatio != null) {
+        const entryR = diag.entryVolumeToLiquidityRatio != null ? diag.entryVolumeToLiquidityRatio.toFixed(2) : 'N/A';
+        const confirmR = diag.confirmVolumeToLiquidityRatio != null ? diag.confirmVolumeToLiquidityRatio.toFixed(2) : 'N/A';
+        lines.push(`  Vol/liq ratio  : ${entryR} entry → ${confirmR} confirm`);
+      }
+
+      lines.push(`  Overall        : ${diag.overallPass ? 'PASS' : 'FAIL'}`);
+
+      if (!diag.overallPass && diag.failReasons.length > 0) {
+        lines.push('  Fail reasons   :');
+        for (const reason of diag.failReasons) {
+          lines.push(`    - ${reason}`);
+        }
+      }
+      lines.push('');
+    }
   }
 
   if (s.tradePlan) {

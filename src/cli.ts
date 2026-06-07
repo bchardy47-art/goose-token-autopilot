@@ -1293,7 +1293,7 @@ async function main(): Promise<void> {
         // 7. Build trade plan if FAKE_BUY
         let tradePlan: LiveTradePlan | undefined;
         if (fakeBuyOk && chosen && entrySnapshot && decision === 'FAKE_BUY') {
-          tradePlan = buildLiveTradePlan(chosen.candidate, entrySnapshot, maxLivePosition);
+          tradePlan = buildLiveTradePlan(chosen.candidate, entrySnapshot, maxLivePosition, entryConfirmation?.qualityDiagnostics);
           fs.writeFileSync(planFilePath, JSON.stringify(tradePlan, null, 2), 'utf-8');
           console.log(`Trade plan written: ${planFilePath}`);
           console.log('  Status: PLAN_ONLY — no real trade sent');
