@@ -49,6 +49,9 @@ export interface RssAdapterReport {
   feedErrors: number;
   itemsScanned: number;
   keywordMatches: number;
+  qualityPassed: number;
+  qualityRejected: number;
+  rejectedReasonCounts: Record<string, number>;
   signalsExtracted: number;
   duplicatesSkipped: number;
   uniqueSignals: PreSignal[];
@@ -98,6 +101,40 @@ export function parseRssConfig(raw: unknown): RssConfig {
         ? obj['maxItemsPerFeed']
         : RSS_CONFIG_DEFAULTS.maxItemsPerFeed,
   };
+}
+
+// ── Quality filter — pure ─────────────────────────────────────────────────────
+
+// An RSS item must have at least one of:
+// 1. Contract/CA address
+// 2. $TICKER symbol
+// 3. Strong launch terms
+// 4. Meme/trending terms AND token/coin language
+
+const QF_CONTRACT_RE =
+  /(?:CA:|contract(?:\s+address)?:|address:|addr:)\s*[1-9A-HJ-NP-Za-km-z]{32,44}|\b[1-9A-HJ-NP-Za-km-z]{40,44}\b/i;
+const QF_TICKER_RE = /\$[A-Za-z]{2,10}\b/;
+const QF_LAUNCH_RE =
+  /\b(?:launch(?:ed|ing)?|deploy(?:ing|ed)?|raydium|pump\.?fun|pumpfun|liquidity|pair(?:ing|ed)?|listed|listing|live)\b/i;
+const QF_MEME_RE = /\b(?:meme|viral|trending|moonshot)\b/i;
+const QF_TOKEN_RE = /\b(?:token|coin|memecoin|ticker|altcoin)\b/i;
+
+export interface QualityFilterResult {
+  passed: boolean;
+  reason?: string;
+}
+
+/**
+ * Returns true only when the RSS item contains real launch/token evidence. Pure.
+ */
+export function passesQualityFilter(item: RssFeedItem): QualityFilterResult {
+  const text = [item.title, item.description ?? ''].join(' ');
+  if (QF_CONTRACT_RE.test(text)) return { passed: true };
+  if (QF_TICKER_RE.test(text)) return { passed: true };
+  if (QF_LAUNCH_RE.test(text)) return { passed: true };
+  if (QF_MEME_RE.test(text) && QF_TOKEN_RE.test(text)) return { passed: true };
+  if (QF_MEME_RE.test(text)) return { passed: false, reason: 'meme_without_token_language' };
+  return { passed: false, reason: 'no_quality_signal' };
 }
 
 export function loadRssConfig(filePath: string): RssConfig {
@@ -225,9 +262,12 @@ export async function fetchFeedItems(
 export function buildRssAdapterReport(input: RssAdapterInput): RssAdapterReport {
   let totalItemsScanned = 0;
   let totalKeywordMatches = 0;
+  let qualityPassed = 0;
+  let qualityRejected = 0;
   let feedErrors = 0;
+  const rejectedReasonCounts: Record<string, number> = {};
 
-  // Collect matched items grouped by source
+  // Collect quality-passing items grouped by source
   const bySource = new Map<PreSignalSource, InputItem[]>();
 
   for (const result of input.feedResults) {
@@ -238,10 +278,18 @@ export function buildRssAdapterReport(input: RssAdapterInput): RssAdapterReport 
     totalKeywordMatches += matched.length;
 
     for (const item of matched) {
-      const inputItem = feedItemToInputItem(item);
-      const bucket = bySource.get(result.feed.source) ?? [];
-      bucket.push(inputItem);
-      bySource.set(result.feed.source, bucket);
+      const qf = passesQualityFilter(item);
+      if (qf.passed) {
+        qualityPassed++;
+        const inputItem = feedItemToInputItem(item);
+        const bucket = bySource.get(result.feed.source) ?? [];
+        bucket.push(inputItem);
+        bySource.set(result.feed.source, bucket);
+      } else {
+        qualityRejected++;
+        const reason = qf.reason ?? 'no_quality_signal';
+        rejectedReasonCounts[reason] = (rejectedReasonCounts[reason] ?? 0) + 1;
+      }
     }
   }
 
@@ -259,6 +307,9 @@ export function buildRssAdapterReport(input: RssAdapterInput): RssAdapterReport 
     feedErrors,
     itemsScanned: totalItemsScanned,
     keywordMatches: totalKeywordMatches,
+    qualityPassed,
+    qualityRejected,
+    rejectedReasonCounts,
     signalsExtracted: allFresh.length,
     duplicatesSkipped: duplicateCount,
     uniqueSignals: unique,
@@ -288,6 +339,13 @@ export function renderRssAdapterReport(report: RssAdapterReport): string {
   lines.push(`  Feed errors     : ${report.feedErrors}`);
   lines.push(`  Items scanned   : ${report.itemsScanned}`);
   lines.push(`  Keyword matches : ${report.keywordMatches}`);
+  lines.push(`  Quality passed  : ${report.qualityPassed}`);
+  lines.push(`  Quality rejected: ${report.qualityRejected}`);
+  if (report.qualityRejected > 0) {
+    for (const [reason, count] of Object.entries(report.rejectedReasonCounts)) {
+      lines.push(`    ${reason}: ${count}`);
+    }
+  }
   lines.push(`  Signals found   : ${report.signalsExtracted}`);
   lines.push(`  Duplicates      : ${report.duplicatesSkipped}`);
   lines.push(`  Written         : ${report.dryRun ? 0 : report.uniqueSignals.length}`);
