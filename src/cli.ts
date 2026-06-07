@@ -146,6 +146,7 @@ import {
 } from './token-grab/dexEars';
 import { runDexWatch, renderDexWatchReport } from './token-grab/dexWatch';
 import { loadWatchReports, buildDexWatchSummary, renderDexWatchSummary } from './token-grab/dexWatchSummary';
+import { buildDexWatchCandidatesReport, renderDexWatchCandidatesReport } from './token-grab/dexWatchCandidates';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2082,6 +2083,26 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(dsSummary, null, 2));
         } else {
           console.log(renderDexWatchSummary(dsSummary));
+        }
+        break;
+      }
+
+      case 'token:dex-watch-candidates': {
+        const dcDir = getArgValue('--dir') ?? 'data/token-grab/dex-watch-runs';
+        const dcLimit = Number(getArgValue('--limit') ?? '20');
+        const dcJson = process.argv.includes('--json');
+
+        if (!Number.isFinite(dcLimit) || dcLimit <= 0) {
+          throw new Error(`[token:dex-watch-candidates] --limit must be a positive number`);
+        }
+
+        const dcReports = loadWatchReports(dcDir, dcLimit);
+        const dcReport = buildDexWatchCandidatesReport(dcReports, dcDir);
+
+        if (dcJson) {
+          console.log(JSON.stringify(dcReport, null, 2));
+        } else {
+          console.log(renderDexWatchCandidatesReport(dcReport));
         }
         break;
       }
