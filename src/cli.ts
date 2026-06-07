@@ -99,7 +99,13 @@ import {
 } from './token-grab/liveHarness';
 import readline from 'node:readline';
 import { buildFieldRunSummary, renderFieldRunSummary } from './token-grab/fieldSummary';
-import { buildPreSignalReport, renderPreSignalReport } from './token-grab/xEarsPreSignal';
+import {
+  buildPreSignalReport,
+  renderPreSignalReport,
+  buildPreSignalBridge,
+  loadPreSignals,
+  type PreSignalBridgeSummary,
+} from './token-grab/xEarsPreSignal';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -1093,6 +1099,7 @@ async function main(): Promise<void> {
         const paperExitTrailingActivatePct = parseNumberArg('--paper-exit-trailing-activate-pct', 30);
         const paperExitTrailingDropPct = parseNumberArg('--paper-exit-trailing-drop-pct', 20);
         const paperExitMomentumFloor = process.argv.includes('--paper-exit-momentum-floor');
+        const preSignalsPath = getArgValue('--pre-signals');
 
         // V1 hard cap — fail-fast before any network calls
         assertMaxLivePosition(maxLivePosition);
@@ -1168,6 +1175,27 @@ async function main(): Promise<void> {
         // 4. Select watch-worthy candidates
         const liveSelected = selectWatchCandidates(allCandidates);
 
+        // 4a. Pre-signal bridge — match pre-signals against watch-worthy candidates (WATCH ONLY)
+        let preSignalBridge: PreSignalBridgeSummary | undefined;
+        if (preSignalsPath) {
+          const { valid: preSignals } = loadPreSignals(preSignalsPath);
+          const bridgeCandidates = liveSelected.candidates.map(c => ({
+            ticker: c.ticker,
+            name: c.tokenName,
+            contract: c.contractAddress,
+          }));
+          preSignalBridge = buildPreSignalBridge(preSignals, bridgeCandidates, preSignalsPath);
+          if (preSignalBridge.matchCount > 0) {
+            console.log(`[pre-signal] ${preSignalBridge.matchCount} candidate match(es) from ${preSignalBridge.signalsLoaded} signal(s) — WATCH ONLY`);
+            for (const m of preSignalBridge.matchedCandidates) {
+              console.log(`  $${m.candidateTicker} — ${m.matchReason} / ${m.matchStrength} / ${m.signalConfidence} / ${m.signalSource}`);
+            }
+          } else {
+            console.log(`[pre-signal] 0 matches from ${preSignalBridge.signalsLoaded} signal(s) loaded`);
+          }
+          console.log('');
+        }
+
         // Helper to build and emit the final summary
         const emitSummary = (summary: LiveHarnessSummary): void => {
           if (jsonMode) {
@@ -1200,6 +1228,7 @@ async function main(): Promise<void> {
             fakeBankroll,
             confirmMinConfirmedLiquidityUsd,
             confirmEntry, confirmMinutes,
+            preSignalBridge,
           };
           emitSummary(summary);
           break;
@@ -1279,6 +1308,9 @@ async function main(): Promise<void> {
               unlockEnvValue: process.env['TOKEN_GRAB_LIVE_UNLOCK'],
               decision: 'NO_BUY', candidate: undefined, snapshot: undefined, candidateCount: 0,
             });
+            const rejChosenMatch = preSignalBridge?.matchedCandidates.find(
+              m => m.candidateTicker === chosen?.candidate.ticker,
+            );
             const rejSummary: LiveHarnessSummary = {
               ts, outDir, status: 'NO_TRADE', decision: 'NO_BUY',
               readiness: rejReadiness, liveIntent, requireConfirmation, maxLivePosition,
@@ -1292,6 +1324,10 @@ async function main(): Promise<void> {
               fakeBankroll,
               confirmMinConfirmedLiquidityUsd,
               confirmEntry, confirmMinutes, confirmSnapshotPath, entryConfirmation,
+              preSignalBridge,
+              preSignalAnnotation: rejChosenMatch
+                ? { preSignalMatch: true, preSignalReason: rejChosenMatch.matchReason, preSignalConfidence: rejChosenMatch.signalConfidence, preSignalSource: rejChosenMatch.signalSource, laneLabel: 'PRE_SIGNAL_MATCH', watchOnly: true, planOnlyNotGranted: true }
+                : undefined,
             };
             emitSummary(rejSummary);
             break;
@@ -1508,6 +1544,22 @@ async function main(): Promise<void> {
           entryConfirmation,
           paperExitGuardEnabled: paperExitGuardEnabled || undefined,
           paperExitGuard: paperExitGuardResult,
+          preSignalBridge,
+          preSignalAnnotation: (() => {
+            const m = preSignalBridge?.matchedCandidates.find(
+              mc => mc.candidateTicker === chosen?.candidate.ticker,
+            );
+            if (!m) return undefined;
+            return {
+              preSignalMatch: true as const,
+              preSignalReason: m.matchReason,
+              preSignalConfidence: m.signalConfidence,
+              preSignalSource: m.signalSource,
+              laneLabel: 'PRE_SIGNAL_MATCH' as const,
+              watchOnly: true as const,
+              planOnlyNotGranted: true as const,
+            };
+          })(),
         };
 
         emitSummary(finalSummary);

@@ -1,6 +1,7 @@
 import type { TokenGrabAutopsyCandidate, TokenGrabAutopsySnapshot } from './autopsy';
 import type { TokenGrabLane } from './types';
 import type { LiveAssistedDecision, LiveAssistedPnL } from './liveAssistedWatch';
+import type { PreSignalBridgeSummary } from './xEarsPreSignal';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -195,6 +196,7 @@ export interface LiveHarnessSummary {
   paperExitGuardEnabled?: boolean;
   paperExitGuard?: PaperExitGuardSummary;
   preSignalAnnotation?: PreSignalAnnotation;
+  preSignalBridge?: PreSignalBridgeSummary;
 }
 
 export interface EvaluateLiveReadinessGatesInput {
@@ -696,6 +698,24 @@ export function renderLiveHarnessReport(s: LiveHarnessSummary): string {
   }
   if (s.skipSleepMode) lines.push('  [skip-sleep mode active]');
   lines.push('');
+
+  if (s.preSignalBridge) {
+    const psb = s.preSignalBridge;
+    lines.push(THIN);
+    lines.push('Pre-Signal Bridge  [WATCH ONLY — not a buy signal]');
+    lines.push(THIN);
+    lines.push(`  Signals file    : ${psb.signalsPath}`);
+    lines.push(`  Signals loaded  : ${psb.signalsLoaded}`);
+    lines.push(`  Matches found   : ${psb.matchCount}`);
+    if (psb.matchedCandidates.length > 0) {
+      lines.push('');
+      for (const m of psb.matchedCandidates) {
+        lines.push(`  $${m.candidateTicker.padEnd(12)} ${m.matchReason.padEnd(16)} ${m.matchStrength.padEnd(8)} ${m.signalConfidence.padEnd(8)} ${m.signalSource}  WATCH ONLY`);
+      }
+    }
+    lines.push('  PRE_SIGNAL_MATCH does not create PLAN_ONLY — gates still required');
+    lines.push('');
+  }
 
   lines.push(THIN);
   lines.push(`Paper Decision    : ${s.decision}`);

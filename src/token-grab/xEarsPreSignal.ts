@@ -273,6 +273,97 @@ export function matchAllPreSignals(
   return results;
 }
 
+// ── Live-Harness Bridge ───────────────────────────────────────────────────────
+
+/**
+ * A Gecko/live-harness candidate expressed as the minimal shape needed for matching.
+ * Decoupled from TokenGrabAutopsyCandidate to keep this module self-contained.
+ */
+export interface BridgeCandidate {
+  ticker: string;
+  name?: string;
+  contract?: string;
+}
+
+export interface PreSignalBridgeMatch {
+  candidateTicker: string;
+  signalId: string;
+  matchReason: PreSignalMatchReason;
+  matchStrength: PreSignalMatchStrength;
+  signalConfidence: PreSignalConfidence;
+  signalSource: PreSignalSource;
+  watchOnly: true;
+  planOnlyNotGranted: true;
+}
+
+export interface PreSignalBridgeSummary {
+  signalsPath: string;
+  signalsLoaded: number;
+  matchCount: number;
+  matchedCandidates: PreSignalBridgeMatch[];
+  watchOnly: true;
+  readOnly: true;
+  tradingExecuted: 0;
+}
+
+function strengthRank(s: PreSignalMatchStrength): number {
+  return s === 'STRONG' ? 3 : s === 'MEDIUM' ? 2 : 1;
+}
+
+/**
+ * Matches all pre-signals against live-harness candidates, returning one best match
+ * per candidate (strongest signal wins). Pure — no I/O.
+ *
+ * PRE_SIGNAL_MATCH is WATCH ONLY. planOnlyNotGranted is always true.
+ * Existing confirmation and quality gates still decide PLAN_ONLY.
+ */
+export function buildPreSignalBridge(
+  signals: PreSignal[],
+  candidates: BridgeCandidate[],
+  signalsPath: string,
+): PreSignalBridgeSummary {
+  const matchedCandidates: PreSignalBridgeMatch[] = [];
+
+  for (const candidate of candidates) {
+    const psCandidate: PreSignalCandidate = {
+      symbol: candidate.ticker,
+      name: candidate.name,
+      contract: candidate.contract,
+    };
+
+    let best: PreSignalMatchResult | null = null;
+    for (const signal of signals) {
+      const m = matchPreSignalToCandidate(signal, psCandidate);
+      if (m != null && (best === null || strengthRank(m.strength) > strengthRank(best.strength))) {
+        best = m;
+      }
+    }
+
+    if (best != null) {
+      matchedCandidates.push({
+        candidateTicker: candidate.ticker,
+        signalId: best.signalId,
+        matchReason: best.reason,
+        matchStrength: best.strength,
+        signalConfidence: best.confidence,
+        signalSource: best.source,
+        watchOnly: true,
+        planOnlyNotGranted: true,
+      });
+    }
+  }
+
+  return {
+    signalsPath,
+    signalsLoaded: signals.length,
+    matchCount: matchedCandidates.length,
+    matchedCandidates,
+    watchOnly: true,
+    readOnly: true,
+    tradingExecuted: 0,
+  };
+}
+
 /**
  * Builds the full pre-signal intake report. Pure — accepts rawSignals so I/O
  * is the caller's responsibility.
