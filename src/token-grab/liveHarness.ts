@@ -150,6 +150,18 @@ export interface PaperExitGuardSummary {
   noRealTradeSent: true;
 }
 
+// ── Pre-signal annotation ─────────────────────────────────────────────────────
+
+export interface PreSignalAnnotation {
+  preSignalMatch: true;
+  preSignalReason: string;
+  preSignalConfidence: string;
+  preSignalSource: string;
+  laneLabel: 'PRE_SIGNAL_MATCH';
+  watchOnly: true;
+  planOnlyNotGranted: true;
+}
+
 export interface LiveHarnessSummary {
   ts: string;
   outDir: string;
@@ -182,6 +194,7 @@ export interface LiveHarnessSummary {
   entryConfirmation?: EntryConfirmationResult;
   paperExitGuardEnabled?: boolean;
   paperExitGuard?: PaperExitGuardSummary;
+  preSignalAnnotation?: PreSignalAnnotation;
 }
 
 export interface EvaluateLiveReadinessGatesInput {
@@ -818,6 +831,19 @@ export function renderLiveHarnessReport(s: LiveHarnessSummary): string {
 
   if (s.paperExitGuardEnabled && s.paperExitGuard) {
     lines.push(renderPaperExitGuardSummary(s.paperExitGuard));
+    lines.push('');
+  }
+
+  if (s.preSignalAnnotation) {
+    const psa = s.preSignalAnnotation;
+    lines.push(THIN);
+    lines.push('Pre-Signal Match  [PRE_SIGNAL_MATCH — WATCH ONLY]');
+    lines.push(THIN);
+    lines.push(`  Match reason    : ${psa.preSignalReason}`);
+    lines.push(`  Confidence      : ${psa.preSignalConfidence}`);
+    lines.push(`  Source          : ${psa.preSignalSource}`);
+    lines.push(`  Lane label      : ${psa.laneLabel}`);
+    lines.push(`  PLAN_ONLY       : NOT GRANTED — existing confirmation gates still required`);
     lines.push('');
   }
 
