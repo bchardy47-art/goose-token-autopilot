@@ -1,12 +1,17 @@
-import type { DexWatchReport } from './dexWatch';
-import {
-  buildDexWatchCandidatesReport,
-  type DexWatchCandidate,
-} from './dexWatchCandidates';
+import type { DexWatchReport, DexWatchOutcome } from './dexWatch';
+import { outcomesFromReport, DRAIN_PCT } from './dexWatchSummary';
+import { PASS_PRICE_PCT, PASS_LIQ_PCT, PASS_VLR_MAX } from './dexWatchCandidates';
+
+// ── History-risk threshold (V2) ───────────────────────────────────────────────────────
+
+/** Average volume/liquidity ratio above this is treated as chronic churn. */
+export const HISTORY_AVG_VLR_MAX = 1.0;
+/** A token's aggregate history blocks a fake trade at or above this count. */
+export const HISTORY_RISK_MIN = 1;
 
 // ── Types ───────────────────────────────────────────────────────────────────────────
 
-/** A single fake (paper) trade derived from a passed DEX candidate. */
+/** A single fake (paper) trade derived from a candidate that survived the history filter. */
 export interface SimTrade {
   contract: string;
   symbol?: string;
@@ -17,16 +22,36 @@ export interface SimTrade {
   outcome: 'winner' | 'loser';
 }
 
+/** Minimal shape needed to simulate a trade. */
+export interface SimTradeInput {
+  contract: string;
+  symbol?: string;
+  priceChangePct?: number;
+}
+
 export interface BlockedReasonCount {
   reason: string;
   count: number;
 }
 
+/** A candidate that met the PASS thresholds but was blocked by ugly prior history. */
+export interface HistoryRiskBlock {
+  contract: string;
+  symbol?: string;
+  priceChangePct?: number;
+  loseCount: number;
+  drainCount: number;
+  missingCount: number;
+  avgVolumeLiquidityRatio?: number;
+  reasons: string[];
+}
+
 export interface DexCandidateSimReport {
   dir: string;
   runsRead: number;
-  candidatesPassed: number;
-  blockedCount: number;
+
+  candidatesFound: number; // strongest outcome meets PASS thresholds
+  blockedByHistoryRisk: number;
 
   fakeBankroll: number;
   fakePositionSize: number;
@@ -45,8 +70,14 @@ export interface DexCandidateSimReport {
   avgWinnerPct?: number;
   avgLoserPct?: number;
 
-  topBlockedReasons: BlockedReasonCount[];
+  historyRiskBlocked: HistoryRiskBlock[];
+  historyRiskBlockReasons: BlockedReasonCount[];
   trades: SimTrade[];
+
+  // ── Back-compat aliases (consumed by the paper runner / older callers) ──
+  candidatesPassed: number; // == candidatesFound (PASS candidates)
+  blockedCount: number; // == blockedByHistoryRisk
+  topBlockedReasons: BlockedReasonCount[]; // == historyRiskBlockReasons
 
   dryRun: false;
   tradingExecuted: 0;
@@ -72,10 +103,10 @@ export function normalizeBlockReason(reason: string): string {
 }
 
 /**
- * Turns one passed candidate into a fake trade: enter at entry snapshot,
+ * Turns one surviving candidate into a fake trade: enter at entry snapshot,
  * exit at final snapshot (encoded by priceChangePct). No real order is placed.
  */
-export function simulateTrade(candidate: DexWatchCandidate, positionSize: number): SimTrade | null {
+export function simulateTrade(candidate: SimTradeInput, positionSize: number): SimTrade | null {
   const pct = candidate.priceChangePct;
   if (typeof pct !== 'number') return null; // PASS guarantees this, but stay defensive
   const pnlDollars = positionSize * (pct / 100);
@@ -90,6 +121,88 @@ export function simulateTrade(candidate: DexWatchCandidate, positionSize: number
   };
 }
 
+// ── Per-contract aggregate history (reuses outcomesFromReport + DRAIN_PCT) ──────────────
+
+interface ContractHistory {
+  contract: string;
+  symbol?: string;
+  appearances: number;
+  loseCount: number;
+  drainCount: number;
+  missingCount: number;
+  vlrs: number[];
+  strongest?: DexWatchOutcome; // highest defined priceChangePct
+}
+
+function rollupHistory(reports: DexWatchReport[]): ContractHistory[] {
+  const map = new Map<string, ContractHistory>();
+
+  for (const report of reports) {
+    for (const o of outcomesFromReport(report)) {
+      const key = o.contract.toLowerCase();
+      let h = map.get(key);
+      if (!h) {
+        h = {
+          contract: o.contract,
+          symbol: o.symbol,
+          appearances: 0,
+          loseCount: 0,
+          drainCount: 0,
+          missingCount: 0,
+          vlrs: [],
+        };
+        map.set(key, h);
+      }
+      if (!h.symbol && o.symbol) h.symbol = o.symbol;
+      h.appearances += 1;
+
+      if (o.classification === 'loser') h.loseCount += 1;
+      if (o.classification === 'missing') h.missingCount += 1;
+      if (typeof o.liquidityChangePct === 'number' && o.liquidityChangePct <= DRAIN_PCT) {
+        h.drainCount += 1;
+      }
+      if (typeof o.volumeToLiquidityRatio === 'number') h.vlrs.push(o.volumeToLiquidityRatio);
+
+      const cur = h.strongest?.priceChangePct;
+      const next = o.priceChangePct;
+      if (h.strongest === undefined) {
+        h.strongest = o;
+      } else if (typeof next === 'number' && (typeof cur !== 'number' || next > cur)) {
+        h.strongest = o;
+      }
+    }
+  }
+
+  return Array.from(map.values());
+}
+
+/** The strongest outcome meets the existing (unchanged) candidate PASS thresholds. */
+function meetsPassThresholds(s?: DexWatchOutcome): boolean {
+  if (!s) return false;
+  return (
+    typeof s.priceChangePct === 'number' && s.priceChangePct >= PASS_PRICE_PCT &&
+    typeof s.liquidityChangePct === 'number' && s.liquidityChangePct >= PASS_LIQ_PCT &&
+    typeof s.volumeToLiquidityRatio === 'number' && s.volumeToLiquidityRatio <= PASS_VLR_MAX
+  );
+}
+
+/** History-risk reasons for a candidate; empty array means the history is clean. */
+export function historyRiskReasons(h: {
+  loseCount: number;
+  drainCount: number;
+  missingCount: number;
+  avgVolumeLiquidityRatio?: number;
+}): string[] {
+  const reasons: string[] = [];
+  if (h.loseCount >= HISTORY_RISK_MIN) reasons.push(`loseCount >= ${HISTORY_RISK_MIN} (loseCount=${h.loseCount})`);
+  if (h.drainCount >= HISTORY_RISK_MIN) reasons.push(`drainCount >= ${HISTORY_RISK_MIN} (drainCount=${h.drainCount})`);
+  if (h.missingCount >= HISTORY_RISK_MIN) reasons.push(`missingCount >= ${HISTORY_RISK_MIN} (missingCount=${h.missingCount})`);
+  if (typeof h.avgVolumeLiquidityRatio === 'number' && h.avgVolumeLiquidityRatio > HISTORY_AVG_VLR_MAX) {
+    reasons.push(`avgVolumeLiquidityRatio > ${HISTORY_AVG_VLR_MAX} (${h.avgVolumeLiquidityRatio.toFixed(2)})`);
+  }
+  return reasons;
+}
+
 // ── Report builder — pure ──────────────────────────────────────────────────────────────
 
 export function buildDexCandidateSimReport(
@@ -100,10 +213,43 @@ export function buildDexCandidateSimReport(
   const fakeBankroll = options.fakeBankroll ?? 20;
   const positionSize = options.positionSize ?? 1;
 
-  const candidates = buildDexWatchCandidatesReport(reports, dir);
+  const histories = rollupHistory(reports);
 
-  const trades = candidates.passed
-    .map(c => simulateTrade(c, positionSize))
+  let candidatesFound = 0;
+  const survivors: SimTradeInput[] = [];
+  const historyRiskBlocked: HistoryRiskBlock[] = [];
+
+  for (const h of histories) {
+    // Candidacy uses the existing (unchanged) PASS thresholds on the strongest outcome.
+    if (!meetsPassThresholds(h.strongest)) continue;
+    candidatesFound += 1;
+
+    const avgVlr = avg(h.vlrs);
+    const reasons = historyRiskReasons({
+      loseCount: h.loseCount,
+      drainCount: h.drainCount,
+      missingCount: h.missingCount,
+      avgVolumeLiquidityRatio: avgVlr,
+    });
+
+    if (reasons.length > 0) {
+      historyRiskBlocked.push({
+        contract: h.contract,
+        symbol: h.symbol,
+        priceChangePct: h.strongest!.priceChangePct,
+        loseCount: h.loseCount,
+        drainCount: h.drainCount,
+        missingCount: h.missingCount,
+        avgVolumeLiquidityRatio: avgVlr,
+        reasons,
+      });
+    } else {
+      survivors.push({ contract: h.contract, symbol: h.symbol, priceChangePct: h.strongest!.priceChangePct });
+    }
+  }
+
+  const trades = survivors
+    .map(s => simulateTrade(s, positionSize))
     .filter((t): t is SimTrade => t !== null);
 
   const winnerTrades = trades.filter(t => t.outcome === 'winner');
@@ -120,23 +266,24 @@ export function buildDexCandidateSimReport(
     ? trades.reduce((worst, t) => (t.pnlDollars < worst.pnlDollars ? t : worst))
     : undefined;
 
-  // Tally and rank block reasons by category.
+  // Tally history-risk reasons by category.
   const reasonCounts = new Map<string, number>();
-  for (const b of candidates.blocked) {
-    for (const r of b.blockReasons) {
+  for (const b of historyRiskBlocked) {
+    for (const r of b.reasons) {
       const key = normalizeBlockReason(r);
       reasonCounts.set(key, (reasonCounts.get(key) ?? 0) + 1);
     }
   }
-  const topBlockedReasons: BlockedReasonCount[] = Array.from(reasonCounts.entries())
+  const historyRiskBlockReasons: BlockedReasonCount[] = Array.from(reasonCounts.entries())
     .map(([reason, count]) => ({ reason, count }))
     .sort((a, b) => b.count - a.count);
 
   return {
     dir,
-    runsRead: candidates.runsRead,
-    candidatesPassed: candidates.passedCount,
-    blockedCount: candidates.blockedCount,
+    runsRead: reports.length,
+
+    candidatesFound,
+    blockedByHistoryRisk: historyRiskBlocked.length,
 
     fakeBankroll,
     fakePositionSize: positionSize,
@@ -155,8 +302,14 @@ export function buildDexCandidateSimReport(
     avgWinnerPct: avg(winnerTrades.map(t => t.pnlPct)),
     avgLoserPct: avg(loserTrades.map(t => t.pnlPct)),
 
-    topBlockedReasons,
+    historyRiskBlocked,
+    historyRiskBlockReasons,
     trades,
+
+    // back-compat aliases
+    candidatesPassed: candidatesFound,
+    blockedCount: historyRiskBlocked.length,
+    topBlockedReasons: historyRiskBlockReasons,
 
     dryRun: false,
     tradingExecuted: 0,
@@ -183,32 +336,33 @@ export function renderDexCandidateSimReport(report: DexCandidateSimReport): stri
   const lines: string[] = [];
 
   lines.push(WIDE);
-  lines.push('  TOKEN GRAB DEX CANDIDATE SIM V1');
+  lines.push('  TOKEN GRAB DEX CANDIDATE SIM V2 — history-risk filter');
   lines.push('  READ-ONLY — NO REAL TRADE SENT — tradingExecuted: 0');
   lines.push(WIDE);
   lines.push('');
-  lines.push(`  Runs dir            : ${report.dir}`);
-  lines.push(`  Runs read           : ${report.runsRead}`);
-  lines.push(`  Candidate trades sim: ${report.tradesSimulated}`);
-  lines.push(`  Fake bankroll       : $${report.fakeBankroll.toFixed(2)}`);
-  lines.push(`  Fake position size  : $${report.fakePositionSize.toFixed(2)}`);
-  lines.push(`  Total fake deployed : $${report.totalDeployed.toFixed(2)}`);
+  lines.push(`  Runs dir                 : ${report.dir}`);
+  lines.push(`  Runs read                : ${report.runsRead}`);
+  lines.push(`  Original candidates found: ${report.candidatesFound}`);
+  lines.push(`  Blocked by history risk  : ${report.blockedByHistoryRisk}`);
+  lines.push(`  Simulated after filter   : ${report.tradesSimulated}`);
+  lines.push(`  Fake bankroll            : $${report.fakeBankroll.toFixed(2)}`);
+  lines.push(`  Fake position size       : $${report.fakePositionSize.toFixed(2)}`);
+  lines.push(`  Total fake deployed      : $${report.totalDeployed.toFixed(2)}`);
   lines.push('');
-  lines.push(`  Winners             : ${report.winners}`);
-  lines.push(`  Losers              : ${report.losers}`);
-  lines.push(`  Win rate            : ${(report.winRate * 100).toFixed(1)}%`);
-  lines.push(`  Fake realized P/L    : ${fmtUsd(report.fakeRealizedPnlDollars)} (${fmtPct(report.fakeRealizedPnlPct)})`);
-  lines.push(`  Avg winner          : ${fmtPct(report.avgWinnerPct)}`);
-  lines.push(`  Avg loser           : ${fmtPct(report.avgLoserPct)}`);
+  lines.push(`  Winners                  : ${report.winners}`);
+  lines.push(`  Losers                   : ${report.losers}`);
+  lines.push(`  Win rate                 : ${(report.winRate * 100).toFixed(1)}%`);
+  lines.push(`  Fake realized P/L         : ${fmtUsd(report.fakeRealizedPnlDollars)} (${fmtPct(report.fakeRealizedPnlPct)})`);
+  lines.push(`  Avg winner               : ${fmtPct(report.avgWinnerPct)}`);
+  lines.push(`  Avg loser                : ${fmtPct(report.avgLoserPct)}`);
   if (report.bestTrade) {
     const b = report.bestTrade;
-    lines.push(`  Best fake trade     : ${(b.symbol ? `$${b.symbol}` : b.contract.slice(0, 6))} ${fmtUsd(b.pnlDollars)} (${fmtPct(b.pnlPct)})`);
+    lines.push(`  Best fake trade          : ${(b.symbol ? `$${b.symbol}` : b.contract.slice(0, 6))} ${fmtUsd(b.pnlDollars)} (${fmtPct(b.pnlPct)})`);
   }
   if (report.worstTrade) {
     const w = report.worstTrade;
-    lines.push(`  Worst fake trade    : ${(w.symbol ? `$${w.symbol}` : w.contract.slice(0, 6))} ${fmtUsd(w.pnlDollars)} (${fmtPct(w.pnlPct)})`);
+    lines.push(`  Worst fake trade         : ${(w.symbol ? `$${w.symbol}` : w.contract.slice(0, 6))} ${fmtUsd(w.pnlDollars)} (${fmtPct(w.pnlPct)})`);
   }
-  lines.push(`  Blocked count       : ${report.blockedCount}`);
 
   if (report.trades.length > 0) {
     lines.push('');
@@ -221,11 +375,21 @@ export function renderDexCandidateSimReport(report: DexCandidateSimReport): stri
     }
   }
 
-  if (report.topBlockedReasons.length > 0) {
+  if (report.historyRiskBlocked.length > 0) {
     lines.push('');
     lines.push(THIN);
-    lines.push('  Top blocked reasons:');
-    for (const r of report.topBlockedReasons.slice(0, 5)) {
+    lines.push(`  HISTORY_RISK_BLOCK — candidates blocked by ugly prior history (${report.historyRiskBlocked.length}):`);
+    for (const b of report.historyRiskBlocked.slice(0, 20)) {
+      const sym = (b.symbol ? `$${b.symbol}` : '(no sym)').padEnd(12);
+      lines.push(`    ${sym} ${b.contract.slice(0, 8)}…  — ${b.reasons.join('; ')}`);
+    }
+  }
+
+  if (report.historyRiskBlockReasons.length > 0) {
+    lines.push('');
+    lines.push(THIN);
+    lines.push('  History-risk block reasons:');
+    for (const r of report.historyRiskBlockReasons.slice(0, 5)) {
       lines.push(`    ${String(r.count).padStart(3)}  ${r.reason}`);
     }
   }
