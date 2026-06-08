@@ -158,45 +158,64 @@ export async function runDexPaperRunner(options: DexPaperRunnerOptions): Promise
       outputPath: signalsOut,
     });
 
-    // 2. Save signals to --signals-out (append, mirroring the CLI).
+    // 2. Save signals to --signals-out (append only NEW non-duplicates, mirroring the CLI).
     if (earsReport.uniqueSignals.length > 0) {
       const updated = [...existing, ...earsReport.uniqueSignals];
       fs.mkdirSync(path.dirname(signalsOut), { recursive: true });
       fs.writeFileSync(signalsOut, JSON.stringify(updated, null, 2), 'utf-8');
     }
-    const fresh = earsReport.uniqueSignals;
-    log(`  signals found: ${fresh.length}`);
 
-    // 3. --fresh-only with no fresh signals: skip the watch entirely (don't watch the accumulated list).
-    if (freshOnly && fresh.length === 0) {
-      log('No fresh DEX signals this cycle. Watch skipped.');
-      cycleResults.push({
-        cycle,
-        generatedAt,
-        signalsFound: 0,
-        watchSkipped: true,
-        contractsWatched: 0,
-        winners: 0,
-        losers: 0,
-        flat: 0,
-        savedRunPath: '',
-        tradesSimulated: 0,
-        fakePnlDollars: 0,
-        fakePnlPct: 0,
-        winRate: 0,
-        blockedCount: 0,
-      });
-      continue;
-    }
-
-    // 3b. Choose what to watch: full accumulated file (default) or only this cycle's fresh signals.
+    // 3. Choose what to watch.
+    //    Default      : the full accumulated presignals file.
+    //    --fresh-only : THIS cycle's extracted contracts (deduped within the cycle only, NOT
+    //                   against the accumulated file) — so active current-cycle contracts are
+    //                   watched even if they already exist in presignals.dex.json.
     let watchSignalsPath = signalsOut;
     let freshTempFile: string | undefined;
+    let signalsFoundThisCycle = earsReport.uniqueSignals.length;
+
     if (freshOnly) {
-      freshTempFile = path.join(os.tmpdir(), `dex-fresh-cycle${cycle}-${runFilename(nowFn())}`);
-      fs.writeFileSync(freshTempFile, JSON.stringify(fresh, null, 2), 'utf-8');
+      const cycleReport = buildDexEarsReport({
+        endpointResults,
+        existingSignals: [],
+        generatedAt,
+        chain,
+        minConfidence,
+        dryRun: false,
+        outputPath: signalsOut,
+      });
+      const cycleSignals = cycleReport.uniqueSignals;
+      signalsFoundThisCycle = cycleSignals.length;
+      log(`  signals found: ${cycleSignals.length} (current cycle)`);
+
+      // Skip only when the current cycle returned nothing at all.
+      if (cycleSignals.length === 0) {
+        log('No fresh DEX signals this cycle. Watch skipped.');
+        cycleResults.push({
+          cycle,
+          generatedAt,
+          signalsFound: 0,
+          watchSkipped: true,
+          contractsWatched: 0,
+          winners: 0,
+          losers: 0,
+          flat: 0,
+          savedRunPath: '',
+          tradesSimulated: 0,
+          fakePnlDollars: 0,
+          fakePnlPct: 0,
+          winRate: 0,
+          blockedCount: 0,
+        });
+        continue;
+      }
+
+      freshTempFile = path.join(os.tmpdir(), `dex-cycle${cycle}-${runFilename(nowFn())}`);
+      fs.writeFileSync(freshTempFile, JSON.stringify(cycleSignals, null, 2), 'utf-8');
       watchSignalsPath = freshTempFile;
-      log(`  fresh-only: watching ${fresh.length} fresh contract(s) from this cycle`);
+      log(`  fresh-only: watching ${cycleSignals.length} current-cycle contract(s)`);
+    } else {
+      log(`  signals found: ${earsReport.uniqueSignals.length}`);
     }
 
     // 4. Watch for a short window (same logic as token:ears-dex-watch).
@@ -233,7 +252,7 @@ export async function runDexPaperRunner(options: DexPaperRunnerOptions): Promise
     cycleResults.push({
       cycle,
       generatedAt,
-      signalsFound: fresh.length,
+      signalsFound: signalsFoundThisCycle,
       watchSkipped: false,
       contractsWatched: watchReport.signalsWatched,
       winners: watchReport.winners.length,

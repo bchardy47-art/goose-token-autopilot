@@ -324,3 +324,91 @@ describe('--fresh-only window', () => {
     expect(out).toContain('tradingExecuted: 0');
   });
 });
+
+// ── --fresh-only = current-cycle-only (includes duplicates already in the accumulated file) ──
+
+// Returns SOL (the same contract used in seeds) + a brand-new FRESH contract.
+const twoContractFetcher: EndpointFetcher = async (): Promise<DexEndpointResult[]> => [
+  {
+    endpoint: 'latest_profiles',
+    fetched: 2,
+    items: [
+      { url: `https://dexscreener.com/solana/${SOL}`, chainId: 'solana', tokenAddress: SOL, header: 'GOOSE' },
+      { url: `https://dexscreener.com/solana/${FRESH}`, chainId: 'solana', tokenAddress: FRESH, header: 'FRESH' },
+    ],
+  },
+  {
+    endpoint: 'latest_boosts',
+    fetched: 2,
+    items: [
+      { url: `https://dexscreener.com/solana/${SOL}`, chainId: 'solana', tokenAddress: SOL, header: 'GOOSE' } as any,
+      { url: `https://dexscreener.com/solana/${FRESH}`, chainId: 'solana', tokenAddress: FRESH, header: 'FRESH' } as any,
+    ],
+  },
+];
+
+describe('--fresh-only current-cycle-only window', () => {
+  it('still watches a current-cycle contract that already exists in the accumulated file', async () => {
+    const dir = makeTempDir();
+    const opts = baseOpts(dir);
+    seedSignals(opts.signalsOut, [SOL]); // SOL already saved
+    // default endpointFetcher re-surfaces SOL this cycle (a duplicate of the saved file).
+    const report = await runDexPaperRunner({ ...opts, freshOnly: true, endpointFetcher });
+    const c = report.cycles[0];
+    expect(c.watchSkipped).toBe(false); // NOT starved despite SOL already saved
+    expect(c.signalsFound).toBe(1); // current-cycle extracted
+    expect(c.contractsWatched).toBe(1); // watches SOL even though it's a duplicate
+    expect(fs.existsSync(c.savedRunPath)).toBe(true);
+  });
+
+  it('watches ALL current-cycle extracted contracts, not just unique-new writes', async () => {
+    const dir = makeTempDir();
+    const opts = baseOpts(dir);
+    seedSignals(opts.signalsOut, [SOL]); // SOL already saved; FRESH is new
+    const report = await runDexPaperRunner({ ...opts, freshOnly: true, endpointFetcher: twoContractFetcher });
+    const c = report.cycles[0];
+    expect(c.signalsFound).toBe(2); // SOL (dup) + FRESH (new) = current cycle
+    expect(c.contractsWatched).toBe(2); // both watched, not just FRESH
+  });
+
+  it('still appends only non-duplicate signals to the accumulated file', async () => {
+    const dir = makeTempDir();
+    const opts = baseOpts(dir);
+    seedSignals(opts.signalsOut, [SOL]);
+    await runDexPaperRunner({ ...opts, freshOnly: true, endpointFetcher: twoContractFetcher });
+    const persisted = JSON.parse(fs.readFileSync(opts.signalsOut, 'utf-8'));
+    const contracts = persisted.map((s: any) => s.contract);
+    expect(contracts).toContain(SOL);
+    expect(contracts).toContain(FRESH);
+    expect(persisted.length).toBe(2); // SOL not duplicated; only FRESH appended
+  });
+
+  it('skips only when the current cycle returns zero signals', async () => {
+    const dir = makeTempDir();
+    const opts = baseOpts(dir);
+    seedSignals(opts.signalsOut, [SOL]);
+    const report = await runDexPaperRunner({ ...opts, freshOnly: true, endpointFetcher: emptyEndpointFetcher });
+    expect(report.cycles[0].watchSkipped).toBe(true);
+    expect(report.cycles[0].signalsFound).toBe(0);
+  });
+
+  it('default mode is unchanged — watches the accumulated file', async () => {
+    const dir = makeTempDir();
+    const opts = baseOpts(dir);
+    seedSignals(opts.signalsOut, [SOL, OLD2]);
+    const report = await runDexPaperRunner({ ...opts, freshOnly: false, endpointFetcher });
+    expect(report.cycles[0].contractsWatched).toBe(2); // full accumulated list
+  });
+
+  it('keeps paper-only banners with current-cycle watching', async () => {
+    const dir = makeTempDir();
+    const opts = baseOpts(dir);
+    seedSignals(opts.signalsOut, [SOL]);
+    const out = renderDexPaperRunnerReport(
+      await runDexPaperRunner({ ...opts, freshOnly: true, endpointFetcher }),
+    );
+    expect(out).toContain('PAPER ONLY');
+    expect(out).toContain('NO REAL TRADE SENT');
+    expect(out).toContain('tradingExecuted: 0');
+  });
+});
