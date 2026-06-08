@@ -2152,6 +2152,7 @@ async function main(): Promise<void> {
         const prCycles = Number(getArgValue('--cycles') ?? '1');
         const prJson = process.argv.includes('--json');
         const prSkipSleep = process.argv.includes('--skip-sleep');
+        const prFreshOnly = process.argv.includes('--fresh-only');
 
         if (!fs.existsSync(prConfig)) {
           throw new Error(`[token:dex-paper-runner] Cannot read --dex-config: ${prConfig}`);
@@ -2181,6 +2182,7 @@ async function main(): Promise<void> {
           fakeBankroll: prBankroll,
           positionSize: prPosition,
           cycles: prCycles,
+          freshOnly: prFreshOnly,
           sleepImpl: prSkipSleep ? () => Promise.resolve() : undefined,
           log: prJson ? undefined : (msg: string) => console.error(msg),
         });

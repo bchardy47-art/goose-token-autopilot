@@ -212,3 +212,115 @@ describe('dexPaperRunner source safety', () => {
     expect(src).not.toMatch(/sendTransaction|signTransaction|privateKey|Keypair|seed phrase|wallet\.connect|jupiter\.swap|executeSwap|LIVE_EXECUTED|puppeteer|playwright|selenium/i);
   });
 });
+
+// ── --fresh-only window ──────────────────────────────────────────────────────────────────
+
+// Derive from SOL's known-valid 44-char base58 suffix (distinct leading chars).
+const FRESH = 'FreshX29zuUfJn6p2pqpTZra9GmCc6PKB4VKF2Zbpump'; // valid base58, new this cycle
+const OLD2 = 'Second29zuUfJn6p2pqpTZra9GmCc6PKB4VKF2Zbpump';
+
+function seedSignals(signalsOut: string, contracts: string[]): void {
+  fs.mkdirSync(path.dirname(signalsOut), { recursive: true });
+  const sigs = contracts.map((c, i) => ({
+    id: `seed-${i}`,
+    source: 'other',
+    text: `CA: ${c}`,
+    contract: c,
+    seenAt: '2026-06-01T00:00:00.000Z',
+    signalType: 'launch_mention',
+    confidence: 'high',
+  }));
+  fs.writeFileSync(signalsOut, JSON.stringify(sigs, null, 2), 'utf-8');
+}
+
+// endpoint fetcher that returns one brand-new fresh contract (profile + boost).
+const freshEndpointFetcher: EndpointFetcher = async (): Promise<DexEndpointResult[]> => [
+  {
+    endpoint: 'latest_profiles',
+    fetched: 1,
+    items: [{ url: `https://dexscreener.com/solana/${FRESH}`, chainId: 'solana', tokenAddress: FRESH, header: 'FRESH' }],
+  },
+  {
+    endpoint: 'latest_boosts',
+    fetched: 1,
+    items: [{ url: `https://dexscreener.com/solana/${FRESH}`, chainId: 'solana', tokenAddress: FRESH, header: 'FRESH' } as any],
+  },
+];
+
+const emptyEndpointFetcher: EndpointFetcher = async (): Promise<DexEndpointResult[]> => [];
+
+describe('--fresh-only window', () => {
+  it('default mode watches the full accumulated list', async () => {
+    const dir = makeTempDir();
+    const opts = baseOpts(dir);
+    seedSignals(opts.signalsOut, [SOL, OLD2]); // 2 pre-existing contracts
+    // endpointFetcher (default) re-surfaces SOL (a duplicate) → 0 fresh, but full file has 2.
+    const report = await runDexPaperRunner({ ...opts, freshOnly: false });
+    expect(report.freshOnly).toBe(false);
+    expect(report.cycles[0].watchSkipped).toBe(false);
+    expect(report.cycles[0].contractsWatched).toBe(2); // SOL + OLD2 (accumulated)
+  });
+
+  it('fresh-only watches only this cycle’s fresh contracts, not the accumulated list', async () => {
+    const dir = makeTempDir();
+    const opts = baseOpts(dir);
+    seedSignals(opts.signalsOut, [SOL, OLD2]); // 2 pre-existing
+    const report = await runDexPaperRunner({
+      ...opts,
+      freshOnly: true,
+      endpointFetcher: freshEndpointFetcher, // 1 brand-new contract
+    });
+    expect(report.freshOnly).toBe(true);
+    const c = report.cycles[0];
+    expect(c.signalsFound).toBe(1);
+    expect(c.watchSkipped).toBe(false);
+    expect(c.contractsWatched).toBe(1); // only FRESH, NOT the 2 accumulated
+    expect(c.tradesSimulated).toBe(1);
+    expect(fs.existsSync(c.savedRunPath)).toBe(true);
+  });
+
+  it('still appends fresh signals to the accumulated file in fresh-only mode', async () => {
+    const dir = makeTempDir();
+    const opts = baseOpts(dir);
+    seedSignals(opts.signalsOut, [SOL, OLD2]);
+    await runDexPaperRunner({ ...opts, freshOnly: true, endpointFetcher: freshEndpointFetcher });
+    const persisted = JSON.parse(fs.readFileSync(opts.signalsOut, 'utf-8'));
+    expect(persisted.map((s: any) => s.contract)).toContain(FRESH);
+    expect(persisted.length).toBe(3); // 2 seeded + 1 fresh
+  });
+
+  it('skips the watch and prints the message when no fresh signals are found', async () => {
+    const dir = makeTempDir();
+    const opts = baseOpts(dir);
+    seedSignals(opts.signalsOut, [SOL, OLD2]);
+    const logs: string[] = [];
+    const report = await runDexPaperRunner({
+      ...opts,
+      freshOnly: true,
+      endpointFetcher: emptyEndpointFetcher, // 0 fresh
+      log: (m) => logs.push(m),
+    });
+    const c = report.cycles[0];
+    expect(c.signalsFound).toBe(0);
+    expect(c.watchSkipped).toBe(true);
+    expect(c.contractsWatched).toBe(0);
+    expect(c.savedRunPath).toBe('');
+    expect(logs).toContain('No fresh DEX signals this cycle. Watch skipped.');
+    // No run file written for a skipped cycle.
+    const runsDir = opts.runsDir;
+    const runFiles = fs.existsSync(runsDir) ? fs.readdirSync(runsDir).filter(f => f.startsWith('run-')) : [];
+    expect(runFiles).toHaveLength(0);
+  });
+
+  it('renders watch-mode and skip status', async () => {
+    const dir = makeTempDir();
+    const opts = baseOpts(dir);
+    seedSignals(opts.signalsOut, [SOL, OLD2]);
+    const report = await runDexPaperRunner({ ...opts, freshOnly: true, endpointFetcher: emptyEndpointFetcher });
+    const out = renderDexPaperRunnerReport(report);
+    expect(out).toMatch(/Watch mode\s*:\s*fresh-only/);
+    expect(out).toMatch(/Watch skipped/);
+    expect(out).toContain('PAPER ONLY');
+    expect(out).toContain('tradingExecuted: 0');
+  });
+});

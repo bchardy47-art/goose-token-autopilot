@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import type { PreSignal } from './xEarsPreSignal';
 import {
@@ -22,11 +23,12 @@ export interface DexPaperCycleResult {
   cycle: number;
   generatedAt: string;
   signalsFound: number;
+  watchSkipped: boolean;
   contractsWatched: number;
   winners: number;
   losers: number;
   flat: number;
-  savedRunPath: string;
+  savedRunPath: string; // '' when the watch was skipped
   tradesSimulated: number;
   fakePnlDollars: number;
   fakePnlPct: number;
@@ -42,6 +44,7 @@ export interface DexPaperRunnerReport {
   runsDir: string;
   fakeBankroll: number;
   fakePositionSize: number;
+  freshOnly: boolean;
   dryRun: false;
   tradingExecuted: 0;
   noRealTradeSent: true;
@@ -58,6 +61,8 @@ export interface DexPaperRunnerOptions {
   cycles: number;
   chain?: string;
   minConfidence?: 'low' | 'medium' | 'high';
+  /** When true, watch only this cycle's fresh (non-duplicate) signals, not the full accumulated file. */
+  freshOnly?: boolean;
   // ── Injection points (production defaults reuse the real modules) ──
   endpointFetcher?: EndpointFetcher;
   watchFetchImpl?: typeof fetch;
@@ -122,6 +127,7 @@ export async function runDexPaperRunner(options: DexPaperRunnerOptions): Promise
     fakeBankroll,
     positionSize,
     cycles,
+    freshOnly = false,
     endpointFetcher = defaultEndpointFetcher,
     watchFetchImpl,
     sleepImpl,
@@ -158,11 +164,44 @@ export async function runDexPaperRunner(options: DexPaperRunnerOptions): Promise
       fs.mkdirSync(path.dirname(signalsOut), { recursive: true });
       fs.writeFileSync(signalsOut, JSON.stringify(updated, null, 2), 'utf-8');
     }
-    log(`  signals found: ${earsReport.uniqueSignals.length}`);
+    const fresh = earsReport.uniqueSignals;
+    log(`  signals found: ${fresh.length}`);
 
-    // 3. Watch them for a short window (same logic as token:ears-dex-watch).
+    // 3. --fresh-only with no fresh signals: skip the watch entirely (don't watch the accumulated list).
+    if (freshOnly && fresh.length === 0) {
+      log('No fresh DEX signals this cycle. Watch skipped.');
+      cycleResults.push({
+        cycle,
+        generatedAt,
+        signalsFound: 0,
+        watchSkipped: true,
+        contractsWatched: 0,
+        winners: 0,
+        losers: 0,
+        flat: 0,
+        savedRunPath: '',
+        tradesSimulated: 0,
+        fakePnlDollars: 0,
+        fakePnlPct: 0,
+        winRate: 0,
+        blockedCount: 0,
+      });
+      continue;
+    }
+
+    // 3b. Choose what to watch: full accumulated file (default) or only this cycle's fresh signals.
+    let watchSignalsPath = signalsOut;
+    let freshTempFile: string | undefined;
+    if (freshOnly) {
+      freshTempFile = path.join(os.tmpdir(), `dex-fresh-cycle${cycle}-${runFilename(nowFn())}`);
+      fs.writeFileSync(freshTempFile, JSON.stringify(fresh, null, 2), 'utf-8');
+      watchSignalsPath = freshTempFile;
+      log(`  fresh-only: watching ${fresh.length} fresh contract(s) from this cycle`);
+    }
+
+    // 4. Watch for a short window (same logic as token:ears-dex-watch).
     const watchReport: DexWatchReport = await runDexWatch({
-      signalsPath: signalsOut,
+      signalsPath: watchSignalsPath,
       minutes,
       intervalSeconds,
       chain,
@@ -173,13 +212,18 @@ export async function runDexPaperRunner(options: DexPaperRunnerOptions): Promise
       log: (m) => log(`    ${m}`),
     });
 
-    // 4. Save the watch run to runs-dir/run-YYYYMMDD-HHMMSS.json.
+    // Clean up the temporary fresh-signals file (read-only artifact, not a saved run).
+    if (freshTempFile) {
+      try { fs.rmSync(freshTempFile, { force: true }); } catch { /* ignore */ }
+    }
+
+    // 5. Save the watch run to runs-dir/run-YYYYMMDD-HHMMSS.json.
     const savedRunPath = path.join(runsDir, runFilename(nowFn()));
     fs.mkdirSync(runsDir, { recursive: true });
     fs.writeFileSync(savedRunPath, JSON.stringify(watchReport, null, 2), 'utf-8');
     log(`  saved run: ${savedRunPath}`);
 
-    // 5. Run candidate simulation (same logic as token:dex-candidate-sim) over this run.
+    // 6. Run candidate simulation (same logic as token:dex-candidate-sim) over this run.
     const sim: DexCandidateSimReport = buildDexCandidateSimReport([watchReport], {
       dir: runsDir,
       fakeBankroll,
@@ -189,7 +233,8 @@ export async function runDexPaperRunner(options: DexPaperRunnerOptions): Promise
     cycleResults.push({
       cycle,
       generatedAt,
-      signalsFound: earsReport.uniqueSignals.length,
+      signalsFound: fresh.length,
+      watchSkipped: false,
       contractsWatched: watchReport.signalsWatched,
       winners: watchReport.winners.length,
       losers: watchReport.losers.length,
@@ -216,6 +261,7 @@ export async function runDexPaperRunner(options: DexPaperRunnerOptions): Promise
     runsDir,
     fakeBankroll,
     fakePositionSize: positionSize,
+    freshOnly,
     dryRun: false,
     tradingExecuted: 0,
     noRealTradeSent: true,
@@ -242,6 +288,7 @@ export function renderDexPaperRunnerReport(report: DexPaperRunnerReport): string
   lines.push(`  Runs dir         : ${report.runsDir}`);
   lines.push(`  Fake bankroll    : $${report.fakeBankroll.toFixed(2)}`);
   lines.push(`  Fake position    : $${report.fakePositionSize.toFixed(2)}`);
+  lines.push(`  Watch mode       : ${report.freshOnly ? 'fresh-only (current cycle)' : 'full accumulated'}`);
   lines.push(`  Cycles requested : ${report.cyclesRequested}`);
   lines.push(`  Cycles completed : ${report.cyclesCompleted}`);
 
@@ -250,6 +297,10 @@ export function renderDexPaperRunnerReport(report: DexPaperRunnerReport): string
     lines.push(THIN);
     lines.push(`  Cycle ${c.cycle}`);
     lines.push(`    Signals found      : ${c.signalsFound}`);
+    if (c.watchSkipped) {
+      lines.push(`    Watch skipped      : no fresh DEX signals this cycle`);
+      continue;
+    }
     lines.push(`    Contracts watched  : ${c.contractsWatched}`);
     lines.push(`    Winners/Losers/Flat: ${c.winners} / ${c.losers} / ${c.flat}`);
     lines.push(`    Saved run          : ${c.savedRunPath}`);
