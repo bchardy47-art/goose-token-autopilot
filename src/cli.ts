@@ -149,6 +149,7 @@ import { loadWatchReports, buildDexWatchSummary, renderDexWatchSummary } from '.
 import { buildDexWatchCandidatesReport, renderDexWatchCandidatesReport } from './token-grab/dexWatchCandidates';
 import { buildDexCandidateSimReport, renderDexCandidateSimReport } from './token-grab/dexCandidateSim';
 import { runDexPaperRunner, renderDexPaperRunnerReport } from './token-grab/dexPaperRunner';
+import { runDexPaperJournal, renderDexPaperJournal } from './token-grab/dexPaperJournal';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2191,6 +2192,36 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(prReport, null, 2));
         } else {
           console.log(renderDexPaperRunnerReport(prReport));
+        }
+        break;
+      }
+
+      case 'token:dex-paper-journal': {
+        const pjDir = getArgValue('--dir') ?? 'data/token-grab/dex-watch-runs';
+        const pjOut = getArgValue('--out') ?? 'data/token-grab/paper-journal/dex-paper-journal.json';
+        const pjBankroll = Number(getArgValue('--fake-bankroll') ?? '20');
+        const pjPosition = Number(getArgValue('--position-size') ?? '1');
+        const pjJson = process.argv.includes('--json');
+
+        if (!Number.isFinite(pjBankroll) || pjBankroll < 0) {
+          throw new Error(`[token:dex-paper-journal] --fake-bankroll must be a non-negative number`);
+        }
+        if (!Number.isFinite(pjPosition) || pjPosition <= 0) {
+          throw new Error(`[token:dex-paper-journal] --position-size must be a positive number`);
+        }
+
+        const pjJournal = runDexPaperJournal({
+          dir: pjDir,
+          out: pjOut,
+          fakeBankroll: pjBankroll,
+          positionSize: pjPosition,
+          journaledAt: new Date().toISOString(),
+        });
+
+        if (pjJson) {
+          console.log(JSON.stringify(pjJournal, null, 2));
+        } else {
+          console.log(renderDexPaperJournal(pjJournal));
         }
         break;
       }
