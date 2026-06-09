@@ -152,6 +152,7 @@ import { runDexPaperRunner, renderDexPaperRunnerReport } from './token-grab/dexP
 import { runDexPaperJournal, renderDexPaperJournal } from './token-grab/dexPaperJournal';
 import { runDexPaperEntryPlanner, renderDexPaperEntryPlanReport } from './token-grab/dexPaperEntryPlanner';
 import { runDexValidationLoop, renderValidationLoopSummary, renderValidationLoopUsage } from './token-grab/dexValidationLoop';
+import { runDexDayWatch, renderDayWatchUsage, loadDayLog, buildDayReport, renderDayReport, renderDayReportUsage } from './token-grab/dexDayWatch';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2328,6 +2329,93 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(vlSummary, null, 2));
         } else {
           console.log(renderValidationLoopSummary(vlSummary));
+        }
+        break;
+      }
+
+      case 'token:dex-day-watch': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderDayWatchUsage());
+          break;
+        }
+        const dwConfig     = getArgValue('--dex-config')                   ?? 'config/dex-ears.example.json';
+        const dwSignals    = getArgValue('--signals-out')                  ?? 'data/token-grab/x-ears/presignals.dex.json';
+        const dwRunsDir    = getArgValue('--runs-dir')                     ?? 'data/token-grab/dex-watch-runs';
+        const dwJournal    = getArgValue('--journal')                      ?? 'data/token-grab/paper-journal/dex-paper-journal.json';
+        const dwPlannerOut = getArgValue('--planner-out')                  ?? 'data/token-grab/paper-plans/dex-paper-entry-plan.json';
+        const dwDayLog     = getArgValue('--day-log')                      ?? 'data/token-grab/day-watch/dex-day-watch.jsonl';
+        const dwBankroll   = Number(getArgValue('--fake-bankroll')         ?? '20');
+        const dwPosition   = Number(getArgValue('--position-size')         ?? '1');
+        const dwCycles     = Number(getArgValue('--cycles')                ?? '24');
+        const dwMinutes    = Number(getArgValue('--minutes')               ?? '10');
+        const dwInterval   = Number(getArgValue('--interval-seconds')      ?? '60');
+        const dwSleepMins  = Number(getArgValue('--sleep-between-cycles-minutes') ?? '20');
+
+        if (!Number.isFinite(dwBankroll) || dwBankroll < 0) {
+          throw new Error(`[token:dex-day-watch] --fake-bankroll must be a non-negative number`);
+        }
+        if (!Number.isFinite(dwPosition) || dwPosition <= 0) {
+          throw new Error(`[token:dex-day-watch] --position-size must be a positive number`);
+        }
+        if (!Number.isFinite(dwCycles) || dwCycles < 1) {
+          throw new Error(`[token:dex-day-watch] --cycles must be >= 1`);
+        }
+        if (!Number.isFinite(dwMinutes) || dwMinutes < 0) {
+          throw new Error(`[token:dex-day-watch] --minutes must be a non-negative number`);
+        }
+        if (!Number.isFinite(dwInterval) || dwInterval <= 0) {
+          throw new Error(`[token:dex-day-watch] --interval-seconds must be a positive number`);
+        }
+        if (!Number.isFinite(dwSleepMins) || dwSleepMins < 0) {
+          throw new Error(`[token:dex-day-watch] --sleep-between-cycles-minutes must be a non-negative number`);
+        }
+        if (!fs.existsSync(dwConfig)) {
+          throw new Error(`[token:dex-day-watch] Cannot read --dex-config: ${dwConfig}`);
+        }
+
+        const stopSignal = { stopped: false };
+        process.on('SIGINT', () => {
+          console.log('\n  [day-watch] Ctrl+C received — stopping after current cycle…');
+          stopSignal.stopped = true;
+        });
+
+        const dwResult = await runDexDayWatch({
+          dexConfigPath: dwConfig,
+          signalsOut: dwSignals,
+          runsDir: dwRunsDir,
+          journalOut: dwJournal,
+          plannerOut: dwPlannerOut,
+          dayLogPath: dwDayLog,
+          fakeBankroll: dwBankroll,
+          positionSize: dwPosition,
+          cycles: dwCycles,
+          minutes: dwMinutes,
+          intervalSeconds: dwInterval,
+          sleepBetweenCyclesMs: dwSleepMins * 60 * 1000,
+          stopSignal,
+          log: (m) => console.log(m),
+        });
+
+        console.log(`\n  Day watch complete. ${dwResult.cyclesRun} cycles written to ${dwResult.dayLogPath}`);
+        console.log(`  Run: npm run token:dex-day-report -- --day-log ${dwResult.dayLogPath}`);
+        break;
+      }
+
+      case 'token:dex-day-report': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderDayReportUsage());
+          break;
+        }
+        const drDayLog = getArgValue('--day-log') ?? 'data/token-grab/day-watch/dex-day-watch.jsonl';
+        const drJson   = process.argv.includes('--json');
+
+        const drEntries = loadDayLog(drDayLog);
+        const drReport  = buildDayReport(drEntries, new Date().toISOString());
+
+        if (drJson) {
+          console.log(JSON.stringify(drReport, null, 2));
+        } else {
+          console.log(renderDayReport(drReport));
         }
         break;
       }
