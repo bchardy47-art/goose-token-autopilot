@@ -29,6 +29,7 @@ const T0 = '2026-06-09T10:00:00.000Z';
 const T1 = '2026-06-09T10:10:00.000Z'; // +10 min
 const T2 = '2026-06-09T10:30:00.000Z'; // +30 min
 const T3 = '2026-06-09T10:40:00.000Z'; // +40 min
+const T_286m = '2026-06-09T14:46:00.000Z'; // +286 min (realistic day-watch inter-cycle gap)
 
 function makeSnap(
   contract: string,
@@ -290,6 +291,104 @@ describe('buildTrackedPosition — exit reasons', () => {
     // Use maxHoldMinutes=60 so the 40-min hold doesn't time out before the +30% TAKE_PROFIT.
     const pos = buildTrackedPosition(makePlan(SOL_A), sourceRun, [laterRun], { ...DEFAULT_OPTS, maxHoldMinutes: 60 });
     expect(pos.exitReason).toBe('TAKE_PROFIT');
+  });
+});
+
+// ── buildTrackedPosition — max-hold enforcement ─────────────────────────────────────────
+// These tests verify the bug fix: MAX_HOLD_TIMEOUT must be checked before price exits so
+// an out-of-window snapshot (e.g. +286m) cannot produce a TAKE_PROFIT instead of timeout.
+
+describe('buildTrackedPosition — max-hold enforcement', () => {
+  it('snapshot at +286m with +40% price returns MAX_HOLD_TIMEOUT, not TAKE_PROFIT (regression)', () => {
+    const entry = makeSnap(SOL_A, 1.0, 10000, 200, T0);
+    const late  = makeSnap(SOL_A, 1.4, 10500, 200, T_286m); // +40%, but 286 min > 20 min window
+    const run = makeRun('run-20260609-100000.json', [makeOutcome(SOL_A, entry, late)]);
+    const pos = buildTrackedPosition(makePlan(SOL_A), run, [], DEFAULT_OPTS);
+    expect(pos.exitReason).toBe('MAX_HOLD_TIMEOUT');
+    expect(pos.status).toBe('CLOSED');
+  });
+
+  it('snapshot at +286m with +60% price returns MAX_HOLD_TIMEOUT, not RUNNER_TARGET (regression)', () => {
+    const entry = makeSnap(SOL_A, 1.0, 10000, 200, T0);
+    const late  = makeSnap(SOL_A, 1.6, 10500, 200, T_286m); // +60%, but 286 min > 20 min window
+    const run = makeRun('run-20260609-100000.json', [makeOutcome(SOL_A, entry, late)]);
+    const pos = buildTrackedPosition(makePlan(SOL_A), run, [], DEFAULT_OPTS);
+    expect(pos.exitReason).toBe('MAX_HOLD_TIMEOUT');
+  });
+
+  it('+30% snapshot at +10m still returns TAKE_PROFIT (within window)', () => {
+    const entry = makeSnap(SOL_A, 1.0, 10000, 200, T0);
+    const final = makeSnap(SOL_A, 1.3, 10100, 200, T1); // +10 min, +30%
+    const run = makeRun('run-20260609-100000.json', [makeOutcome(SOL_A, entry, final)]);
+    const pos = buildTrackedPosition(makePlan(SOL_A), run, [], DEFAULT_OPTS);
+    expect(pos.exitReason).toBe('TAKE_PROFIT');
+  });
+
+  it('-25% snapshot at +10m still returns STOP_LOSS (within window)', () => {
+    const entry = makeSnap(SOL_A, 1.0, 10000, 200, T0);
+    const final = makeSnap(SOL_A, 0.74, 9700, 200, T1); // +10 min, -26%
+    const run = makeRun('run-20260609-100000.json', [makeOutcome(SOL_A, entry, final)]);
+    const pos = buildTrackedPosition(makePlan(SOL_A), run, [], DEFAULT_OPTS);
+    expect(pos.exitReason).toBe('STOP_LOSS');
+  });
+
+  it('liquidity dump at +10m still returns LIQUIDITY_DUMP (within window)', () => {
+    const entry = makeSnap(SOL_A, 1.0, 10000, 200, T0);
+    const final = makeSnap(SOL_A, 0.99, 7400, 200, T1); // +10 min, liq -26%
+    const run = makeRun('run-20260609-100000.json', [makeOutcome(SOL_A, entry, final)]);
+    const pos = buildTrackedPosition(makePlan(SOL_A), run, [], DEFAULT_OPTS);
+    expect(pos.exitReason).toBe('LIQUIDITY_DUMP');
+  });
+
+  it('VLR spike at +10m still returns VLR_SPIKE (within window)', () => {
+    const entry = makeSnap(SOL_A, 1.0, 10000, 500, T0);
+    const final = makeSnap(SOL_A, 1.05, 10000, 35000, T1); // +10 min, VLR 3.5
+    const run = makeRun('run-20260609-100000.json', [makeOutcome(SOL_A, entry, final)]);
+    const pos = buildTrackedPosition(makePlan(SOL_A), run, [], DEFAULT_OPTS);
+    expect(pos.exitReason).toBe('VLR_SPIKE');
+  });
+
+  it('no out-of-window snapshot → in-window TAKE_PROFIT still wins over later timeout', () => {
+    const entry  = makeSnap(SOL_A, 1.0, 10000, 200, T0);
+    const inWin  = makeSnap(SOL_A, 1.3, 10100, 200, T1);     // +10 min, +30% → TAKE_PROFIT
+    const outWin = makeSnap(SOL_A, 1.5, 10200, 200, T_286m); // +286 min, +50% (beyond window, never reached)
+    const sourceRun = makeRun('run-20260609-100000.json', [makeOutcome(SOL_A, entry, inWin)]);
+    const laterRun  = makeRun('run-20260609-150000.json', [makeOutcome(SOL_A, inWin, outWin)]);
+    const pos = buildTrackedPosition(makePlan(SOL_A), sourceRun, [laterRun], DEFAULT_OPTS);
+    expect(pos.exitReason).toBe('TAKE_PROFIT');
+  });
+
+  it('holdMinutes does not exceed maxHoldMinutes on MAX_HOLD_TIMEOUT', () => {
+    const entry = makeSnap(SOL_A, 1.0, 10000, 200, T0);
+    const late  = makeSnap(SOL_A, 1.4, 10500, 200, T_286m);
+    const run = makeRun('run-20260609-100000.json', [makeOutcome(SOL_A, entry, late)]);
+    const pos = buildTrackedPosition(makePlan(SOL_A), run, [], DEFAULT_OPTS);
+    expect(pos.exitReason).toBe('MAX_HOLD_TIMEOUT');
+    expect(pos.holdMinutes).toBeLessThanOrEqual(DEFAULT_OPTS.maxHoldMinutes);
+    expect(pos.holdMinutes).toBeCloseTo(DEFAULT_OPTS.maxHoldMinutes, 0);
+  });
+
+  it('no later snapshot → STILL_OPEN (entry age unknown, cannot confirm max hold expired)', () => {
+    const entry = makeSnap(SOL_A, 1.0, 10000, 200, T0);
+    const final = makeSnap(SOL_A, 1.05, 10100, 200, T1); // +10 min, +5%, no exit
+    const run = makeRun('run-20260609-100000.json', [makeOutcome(SOL_A, entry, final)]);
+    const pos = buildTrackedPosition(makePlan(SOL_A), run, [], DEFAULT_OPTS);
+    expect(pos.exitReason).toBe('STILL_OPEN');
+    expect(pos.status).toBe('OPEN');
+  });
+
+  it('no observations at all → MISSING_OR_STALE (no data to track against)', () => {
+    const entry = makeSnap(SOL_A, 1.0, 10000, 200, T0);
+    // makeOutcome with null final → no final snapshot in the outcome
+    const outcomeNoFinal: DexWatchOutcome = {
+      signalId: SOL_A, contract: SOL_A, symbol: 'TEST', chainId: 'solana',
+      entry, final: undefined, priceChangePct: undefined,
+      liquidityChangePct: undefined, volumeToLiquidityRatio: undefined, classification: 'missing',
+    };
+    const run = makeRun('run-20260609-100000.json', [outcomeNoFinal]);
+    const pos = buildTrackedPosition(makePlan(SOL_A), run, [], DEFAULT_OPTS);
+    // No final + no laterRuns → observations.length === 0 → MISSING_OR_STALE
+    expect(pos.exitReason).toBe('MISSING_OR_STALE');
   });
 });
 

@@ -165,11 +165,17 @@ export function buildTrackedPosition(
   for (const obs of observations) {
     if (!obs.priceUsd) continue;
 
+    const obsMs = new Date(obs.observedAt).getTime();
+    const holdMins = isNaN(obsMs) ? 0 : (obsMs - entryMs) / 60000;
+
+    // Time boundary checked first — out-of-window snapshots must not trigger price exits.
+    if (holdMins >= opts.maxHoldMinutes) {
+      exitObs = obs; exitReason = 'MAX_HOLD_TIMEOUT'; break;
+    }
+
     const priceChg = ((obs.priceUsd - entryPrice) / entryPrice) * 100;
     const liqChg = pctChange(entryLiq, obs.liquidityUsd);
     const vlr = computeSnapshotVlr(obs);
-    const obsMs = new Date(obs.observedAt).getTime();
-    const holdMins = isNaN(obsMs) ? 0 : (obsMs - entryMs) / 60000;
 
     if (priceChg > maxRunupPct) maxRunupPct = priceChg;
     if (priceChg < maxDrawdownPct) maxDrawdownPct = priceChg;
@@ -189,9 +195,6 @@ export function buildTrackedPosition(
     if (vlr != null && vlr >= VLR_SPIKE_THRESHOLD) {
       exitObs = obs; exitReason = 'VLR_SPIKE'; break;
     }
-    if (holdMins >= opts.maxHoldMinutes) {
-      exitObs = obs; exitReason = 'MAX_HOLD_TIMEOUT'; break;
-    }
   }
 
   // STILL_OPEN: use last known observation as current state.
@@ -204,7 +207,11 @@ export function buildTrackedPosition(
   const finalPriceChg = exitPrice ? ((exitPrice - entryPrice) / entryPrice) * 100 : 0;
   const fakePnlDollars = opts.positionSize * (finalPriceChg / 100);
   const exitMs = exitAt ? new Date(exitAt).getTime() : NaN;
-  const holdMinutes = isNaN(exitMs) ? 0 : (exitMs - entryMs) / 60000;
+  const rawHoldMinutes = isNaN(exitMs) ? 0 : (exitMs - entryMs) / 60000;
+  // MAX_HOLD_TIMEOUT exits the position at the window boundary, not at the (later) snapshot time.
+  const holdMinutes = exitReason === 'MAX_HOLD_TIMEOUT'
+    ? Math.min(rawHoldMinutes, opts.maxHoldMinutes)
+    : rawHoldMinutes;
 
   return {
     symbol: plan.symbol,
