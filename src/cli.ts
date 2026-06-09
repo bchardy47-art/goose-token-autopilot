@@ -153,6 +153,7 @@ import { runDexPaperJournal, renderDexPaperJournal } from './token-grab/dexPaper
 import { runDexPaperEntryPlanner, renderDexPaperEntryPlanReport } from './token-grab/dexPaperEntryPlanner';
 import { runDexValidationLoop, renderValidationLoopSummary, renderValidationLoopUsage } from './token-grab/dexValidationLoop';
 import { runDexDayWatch, renderDayWatchUsage, loadDayLog, buildDayReport, renderDayReport, renderDayReportUsage } from './token-grab/dexDayWatch';
+import { runDexPaperPositionTracker, renderDexPaperPositionTrackerReport, renderDexPaperPositionTrackerUsage } from './token-grab/dexPaperPositionTracker';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2416,6 +2417,57 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(drReport, null, 2));
         } else {
           console.log(renderDayReport(drReport));
+        }
+        break;
+      }
+
+      case 'token:dex-paper-position-tracker': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderDexPaperPositionTrackerUsage());
+          break;
+        }
+        const ptRunsDir   = getArgValue('--runs-dir')           ?? 'data/token-grab/dex-watch-runs';
+        const ptPlanner   = getArgValue('--planner')            ?? 'data/token-grab/paper-plans/dex-paper-entry-plan.json';
+        const ptOut       = getArgValue('--out')                ?? 'data/token-grab/paper-positions/dex-paper-positions.json';
+        const ptSize      = Number(getArgValue('--position-size')      ?? '1');
+        const ptStop      = Number(getArgValue('--stop-loss-pct')      ?? '-20');
+        const ptTp        = Number(getArgValue('--take-profit-pct')    ?? '25');
+        const ptRunner    = Number(getArgValue('--runner-target-pct')  ?? '50');
+        const ptMaxHold   = Number(getArgValue('--max-hold-minutes')   ?? '20');
+        const ptJson      = process.argv.includes('--json');
+
+        if (!Number.isFinite(ptSize) || ptSize <= 0) {
+          throw new Error(`[token:dex-paper-position-tracker] --position-size must be a positive number`);
+        }
+        if (!Number.isFinite(ptStop) || ptStop >= 0) {
+          throw new Error(`[token:dex-paper-position-tracker] --stop-loss-pct must be negative`);
+        }
+        if (!Number.isFinite(ptTp) || ptTp <= 0) {
+          throw new Error(`[token:dex-paper-position-tracker] --take-profit-pct must be positive`);
+        }
+        if (!Number.isFinite(ptRunner) || ptRunner <= 0) {
+          throw new Error(`[token:dex-paper-position-tracker] --runner-target-pct must be positive`);
+        }
+        if (!Number.isFinite(ptMaxHold) || ptMaxHold <= 0) {
+          throw new Error(`[token:dex-paper-position-tracker] --max-hold-minutes must be positive`);
+        }
+
+        const ptReport = runDexPaperPositionTracker({
+          plannerFile: ptPlanner,
+          runsDir: ptRunsDir,
+          out: ptOut,
+          positionSize: ptSize,
+          stopLossPct: ptStop,
+          takeProfitPct: ptTp,
+          runnerTargetPct: ptRunner,
+          maxHoldMinutes: ptMaxHold,
+          generatedAt: new Date().toISOString(),
+        });
+
+        if (ptJson) {
+          console.log(JSON.stringify(ptReport, null, 2));
+        } else {
+          console.log(renderDexPaperPositionTrackerReport(ptReport));
         }
         break;
       }
