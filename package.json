@@ -87,6 +87,7 @@
     "token:dex-paper-runner": "tsx src/cli.ts token:dex-paper-runner",
     "token:dex-paper-journal": "tsx src/cli.ts token:dex-paper-journal",
     "token:dex-paper-entry-plan": "tsx src/cli.ts token:dex-paper-entry-plan",
+    "token:dex-validation-loop": "tsx src/cli.ts token:dex-validation-loop",
     "test": "vitest run"
   },
   "dependencies": {

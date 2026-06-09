@@ -151,6 +151,7 @@ import { buildDexCandidateSimReport, renderDexCandidateSimReport } from './token
 import { runDexPaperRunner, renderDexPaperRunnerReport } from './token-grab/dexPaperRunner';
 import { runDexPaperJournal, renderDexPaperJournal } from './token-grab/dexPaperJournal';
 import { runDexPaperEntryPlanner, renderDexPaperEntryPlanReport } from './token-grab/dexPaperEntryPlanner';
+import { runDexValidationLoop, renderValidationLoopSummary, renderValidationLoopUsage } from './token-grab/dexValidationLoop';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2260,6 +2261,73 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(epReport, null, 2));
         } else {
           console.log(renderDexPaperEntryPlanReport(epReport));
+        }
+        break;
+      }
+
+      case 'token:dex-validation-loop': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderValidationLoopUsage());
+          break;
+        }
+        const vlConfig      = getArgValue('--dex-config')                   ?? 'config/dex-ears.example.json';
+        const vlSignals     = getArgValue('--signals-out')                  ?? 'data/token-grab/x-ears/presignals.dex.json';
+        const vlRunsDir     = getArgValue('--runs-dir')                     ?? 'data/token-grab/dex-watch-runs';
+        const vlJournal     = getArgValue('--journal')                      ?? 'data/token-grab/paper-journal/dex-paper-journal.json';
+        const vlPlannerOut  = getArgValue('--planner-out')                  ?? 'data/token-grab/paper-plans/dex-paper-entry-plan.json';
+        const vlSummaryOut  = getArgValue('--summary-out')                  ?? 'data/token-grab/validation/dex-validation-loop-summary.json';
+        const vlBankroll    = Number(getArgValue('--fake-bankroll')         ?? '20');
+        const vlPosition    = Number(getArgValue('--position-size')         ?? '1');
+        const vlCycles      = Number(getArgValue('--cycles')                ?? '3');
+        const vlMinutes     = Number(getArgValue('--minutes')               ?? '10');
+        const vlInterval    = Number(getArgValue('--interval-seconds')      ?? '60');
+        const vlSleepMins   = Number(getArgValue('--sleep-between-cycles-minutes') ?? '15');
+        const vlJson        = process.argv.includes('--json');
+
+        if (!Number.isFinite(vlBankroll) || vlBankroll < 0) {
+          throw new Error(`[token:dex-validation-loop] --fake-bankroll must be a non-negative number`);
+        }
+        if (!Number.isFinite(vlPosition) || vlPosition <= 0) {
+          throw new Error(`[token:dex-validation-loop] --position-size must be a positive number`);
+        }
+        if (!Number.isFinite(vlCycles) || vlCycles < 1) {
+          throw new Error(`[token:dex-validation-loop] --cycles must be >= 1`);
+        }
+        if (!Number.isFinite(vlMinutes) || vlMinutes < 0) {
+          throw new Error(`[token:dex-validation-loop] --minutes must be a non-negative number`);
+        }
+        if (!Number.isFinite(vlInterval) || vlInterval <= 0) {
+          throw new Error(`[token:dex-validation-loop] --interval-seconds must be a positive number`);
+        }
+        if (!Number.isFinite(vlSleepMins) || vlSleepMins < 0) {
+          throw new Error(`[token:dex-validation-loop] --sleep-between-cycles-minutes must be a non-negative number`);
+        }
+        if (!fs.existsSync(vlConfig)) {
+          throw new Error(`[token:dex-validation-loop] Cannot read --dex-config: ${vlConfig}`);
+        }
+
+        const vlSummary = await runDexValidationLoop({
+          dexConfigPath: vlConfig,
+          signalsOut: vlSignals,
+          runsDir: vlRunsDir,
+          journalOut: vlJournal,
+          plannerOut: vlPlannerOut,
+          summaryOut: vlSummaryOut,
+          fakeBankroll: vlBankroll,
+          positionSize: vlPosition,
+          cycles: vlCycles,
+          minutes: vlMinutes,
+          intervalSeconds: vlInterval,
+          sleepBetweenCyclesMs: vlSleepMins * 60 * 1000,
+          freshOnly: true,
+          generatedAt: new Date().toISOString(),
+          log: (m) => console.log(m),
+        });
+
+        if (vlJson) {
+          console.log(JSON.stringify(vlSummary, null, 2));
+        } else {
+          console.log(renderValidationLoopSummary(vlSummary));
         }
         break;
       }
