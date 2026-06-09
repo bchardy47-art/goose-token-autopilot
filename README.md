@@ -225,3 +225,19 @@ Real trading remains locked.
 - `NO_ENTRY`: 34
 
 **Takeaway:** Planner is now honest. The 1 winner did not qualify as a current-cycle paper entry (runner candidate trades: 0). Historical winners (e.g. $REPLY +132%, $DUST +105%) remain visible as `HISTORICAL_JOURNAL_WINNER` and are not surfaced as actionable entries. Safety: `tradingExecuted: 0`, `noRealTradeSent: true`, `readOnly: true`, `paperOnly: true`.
+
+### 2026-06-09 — Validation loop smoke (PR #71)
+
+**Run:** `run-20260609-050737.json` via `token:dex-validation-loop --cycles 1`
+- Contracts watched: 43 | Winners: 1 | Losers: 0 | Flat: 42 | Missing: 0
+- Runner candidate trades: 1 | Fake P/L: +$0.47
+
+**Planner counts:**
+- `CURRENT_CYCLE_PAPER_ENTRY`: 0
+- `HISTORICAL_JOURNAL_WINNER`: 11
+- `BLOCKED_HISTORY_RISK`: 64
+- `WATCH_ONLY`: 67
+
+**Final recommendation: `FILTERS_WORKING`** — top blocked movers: $PUMPLIFE (+190%), $$MAD (+128%), $Ronaldo (+118%), $MILLION (+90%), $PHOTO (+69%). All blocked by prior loss / drain / missing history.
+
+**Takeaway:** Validation loop works end-to-end. A winner appeared and produced a candidate trade, but no clean current-cycle entry passed filters. History-risk blocks are functioning as designed. Safety: `tradingExecuted: 0`, `noRealTradeSent: true`, `readOnly: true`, `paperOnly: true`.
