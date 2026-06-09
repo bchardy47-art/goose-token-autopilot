@@ -208,3 +208,20 @@ Overrides supported:
 `token:watch-loop` repeats the same safe research-only cycle until max cycles is reached or you stop it with `Ctrl+C`.
 
 Real trading remains locked.
+
+## Paper runner / planner validation log
+
+### 2026-06-09 — Planner current-cycle classification validated (PR #69)
+
+**Run:** `run-20260609-034403.json`
+- Contracts watched: 43 | Winners: 1 | Losers: 0 | Flat: 42 | Missing: 0
+- Runner candidate trades: 0
+
+**Planner counts** (170 total plans, latest real run: `run-20260609-034403.json`):
+- `CURRENT_CYCLE_PAPER_ENTRY`: 0
+- `HISTORICAL_JOURNAL_WINNER`: 11
+- `WATCH_ONLY`: 64
+- `BLOCKED_HISTORY_RISK`: 61
+- `NO_ENTRY`: 34
+
+**Takeaway:** Planner is now honest. The 1 winner did not qualify as a current-cycle paper entry (runner candidate trades: 0). Historical winners (e.g. $REPLY +132%, $DUST +105%) remain visible as `HISTORICAL_JOURNAL_WINNER` and are not surfaced as actionable entries. Safety: `tradingExecuted: 0`, `noRealTradeSent: true`, `readOnly: true`, `paperOnly: true`.
