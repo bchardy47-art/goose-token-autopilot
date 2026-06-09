@@ -4,6 +4,7 @@ import type { DexWatchReport, DexWatchOutcome, DexPairSnapshot } from './dexWatc
 import type { DexPaperEntryPlanReport, PaperEntryPlan } from './dexPaperEntryPlanner';
 import { PLAN_STOP_LOSS_PCT, PLAN_FIRST_TP_PCT, PLAN_RUNNER_TARGET_PCT } from './dexPaperEntryPlanner';
 import { loadRunsWithFiles, type LoadedRun } from './dexPaperJournal';
+import { loadDayLog, type DayWatchCycleEntry } from './dexDayWatch';
 
 // ── Constants ──────────────────────────────────────────────────────────────────────────
 
@@ -48,6 +49,7 @@ export interface TrackedPosition {
 export interface DexPaperPositionReport {
   generatedAt: string;
   sourcePlanner: string;
+  sourceMode?: 'planner' | 'day-log';
   runsDir: string;
   totalPositions: number;
   openPositions: number;
@@ -71,6 +73,8 @@ export interface DexPaperPositionTrackerOptions {
   runnerTargetPct?: number;
   maxHoldMinutes?: number;
   generatedAt?: string;
+  dayLogFile?: string;
+  sourceMode?: 'planner' | 'day-log';
 }
 
 // ── Pure helpers ────────────────────────────────────────────────────────────────────────
@@ -223,6 +227,41 @@ export function buildTrackedPosition(
   };
 }
 
+// ── Day-log plan extractor — pure ────────────────────────────────────────────────────────
+
+export function buildPlansFromDayLog(entries: DayWatchCycleEntry[]): PaperEntryPlan[] {
+  const seen = new Set<string>();
+  const plans: PaperEntryPlan[] = [];
+  for (const entry of entries) {
+    if (!entry.newestRunFile) continue;
+    for (const te of entry.topCurrentCycleEntries) {
+      const key = `${te.contract.toLowerCase()}|${entry.newestRunFile}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      plans.push({
+        symbol: te.symbol,
+        contract: te.contract,
+        recommendation: 'CURRENT_CYCLE_PAPER_ENTRY',
+        isCurrentCycle: true,
+        sourceRunFile: entry.newestRunFile,
+        latestRunFile: entry.newestRunFile,
+        fakeEntrySize: 1,
+        fakeStopLossPct: PLAN_STOP_LOSS_PCT,
+        fakeTakeProfitPct: PLAN_FIRST_TP_PCT,
+        fakeRunnerTargetPct: PLAN_RUNNER_TARGET_PCT,
+        cancelConditions: [],
+        reasons: [],
+        historyRiskStatus: 'CLEAN',
+        tradingExecuted: 0,
+        noRealTradeSent: true,
+        readOnly: true,
+        paperOnly: true,
+      });
+    }
+  }
+  return plans;
+}
+
 // ── Report builder — pure ────────────────────────────────────────────────────────────────
 
 export function buildDexPaperPositionReport(
@@ -294,6 +333,7 @@ export function buildDexPaperPositionReport(
   return {
     generatedAt,
     sourcePlanner: options.plannerFile,
+    sourceMode: options.sourceMode ?? 'planner',
     runsDir: options.runsDir,
     totalPositions: positions.length,
     openPositions: open.length,
@@ -327,12 +367,48 @@ export function writeDexPaperPositionReport(report: DexPaperPositionReport, outP
 // ── Orchestrator ─────────────────────────────────────────────────────────────────────────
 
 export function runDexPaperPositionTracker(options: DexPaperPositionTrackerOptions): DexPaperPositionReport {
+  const generatedAt = options.generatedAt ?? new Date().toISOString();
+
+  // Day-log mode: derive positions from JSONL cycle entries instead of the planner snapshot.
+  if (options.dayLogFile) {
+    const dayEntries = loadDayLog(options.dayLogFile);
+    const plans = buildPlansFromDayLog(dayEntries);
+    const syntheticPlanReport: DexPaperEntryPlanReport = {
+      signalsFile: '',
+      runsDir: options.runsDir,
+      journalFile: '',
+      fakeBankroll: 0,
+      fakePositionSize: options.positionSize ?? 1,
+      totalPlans: plans.length,
+      currentCyclePaperEntry: plans.length,
+      historicalJournalWinners: 0,
+      watchOnly: 0,
+      blockedHistoryRisk: 0,
+      noEntry: 0,
+      plans,
+      readOnly: true,
+      paperOnly: true,
+      tradingExecuted: 0,
+      noRealTradeSent: true,
+    };
+    const runs = loadRunsWithFiles(options.runsDir);
+    const report = buildDexPaperPositionReport(syntheticPlanReport, runs, {
+      ...options,
+      plannerFile: options.dayLogFile,
+      sourceMode: 'day-log',
+      generatedAt,
+    });
+    writeDexPaperPositionReport(report, options.out);
+    return report;
+  }
+
+  // Planner mode: read planner JSON snapshot.
   const planReport = loadPlannerReport(options.plannerFile);
   if (!planReport) {
-    const generatedAt = options.generatedAt ?? new Date().toISOString();
     const empty: DexPaperPositionReport = {
       generatedAt,
       sourcePlanner: options.plannerFile,
+      sourceMode: 'planner',
       runsDir: options.runsDir,
       totalPositions: 0,
       openPositions: 0,
@@ -350,7 +426,7 @@ export function runDexPaperPositionTracker(options: DexPaperPositionTrackerOptio
   }
 
   const runs = loadRunsWithFiles(options.runsDir);
-  const report = buildDexPaperPositionReport(planReport, runs, options);
+  const report = buildDexPaperPositionReport(planReport, runs, { ...options, sourceMode: 'planner', generatedAt });
   writeDexPaperPositionReport(report, options.out);
   return report;
 }
@@ -368,6 +444,7 @@ export function renderDexPaperPositionTrackerUsage(): string {
     'Options:',
     '  --runs-dir <path>           Watch runs directory (default: data/token-grab/dex-watch-runs)',
     '  --planner <path>            Planner output JSON (default: data/token-grab/paper-plans/dex-paper-entry-plan.json)',
+    '  --day-log <path>            Day watch JSONL log (optional; overrides --planner as entry source)',
     '  --out <path>                Position report output (default: data/token-grab/paper-positions/dex-paper-positions.json)',
     '  --position-size <n>         Fake position size in USD (default: 1)',
     '  --stop-loss-pct <n>         Stop-loss percent (default: -20)',
@@ -411,8 +488,11 @@ export function renderDexPaperPositionTrackerReport(report: DexPaperPositionRepo
   lines.push('  No wallet. No signing. No swap. No liveHarness changes.');
   lines.push(WIDE);
   lines.push('');
+  const sourceMode = report.sourceMode ?? 'planner';
+  const sourceLabel = sourceMode === 'day-log' ? 'Source day log   ' : 'Source planner   ';
   lines.push(`  Generated at     : ${report.generatedAt}`);
-  lines.push(`  Source planner   : ${report.sourcePlanner}`);
+  lines.push(`  Source mode      : ${sourceMode}`);
+  lines.push(`  ${sourceLabel}: ${report.sourcePlanner}`);
   lines.push(`  Runs dir         : ${report.runsDir}`);
   lines.push('');
   lines.push(`  Total positions  : ${report.totalPositions}`);
