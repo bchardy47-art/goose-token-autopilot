@@ -150,6 +150,7 @@ import { buildDexWatchCandidatesReport, renderDexWatchCandidatesReport } from '.
 import { buildDexCandidateSimReport, renderDexCandidateSimReport } from './token-grab/dexCandidateSim';
 import { runDexPaperRunner, renderDexPaperRunnerReport } from './token-grab/dexPaperRunner';
 import { runDexPaperJournal, renderDexPaperJournal } from './token-grab/dexPaperJournal';
+import { runDexPaperEntryPlanner, renderDexPaperEntryPlanReport } from './token-grab/dexPaperEntryPlanner';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2222,6 +2223,43 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(pjJournal, null, 2));
         } else {
           console.log(renderDexPaperJournal(pjJournal));
+        }
+        break;
+      }
+
+      case 'token:dex-paper-entry-plan': {
+        const epConfig   = getArgValue('--dex-config')    ?? 'config/dex-ears.example.json';
+        const epSignals  = getArgValue('--signals-out')   ?? 'data/token-grab/x-ears/presignals.dex.json';
+        const epRunsDir  = getArgValue('--runs-dir')      ?? 'data/token-grab/dex-watch-runs';
+        const epJournal  = getArgValue('--journal')       ?? 'data/token-grab/paper-journal/dex-paper-journal.json';
+        const epOut      = getArgValue('--out')           ?? 'data/token-grab/paper-plans/dex-paper-entry-plan.json';
+        const epBankroll = Number(getArgValue('--fake-bankroll')  ?? '20');
+        const epPosition = Number(getArgValue('--position-size')  ?? '1');
+        const epJson     = process.argv.includes('--json');
+
+        void epConfig; // loaded by the runner's signal file; kept for parity with other dex commands
+
+        if (!Number.isFinite(epBankroll) || epBankroll < 0) {
+          throw new Error(`[token:dex-paper-entry-plan] --fake-bankroll must be a non-negative number`);
+        }
+        if (!Number.isFinite(epPosition) || epPosition <= 0) {
+          throw new Error(`[token:dex-paper-entry-plan] --position-size must be a positive number`);
+        }
+
+        const epReport = runDexPaperEntryPlanner({
+          signalsFile: epSignals,
+          runsDir: epRunsDir,
+          journalFile: epJournal,
+          out: epOut,
+          fakeBankroll: epBankroll,
+          positionSize: epPosition,
+          plannedAt: new Date().toISOString(),
+        });
+
+        if (epJson) {
+          console.log(JSON.stringify(epReport, null, 2));
+        } else {
+          console.log(renderDexPaperEntryPlanReport(epReport));
         }
         break;
       }

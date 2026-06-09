@@ -86,6 +86,7 @@
     "token:dex-candidate-sim": "tsx src/cli.ts token:dex-candidate-sim",
     "token:dex-paper-runner": "tsx src/cli.ts token:dex-paper-runner",
     "token:dex-paper-journal": "tsx src/cli.ts token:dex-paper-journal",
+    "token:dex-paper-entry-plan": "tsx src/cli.ts token:dex-paper-entry-plan",
     "test": "vitest run"
   },
   "dependencies": {
