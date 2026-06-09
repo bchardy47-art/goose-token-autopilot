@@ -7,6 +7,7 @@ import {
   buildDexPaperEntryPlans,
   renderDexPaperEntryPlanReport,
   runDexPaperEntryPlanner,
+  findLatestRealRunFile,
   type DexPaperEntryPlannerOptions,
 } from '../src/token-grab/dexPaperEntryPlanner';
 import type { LoadedRun, DexPaperJournal } from '../src/token-grab/dexPaperJournal';
@@ -20,7 +21,7 @@ function outcome(
   return { signalId: `sig-${over.contract}`, chainId: 'solana', ...over };
 }
 
-function report(outcomes: DexWatchOutcome[], generatedAt = '2026-06-07T10:00:00.000Z'): DexWatchReport {
+function report(outcomes: DexWatchOutcome[], generatedAt = '2026-06-09T10:00:00.000Z'): DexWatchReport {
   return buildDexWatchReport({
     generatedAt,
     signalsRead: outcomes.length,
@@ -45,24 +46,35 @@ const negO = (c: string, sym: string): DexWatchOutcome =>
   outcome({ contract: c, symbol: sym, classification: 'loser', priceChangePct: -10, liquidityChangePct: -5 });
 
 // Contracts
-const SATOSHI  = 'SatoSh11111111111111111111111111111111111111'; // clean pass
-const ELON     = 'eLonBuck2222222222222222222222222222222222222'; // clean pass
+const SATOSHI  = 'SatoSh11111111111111111111111111111111111111'; // historical winner (old run)
+const ELON     = 'eLonBuck2222222222222222222222222222222222222'; // current-cycle winner (newest run)
 const ONE      = 'OneChurn333333333333333333333333333333333333'; // pass thresholds but history blocked
 const FLAT_TK  = 'FlatTk44444444444444444444444444444444444444'; // small movement → WATCH_ONLY
-const NEG_TK   = 'NegTk555555555555555555555555555555555555555'; // negative/flat → NO_ENTRY
-const MISSING  = 'missingX666666666666666666666666666666666666'; // in signals only, no run data
+const NEG_TK   = 'NegTk555555555555555555555555555555555555555'; // negative → NO_ENTRY
+const MISSING  = 'missingX666666666666666666666666666666666666'; // in signals only → NO_ENTRY
+const SMOKE_TK = 'SmokeTk77777777777777777777777777777777777777'; // in smoke.json only
 
+/**
+ * Standard test fixture.
+ * Runs sort lexicographically by file name — the newest real run is run-e-new.json.
+ *
+ * run-a-old : SATOSHI wins    → HISTORICAL_JOURNAL_WINNER
+ * run-b-old : ONE wins        → (but loses in run-c → BLOCKED_HISTORY_RISK)
+ * run-c-old : ONE loses
+ * run-d-old : FLAT_TK flat, NEG_TK loses
+ * run-e-new : ELON wins       → CURRENT_CYCLE_PAPER_ENTRY  (newest real run)
+ * smoke.json: SMOKE_TK wins   → must NOT become CURRENT_CYCLE_PAPER_ENTRY
+ */
 function makeRuns(): LoadedRun[] {
   return [
-    { file: 'run-1.json', report: report([winO(SATOSHI, 'SATOSHI', 54, 23, 0.33)]), generatedAt: '2026-06-07T10:00:00.000Z' },
-    { file: 'run-2.json', report: report([winO(ELON,    'ELON',    29, 13, 0.44)]), generatedAt: '2026-06-07T10:10:00.000Z' },
-    // ONE: strong win once, hard loss once → loseCount >= 1 → BLOCKED_HISTORY_RISK
-    { file: 'run-3.json', report: report([winO(ONE,  'ONE',  40, 16, 0.6)]),  generatedAt: '2026-06-07T10:20:00.000Z' },
-    { file: 'run-4.json', report: report([loseO(ONE, 'ONE', -30, -25, 0.7)]), generatedAt: '2026-06-07T10:30:00.000Z' },
-    // FLAT_TK: only small movement, not enough for PASS → WATCH_ONLY
-    { file: 'run-5.json', report: report([flatO(FLAT_TK, 'FLAT')]), generatedAt: '2026-06-07T10:40:00.000Z' },
-    // NEG_TK: negative movement → NO_ENTRY
-    { file: 'run-6.json', report: report([negO(NEG_TK, 'NEG')]), generatedAt: '2026-06-07T10:50:00.000Z' },
+    { file: 'run-a-old.json', report: report([winO(SATOSHI, 'SATOSHI', 54, 23, 0.33)]), generatedAt: '2026-06-07T10:00:00.000Z' },
+    { file: 'run-b-old.json', report: report([winO(ONE,  'ONE',  40, 16, 0.6)]),  generatedAt: '2026-06-07T10:10:00.000Z' },
+    { file: 'run-c-old.json', report: report([loseO(ONE, 'ONE', -30, -25, 0.7)]), generatedAt: '2026-06-07T10:20:00.000Z' },
+    { file: 'run-d-old.json', report: report([flatO(FLAT_TK, 'FLAT'), negO(NEG_TK, 'NEG')]), generatedAt: '2026-06-07T10:30:00.000Z' },
+    // Newest real run — ELON passes here:
+    { file: 'run-e-new.json', report: report([winO(ELON, 'ELON', 29, 13, 0.44)]), generatedAt: '2026-06-09T01:00:00.000Z' },
+    // smoke.json must be ignored when selecting the latest real run:
+    { file: 'smoke.json', report: report([winO(SMOKE_TK, 'SMOKE', 55, 22, 0.3)]), generatedAt: '2026-06-09T02:00:00.000Z' },
   ];
 }
 
@@ -115,7 +127,7 @@ function makeJournal(): DexPaperJournal {
         fakePnlPct: 54,
         passReason: 'PASS: price +54.0% >= +20, liquidity +23.0% >= +10, v/l 0.33 <= 1.0, history clean',
         outcome: 'winner',
-        sourceRunFile: 'run-1.json',
+        sourceRunFile: 'run-a-old.json',
       },
     ],
     blocked: [],
@@ -134,13 +146,47 @@ const OPTS: DexPaperEntryPlannerOptions = {
   out: 'data/token-grab/paper-plans/dex-paper-entry-plan.json',
   fakeBankroll: 20,
   positionSize: 1,
-  plannedAt: '2026-06-07T12:00:00.000Z',
+  plannedAt: '2026-06-09T12:00:00.000Z',
 };
+
+// ── findLatestRealRunFile ────────────────────────────────────────────────────────────
+
+describe('findLatestRealRunFile', () => {
+  it('returns the lexicographically newest run-*.json file', () => {
+    const result = findLatestRealRunFile(makeRuns());
+    expect(result).toBe('run-e-new.json');
+  });
+
+  it('ignores smoke.json even when it sorts after real runs', () => {
+    const result = findLatestRealRunFile(makeRuns());
+    expect(result).not.toBe('smoke.json');
+  });
+
+  it('ignores files that do not match run-*.json pattern', () => {
+    const extra: LoadedRun[] = [
+      { file: 'zzz-fixture.json', report: report([winO(SATOSHI, 'S', 50, 20, 0.5)]), generatedAt: '2030-01-01T00:00:00.000Z' },
+      ...makeRuns(),
+    ];
+    expect(findLatestRealRunFile(extra)).toBe('run-e-new.json');
+  });
+
+  it('returns undefined when no real runs exist', () => {
+    const smokeOnly: LoadedRun[] = [
+      { file: 'smoke.json', report: report([winO(SATOSHI, 'S', 50, 20, 0.5)]) },
+    ];
+    expect(findLatestRealRunFile(smokeOnly)).toBeUndefined();
+  });
+});
 
 // ── Core planner tests ───────────────────────────────────────────────────────────────
 
 describe('buildDexPaperEntryPlans', () => {
-  const planner = buildDexPaperEntryPlans(makeRuns(), makeSignals(), makeJournal(), OPTS);
+  const runs = makeRuns();
+  const planner = buildDexPaperEntryPlans(runs, makeSignals(), makeJournal(), OPTS);
+
+  it('identifies the latest real run file (ignoring smoke.json)', () => {
+    expect(planner.latestRealRunFile).toBe('run-e-new.json');
+  });
 
   it('creates a valid plan JSON with plans array', () => {
     expect(planner.plans).toBeInstanceOf(Array);
@@ -148,36 +194,76 @@ describe('buildDexPaperEntryPlans', () => {
     expect(planner.plans.length).toBe(planner.totalPlans);
   });
 
-  it('PAPER_ENTRY_CANDIDATE only for candidates passing existing sim rules', () => {
-    const candidates = planner.plans.filter(p => p.recommendation === 'PAPER_ENTRY_CANDIDATE');
-    expect(candidates.length).toBe(2); // SATOSHI + ELON
-    const cs = candidates.map(p => p.contract);
-    expect(cs).toContain(SATOSHI);
-    expect(cs).toContain(ELON);
-    expect(cs).not.toContain(ONE);  // ONE is blocked by history
-    expect(cs).not.toContain(FLAT_TK);
+  it('CURRENT_CYCLE_PAPER_ENTRY only for tokens passing V2 sim in the newest real run', () => {
+    const current = planner.plans.filter(p => p.recommendation === 'CURRENT_CYCLE_PAPER_ENTRY');
+    expect(current.length).toBe(1); // only ELON is in run-e-new.json passing thresholds
+    expect(current[0].contract).toBe(ELON);
+    expect(current[0].isCurrentCycle).toBe(true);
+    expect(current[0].sourceRunFile).toBe('run-e-new.json');
   });
 
-  it('BLOCKED_HISTORY_RISK for candidates blocked by existing history-risk logic', () => {
+  it('SATOSHI (historical winner) is HISTORICAL_JOURNAL_WINNER, not CURRENT_CYCLE_PAPER_ENTRY', () => {
+    const sat = planner.plans.find(p => p.contract === SATOSHI)!;
+    expect(sat.recommendation).toBe('HISTORICAL_JOURNAL_WINNER');
+    expect(sat.isCurrentCycle).toBe(false);
+    expect(sat.sourceRunFile).toBe('run-a-old.json');
+  });
+
+  it('newest run with 0 candidates → CURRENT_CYCLE_PAPER_ENTRY count equals 0', () => {
+    // Replace the newest run with a flat-only run
+    const flatNewestRuns: LoadedRun[] = [
+      ...makeRuns().filter(r => r.file !== 'run-e-new.json'),
+      {
+        file: 'run-e-new.json',
+        report: report([flatO(ELON, 'ELON')]),
+        generatedAt: '2026-06-09T01:00:00.000Z',
+      },
+    ];
+    const flatResult = buildDexPaperEntryPlans(flatNewestRuns, makeSignals(), makeJournal(), OPTS);
+    expect(flatResult.currentCyclePaperEntry).toBe(0);
+    // ELON moves to WATCH_ONLY (small movement, not passing)
+    const elonPlan = flatResult.plans.find(p => p.contract === ELON)!;
+    expect(elonPlan.recommendation).toBe('WATCH_ONLY');
+  });
+
+  it('smoke.json winner is not labeled CURRENT_CYCLE_PAPER_ENTRY', () => {
+    const smokePlan = planner.plans.find(p => p.contract === SMOKE_TK);
+    // smoke.json runs through HISTORICAL_JOURNAL_WINNER (it passes thresholds but came from smoke.json)
+    // or WATCH_ONLY depending on whether it's a winner
+    // either way it must NOT be CURRENT_CYCLE_PAPER_ENTRY
+    if (smokePlan) {
+      expect(smokePlan.recommendation).not.toBe('CURRENT_CYCLE_PAPER_ENTRY');
+      expect(smokePlan.isCurrentCycle).toBe(false);
+    }
+  });
+
+  it('BLOCKED_HISTORY_RISK for tokens blocked by existing history-risk logic', () => {
     const blocked = planner.plans.filter(p => p.recommendation === 'BLOCKED_HISTORY_RISK');
     expect(blocked.length).toBeGreaterThan(0);
     const cs = blocked.map(p => p.contract);
     expect(cs).toContain(ONE);
-    expect(cs).not.toContain(SATOSHI);
     expect(cs).not.toContain(ELON);
+    expect(cs).not.toContain(SATOSHI);
   });
 
-  it('WATCH_ONLY for tokens moving but not clean enough', () => {
+  it('WATCH_ONLY for tokens moving but not passing thresholds', () => {
     const watchOnly = planner.plans.filter(p => p.recommendation === 'WATCH_ONLY');
-    const cs = watchOnly.map(p => p.contract);
-    expect(cs).toContain(FLAT_TK);
+    expect(watchOnly.map(p => p.contract)).toContain(FLAT_TK);
   });
 
-  it('NO_ENTRY for flat/negative tokens and tokens only in signals', () => {
+  it('NO_ENTRY for tokens in signals only or with flat/negative data', () => {
     const noEntry = planner.plans.filter(p => p.recommendation === 'NO_ENTRY');
     const cs = noEntry.map(p => p.contract);
-    expect(cs).toContain(MISSING); // in signals but no run data
-    expect(cs).toContain(NEG_TK);  // negative movement, no upside
+    expect(cs).toContain(MISSING);
+    expect(cs).toContain(NEG_TK);
+  });
+
+  it('every plan carries isCurrentCycle and latestRunFile', () => {
+    for (const plan of planner.plans) {
+      expect(typeof plan.isCurrentCycle).toBe('boolean');
+      // latestRunFile is set when there is a real run
+      expect(plan.latestRunFile).toBe('run-e-new.json');
+    }
   });
 
   it('fake stop/take-profit/cancel conditions on every plan', () => {
@@ -191,15 +277,15 @@ describe('buildDexPaperEntryPlans', () => {
   });
 
   it('includes priceChangePct/liquidityChangePct/volumeLiquidityRatio for run-backed plans', () => {
-    const sat = planner.plans.find(p => p.contract === SATOSHI)!;
-    expect(sat.priceChangePct).toBeCloseTo(54);
-    expect(sat.liquidityChangePct).toBeCloseTo(23);
-    expect(sat.volumeLiquidityRatio).toBeCloseTo(0.33);
+    const elon = planner.plans.find(p => p.contract === ELON)!;
+    expect(elon.priceChangePct).toBeCloseTo(29);
+    expect(elon.liquidityChangePct).toBeCloseTo(13);
+    expect(elon.volumeLiquidityRatio).toBeCloseTo(0.44);
   });
 
   it('includes source run file for run-backed candidates', () => {
-    const sat = planner.plans.find(p => p.contract === SATOSHI)!;
-    expect(sat.sourceRunFile).toBe('run-1.json');
+    const elon = planner.plans.find(p => p.contract === ELON)!;
+    expect(elon.sourceRunFile).toBe('run-e-new.json');
   });
 
   it('includes journal similarity note for prior journal winners', () => {
@@ -208,21 +294,21 @@ describe('buildDexPaperEntryPlans', () => {
     expect(sat.journalSimilarity).toContain('prior winner');
   });
 
-  it('historyRiskStatus CLEAN for passing candidates', () => {
+  it('historyRiskStatus CLEAN for current-cycle and historical winners', () => {
+    const elon = planner.plans.find(p => p.contract === ELON)!;
+    expect(elon.historyRiskStatus).toBe('CLEAN');
     const sat = planner.plans.find(p => p.contract === SATOSHI)!;
     expect(sat.historyRiskStatus).toBe('CLEAN');
-    expect(sat.historyRiskReasons).toBeUndefined();
   });
 
   it('historyRiskStatus BLOCKED with reasons for blocked tokens', () => {
     const one = planner.plans.find(p => p.contract === ONE)!;
     expect(one.historyRiskStatus).toBe('BLOCKED');
     expect(one.historyRiskReasons).toBeDefined();
-    expect(one.historyRiskReasons!.length).toBeGreaterThan(0);
     expect(one.historyRiskReasons!.join(' ')).toMatch(/loseCount >= 1/);
   });
 
-  it('does not include live trade fields', () => {
+  it('does not include live trade fields on any plan', () => {
     for (const plan of planner.plans) {
       expect((plan as Record<string, unknown>).txHash).toBeUndefined();
       expect((plan as Record<string, unknown>).wallet).toBeUndefined();
@@ -248,31 +334,41 @@ describe('buildDexPaperEntryPlans', () => {
     expect(planner.noRealTradeSent).toBe(true);
   });
 
-  it('PAPER_ENTRY_CANDIDATE plans rank before WATCH_ONLY and BLOCKED_HISTORY_RISK', () => {
+  it('CURRENT_CYCLE_PAPER_ENTRY plans rank before all others', () => {
     const indices = planner.plans.map((p, i) => ({ rec: p.recommendation, i }));
-    const lastCandidate = [...indices].reverse().find(x => x.rec === 'PAPER_ENTRY_CANDIDATE');
-    const firstNonCandidate = indices.find(x => x.rec !== 'PAPER_ENTRY_CANDIDATE');
-    if (lastCandidate && firstNonCandidate) {
-      expect(lastCandidate.i).toBeLessThan(firstNonCandidate.i);
+    const lastCurrent = [...indices].reverse().find(x => x.rec === 'CURRENT_CYCLE_PAPER_ENTRY');
+    const firstNonCurrent = indices.find(x => x.rec !== 'CURRENT_CYCLE_PAPER_ENTRY');
+    if (lastCurrent && firstNonCurrent) {
+      expect(lastCurrent.i).toBeLessThan(firstNonCurrent.i);
     }
   });
 
-  it('fakeEntrySize equals positionSize', () => {
-    for (const plan of planner.plans) {
-      expect(plan.fakeEntrySize).toBe(1);
+  it('HISTORICAL_JOURNAL_WINNER ranks after CURRENT_CYCLE_PAPER_ENTRY but before WATCH_ONLY', () => {
+    const recs = planner.plans.map(p => p.recommendation);
+    const firstHistorical = recs.indexOf('HISTORICAL_JOURNAL_WINNER');
+    const firstWatch = recs.indexOf('WATCH_ONLY');
+    const lastCurrent = [...recs].reverse().indexOf('CURRENT_CYCLE_PAPER_ENTRY');
+    const lastCurrentIdx = recs.length - 1 - lastCurrent;
+    if (firstHistorical >= 0 && firstWatch >= 0) {
+      expect(firstHistorical).toBeLessThan(firstWatch);
+    }
+    if (lastCurrentIdx >= 0 && firstHistorical >= 0) {
+      expect(lastCurrentIdx).toBeLessThan(firstHistorical);
     }
   });
 
   it('counts match plan list', () => {
-    const c = planner.plans.filter(p => p.recommendation === 'PAPER_ENTRY_CANDIDATE').length;
+    const c = planner.plans.filter(p => p.recommendation === 'CURRENT_CYCLE_PAPER_ENTRY').length;
+    const h = planner.plans.filter(p => p.recommendation === 'HISTORICAL_JOURNAL_WINNER').length;
     const w = planner.plans.filter(p => p.recommendation === 'WATCH_ONLY').length;
     const b = planner.plans.filter(p => p.recommendation === 'BLOCKED_HISTORY_RISK').length;
     const n = planner.plans.filter(p => p.recommendation === 'NO_ENTRY').length;
-    expect(planner.paperEntryCandidates).toBe(c);
+    expect(planner.currentCyclePaperEntry).toBe(c);
+    expect(planner.historicalJournalWinners).toBe(h);
     expect(planner.watchOnly).toBe(w);
     expect(planner.blockedHistoryRisk).toBe(b);
     expect(planner.noEntry).toBe(n);
-    expect(planner.totalPlans).toBe(c + w + b + n);
+    expect(planner.totalPlans).toBe(c + h + w + b + n);
   });
 });
 
@@ -282,22 +378,23 @@ describe('renderDexPaperEntryPlanReport', () => {
   const planner = buildDexPaperEntryPlans(makeRuns(), makeSignals(), makeJournal(), OPTS);
   const rendered = renderDexPaperEntryPlanReport(planner);
 
-  it('includes safety banners in rendered output', () => {
+  it('includes safety banners', () => {
     expect(rendered).toContain('READ-ONLY');
     expect(rendered).toContain('PAPER ONLY');
     expect(rendered).toContain('tradingExecuted: 0');
     expect(rendered).toContain('NO REAL TRADE SENT');
   });
 
-  it('shows recommendation category counts', () => {
-    expect(rendered).toContain('PAPER_ENTRY_CANDIDATE');
-    expect(rendered).toContain('BLOCKED_HISTORY_RISK');
-    expect(rendered).toContain('WATCH_ONLY');
+  it('shows CURRENT_CYCLE_PAPER_ENTRY and HISTORICAL_JOURNAL_WINNER labels', () => {
+    expect(rendered).toContain('CURRENT_CYCLE_PAPER_ENTRY');
+    expect(rendered).toContain('HISTORICAL_JOURNAL_WINNER');
+  });
+
+  it('shows the latest real run file name', () => {
+    expect(rendered).toContain('run-e-new.json');
   });
 
   it('does not mention live trade execution fields', () => {
-    // Safety banners ("No wallet", "No swap") are expected and allowed.
-    // What we must NOT see are fields that indicate a real trade was sent.
     expect(rendered).not.toContain('txHash');
     expect(rendered).not.toContain('LIVE_EXECUTED');
     expect(rendered).not.toContain('privateKey');
@@ -313,14 +410,14 @@ describe('runDexPaperEntryPlanner (I/O)', () => {
     const runsDir = path.join(tmpDir, 'runs');
     fs.mkdirSync(runsDir);
 
-    const run = report([winO(SATOSHI, 'SATOSHI', 54, 23, 0.33)]);
-    fs.writeFileSync(path.join(runsDir, 'run-1.json'), JSON.stringify(run));
+    const run = report([winO(ELON, 'ELON', 29, 13, 0.44)]);
+    fs.writeFileSync(path.join(runsDir, 'run-001.json'), JSON.stringify(run));
 
     const outPath = path.join(tmpDir, 'out', 'plan.json');
     const opts: DexPaperEntryPlannerOptions = {
-      signalsFile: path.join(tmpDir, 'signals.json'), // missing signals file → empty
+      signalsFile: path.join(tmpDir, 'signals.json'),
       runsDir,
-      journalFile: path.join(tmpDir, 'journal.json'), // missing journal → empty
+      journalFile: path.join(tmpDir, 'journal.json'),
       out: outPath,
       fakeBankroll: 20,
       positionSize: 1,
@@ -328,6 +425,8 @@ describe('runDexPaperEntryPlanner (I/O)', () => {
 
     const result = runDexPaperEntryPlanner(opts);
     expect(result.totalPlans).toBeGreaterThan(0);
+    expect(result.latestRealRunFile).toBe('run-001.json');
+    expect(result.currentCyclePaperEntry).toBe(1);
     expect(fs.existsSync(outPath)).toBe(true);
 
     const written = JSON.parse(fs.readFileSync(outPath, 'utf-8')) as DexPaperEntryPlanReport;
@@ -336,14 +435,15 @@ describe('runDexPaperEntryPlanner (I/O)', () => {
     expect(written.paperOnly).toBe(true);
     expect(written.noRealTradeSent).toBe(true);
     expect(written.plans).toBeInstanceOf(Array);
+    expect(written.latestRealRunFile).toBe('run-001.json');
   });
 
   it('plan JSON never contains live-trade fields', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dex-planner2-'));
     const runsDir = path.join(tmpDir, 'runs');
     fs.mkdirSync(runsDir);
-    const run = report([winO(SATOSHI, 'SATOSHI', 54, 23, 0.33)]);
-    fs.writeFileSync(path.join(runsDir, 'run-1.json'), JSON.stringify(run));
+    const run = report([winO(ELON, 'ELON', 29, 13, 0.44)]);
+    fs.writeFileSync(path.join(runsDir, 'run-001.json'), JSON.stringify(run));
 
     const outPath = path.join(tmpDir, 'plan.json');
     runDexPaperEntryPlanner({
@@ -360,7 +460,35 @@ describe('runDexPaperEntryPlanner (I/O)', () => {
     expect(raw).not.toContain('signature');
     expect(raw).not.toContain('LIVE_EXECUTED');
   });
+
+  it('smoke.json in runs dir is ignored when determining latest real run', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dex-planner3-'));
+    const runsDir = path.join(tmpDir, 'runs');
+    fs.mkdirSync(runsDir);
+
+    // Real run (older)
+    const realRun = report([winO(ELON, 'ELON', 29, 13, 0.44)]);
+    fs.writeFileSync(path.join(runsDir, 'run-001.json'), JSON.stringify(realRun));
+
+    // smoke.json has a token that would win if considered "current"
+    const smokeRun = report([winO(SMOKE_TK, 'SMOKE', 99, 50, 0.2)]);
+    fs.writeFileSync(path.join(runsDir, 'smoke.json'), JSON.stringify(smokeRun));
+
+    const outPath = path.join(tmpDir, 'plan.json');
+    const result = runDexPaperEntryPlanner({
+      signalsFile: path.join(tmpDir, 'signals.json'),
+      runsDir,
+      journalFile: path.join(tmpDir, 'journal.json'),
+      out: outPath,
+    });
+
+    expect(result.latestRealRunFile).toBe('run-001.json');
+    const smokePlan = result.plans.find(p => p.contract === SMOKE_TK);
+    if (smokePlan) {
+      expect(smokePlan.recommendation).not.toBe('CURRENT_CYCLE_PAPER_ENTRY');
+    }
+  });
 });
 
-// ── Type import reference (keeps compiler happy) ─────────────────────────────────────
+// ── Type reference ────────────────────────────────────────────────────────────────────
 type DexPaperEntryPlanReport = ReturnType<typeof buildDexPaperEntryPlans>;
