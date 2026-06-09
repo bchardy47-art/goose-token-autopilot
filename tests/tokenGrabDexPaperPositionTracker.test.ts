@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   buildDexPaperPositionReport,
+  buildPlansFromDayLog,
   buildTrackedPosition,
   computeSnapshotVlr,
   getAllOutcomes,
@@ -18,6 +19,7 @@ import {
 import type { DexPaperEntryPlanReport, PaperEntryPlan } from '../src/token-grab/dexPaperEntryPlanner';
 import type { DexWatchOutcome, DexPairSnapshot, DexWatchReport } from '../src/token-grab/dexWatch';
 import type { LoadedRun } from '../src/token-grab/dexPaperJournal';
+import type { DayWatchCycleEntry } from '../src/token-grab/dexDayWatch';
 
 // ── Fixtures ────────────────────────────────────────────────────────────────────────────
 
@@ -679,5 +681,270 @@ describe('renderDexPaperPositionTrackerReport', () => {
     expect(out).not.toContain('privateKey');
     expect(out).not.toContain('walletAddress');
     expect(out).not.toContain('LIVE_EXECUTED');
+  });
+
+  it('shows source mode planner by default', () => {
+    const out = renderDexPaperPositionTrackerReport(makeReport());
+    expect(out).toContain('Source mode');
+    expect(out).toContain('planner');
+  });
+
+  it('shows source mode day-log when sourceMode is day-log', () => {
+    const out = renderDexPaperPositionTrackerReport(makeReport({ sourceMode: 'day-log', sourcePlanner: 'data/token-grab/day-watch/dex-day-watch.jsonl' }));
+    expect(out).toContain('day-log');
+    expect(out).toContain('Source day log');
+    expect(out).toContain('dex-day-watch.jsonl');
+  });
+});
+
+// ── buildPlansFromDayLog ────────────────────────────────────────────────────────────────
+
+function makeDayCycleEntry(
+  cycleNumber: number,
+  newestRunFile: string,
+  entries: Array<{ contract: string; symbol?: string }>,
+): DayWatchCycleEntry {
+  return {
+    generatedAt: T0,
+    cycleNumber,
+    newestRunFile,
+    contractsWatched: entries.length,
+    winners: entries.length,
+    losers: 0,
+    flat: 0,
+    missing: 0,
+    runnerCandidateTrades: 0,
+    runnerFakePnl: 0,
+    journalTotalSimulated: 0,
+    journalFakePnl: 0,
+    plannerLatestRealRun: newestRunFile,
+    currentCyclePaperEntry: entries.length,
+    historicalJournalWinners: 0,
+    blockedHistoryRisk: 0,
+    watchOnly: 0,
+    noEntry: 0,
+    finalRecommendation: 'MANUAL_REVIEW_NEEDED',
+    topCurrentCycleEntries: entries.map(e => ({
+      contract: e.contract,
+      symbol: e.symbol,
+      priceChangePct: 25,
+      liquidityChangePct: 12,
+      volumeLiquidityRatio: 0.6,
+    })),
+    topBlockedMovers: [],
+    tradingExecuted: 0,
+    noRealTradeSent: true,
+    readOnly: true,
+    paperOnly: true,
+  };
+}
+
+describe('buildPlansFromDayLog', () => {
+  it('returns empty array for empty log', () => {
+    expect(buildPlansFromDayLog([])).toHaveLength(0);
+  });
+
+  it('creates one plan per unique contract+runFile', () => {
+    const entries = [makeDayCycleEntry(1, 'run-20260609-100000.json', [{ contract: SOL_A, symbol: 'OLBOS' }])];
+    const plans = buildPlansFromDayLog(entries);
+    expect(plans).toHaveLength(1);
+    expect(plans[0].contract).toBe(SOL_A);
+    expect(plans[0].recommendation).toBe('CURRENT_CYCLE_PAPER_ENTRY');
+    expect(plans[0].sourceRunFile).toBe('run-20260609-100000.json');
+  });
+
+  it('deduplicates same contract+runFile appearing in multiple cycles', () => {
+    const runFile = 'run-20260609-100000.json';
+    const entries = [
+      makeDayCycleEntry(1, runFile, [{ contract: SOL_A }]),
+      makeDayCycleEntry(2, runFile, [{ contract: SOL_A }]),
+    ];
+    const plans = buildPlansFromDayLog(entries);
+    expect(plans).toHaveLength(1);
+  });
+
+  it('same contract different runFile → two plans', () => {
+    const entries = [
+      makeDayCycleEntry(1, 'run-20260609-100000.json', [{ contract: SOL_A }]),
+      makeDayCycleEntry(2, 'run-20260609-110000.json', [{ contract: SOL_A }]),
+    ];
+    const plans = buildPlansFromDayLog(entries);
+    expect(plans).toHaveLength(2);
+    expect(plans[0].sourceRunFile).toBe('run-20260609-100000.json');
+    expect(plans[1].sourceRunFile).toBe('run-20260609-110000.json');
+  });
+
+  it('skips entries with empty newestRunFile', () => {
+    const entry = makeDayCycleEntry(1, '', [{ contract: SOL_A }]);
+    expect(buildPlansFromDayLog([entry])).toHaveLength(0);
+  });
+
+  it('includes all contracts from one cycle', () => {
+    const entries = [makeDayCycleEntry(1, 'run-1.json', [{ contract: SOL_A }, { contract: SOL_B }])];
+    const plans = buildPlansFromDayLog(entries);
+    expect(plans).toHaveLength(2);
+  });
+
+  it('sets all required safety fields', () => {
+    const entries = [makeDayCycleEntry(1, 'run-1.json', [{ contract: SOL_A }])];
+    const plan = buildPlansFromDayLog(entries)[0];
+    expect(plan.tradingExecuted).toBe(0);
+    expect(plan.noRealTradeSent).toBe(true);
+    expect(plan.readOnly).toBe(true);
+    expect(plan.paperOnly).toBe(true);
+    expect(plan.historyRiskStatus).toBe('CLEAN');
+  });
+});
+
+// ── runDexPaperPositionTracker — day-log mode ───────────────────────────────────────────
+
+describe('runDexPaperPositionTracker — day-log mode', () => {
+  function writeRunFile(dir: string, filename: string, outcomes: DexWatchOutcome[]): void {
+    const winners = outcomes.filter(o => o.classification === 'winner');
+    const losers = outcomes.filter(o => o.classification === 'loser');
+    const flat = outcomes.filter(o => o.classification === 'flat');
+    const missing = outcomes.filter(o => o.classification === 'missing');
+    const report = { generatedAt: T0, winners, losers, flat, missing, signalsRead: outcomes.length, signalsWatched: outcomes.length, contractsFiltered: outcomes.length, snapshotsFound: 0, snapshotsMissing: 0, chain: 'solana', minutes: 10, intervalSeconds: 60, topMovers: [], dryRun: false, tradingExecuted: 0, noRealTradeSent: true };
+    fs.writeFileSync(path.join(dir, filename), JSON.stringify(report), 'utf-8');
+  }
+
+  it('creates positions even when planner CURRENT=0 but day-log has entries', () => {
+    const dir = makeTempDir();
+    const runsDir = path.join(dir, 'runs');
+    fs.mkdirSync(runsDir, { recursive: true });
+
+    // Planner file has zero current-cycle entries.
+    const plannerFile = path.join(dir, 'plan.json');
+    fs.writeFileSync(plannerFile, JSON.stringify(makePlanReport([])), 'utf-8');
+
+    // Run file has SOL_A with a +27% TAKE_PROFIT outcome.
+    const runFile = 'run-20260609-100000.json';
+    const entry = makeSnap(SOL_A, 1.0, 10000, 200, T0);
+    const final = makeSnap(SOL_A, 1.27, 10100, 200, T1);
+    writeRunFile(runsDir, runFile, [makeOutcome(SOL_A, entry, final)]);
+
+    // Day-log JSONL has one cycle with SOL_A as a current-cycle entry.
+    const dayLogFile = path.join(dir, 'dex-day-watch.jsonl');
+    const dayEntry = makeDayCycleEntry(1, runFile, [{ contract: SOL_A, symbol: 'OLBOS' }]);
+    fs.writeFileSync(dayLogFile, JSON.stringify(dayEntry) + '\n', 'utf-8');
+
+    const report = runDexPaperPositionTracker({
+      plannerFile,
+      dayLogFile,
+      runsDir,
+      out: path.join(dir, 'positions.json'),
+      positionSize: 1,
+      stopLossPct: -20,
+      takeProfitPct: 25,
+      runnerTargetPct: 50,
+      maxHoldMinutes: 20,
+      generatedAt: T0,
+    });
+
+    expect(report.totalPositions).toBe(1);
+    expect(report.sourceMode).toBe('day-log');
+    expect(report.positions[0].contract).toBe(SOL_A);
+    expect(report.positions[0].exitReason).toBe('TAKE_PROFIT');
+  });
+
+  it('empty day-log creates zero positions', () => {
+    const dir = makeTempDir();
+    fs.mkdirSync(path.join(dir, 'runs'), { recursive: true });
+
+    const dayLogFile = path.join(dir, 'dex-day-watch.jsonl');
+    fs.writeFileSync(dayLogFile, '', 'utf-8');
+
+    const report = runDexPaperPositionTracker({
+      plannerFile: path.join(dir, 'plan.json'),
+      dayLogFile,
+      runsDir: path.join(dir, 'runs'),
+      out: path.join(dir, 'positions.json'),
+      generatedAt: T0,
+    });
+
+    expect(report.totalPositions).toBe(0);
+    expect(report.sourceMode).toBe('day-log');
+  });
+
+  it('safety fields remain true in day-log mode', () => {
+    const dir = makeTempDir();
+    fs.mkdirSync(path.join(dir, 'runs'), { recursive: true });
+
+    const dayLogFile = path.join(dir, 'log.jsonl');
+    fs.writeFileSync(dayLogFile, '', 'utf-8');
+
+    const report = runDexPaperPositionTracker({
+      plannerFile: path.join(dir, 'plan.json'),
+      dayLogFile,
+      runsDir: path.join(dir, 'runs'),
+      out: path.join(dir, 'positions.json'),
+      generatedAt: T0,
+    });
+
+    expect(report.tradingExecuted).toBe(0);
+    expect(report.noRealTradeSent).toBe(true);
+    expect(report.readOnly).toBe(true);
+    expect(report.paperOnly).toBe(true);
+  });
+
+  it('deduplicates entries from day-log across cycles with same contract+runFile', () => {
+    const dir = makeTempDir();
+    const runsDir = path.join(dir, 'runs');
+    fs.mkdirSync(runsDir, { recursive: true });
+
+    const runFile = 'run-20260609-100000.json';
+    writeRunFile(runsDir, runFile, [
+      makeOutcome(SOL_A, makeSnap(SOL_A, 1.0, 10000, 200, T0), makeSnap(SOL_A, 1.1, 10100, 200, T1)),
+    ]);
+
+    const dayLogFile = path.join(dir, 'log.jsonl');
+    // Same contract+runFile in two cycles — must be deduped to one position.
+    const lines = [
+      makeDayCycleEntry(1, runFile, [{ contract: SOL_A }]),
+      makeDayCycleEntry(2, runFile, [{ contract: SOL_A }]),
+    ].map(e => JSON.stringify(e)).join('\n');
+    fs.writeFileSync(dayLogFile, lines + '\n', 'utf-8');
+
+    const report = runDexPaperPositionTracker({
+      plannerFile: path.join(dir, 'plan.json'),
+      dayLogFile,
+      runsDir,
+      out: path.join(dir, 'positions.json'),
+      generatedAt: T0,
+    });
+
+    expect(report.totalPositions).toBe(1);
+  });
+
+  it('planner source mode still works when no --day-log', () => {
+    const dir = makeTempDir();
+    const plannerFile = path.join(dir, 'plan.json');
+    fs.mkdirSync(path.join(dir, 'runs'), { recursive: true });
+    fs.writeFileSync(plannerFile, JSON.stringify(makePlanReport([])), 'utf-8');
+
+    const report = runDexPaperPositionTracker({
+      plannerFile,
+      runsDir: path.join(dir, 'runs'),
+      out: path.join(dir, 'positions.json'),
+      generatedAt: T0,
+    });
+
+    expect(report.sourceMode).toBe('planner');
+    expect(report.sourcePlanner).toBe(plannerFile);
+  });
+});
+
+// ── renderDexPaperPositionTrackerUsage — day-log ────────────────────────────────────────
+
+describe('renderDexPaperPositionTrackerUsage — day-log', () => {
+  it('documents --day-log option', () => {
+    expect(renderDexPaperPositionTrackerUsage()).toContain('--day-log');
+  });
+
+  it('--help does not run tracker (pure string result)', () => {
+    const u = renderDexPaperPositionTrackerUsage();
+    expect(typeof u).toBe('string');
+    expect(u).toContain('--day-log');
+    expect(u).toContain('--planner');
   });
 });

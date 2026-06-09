@@ -2428,6 +2428,7 @@ async function main(): Promise<void> {
         }
         const ptRunsDir   = getArgValue('--runs-dir')           ?? 'data/token-grab/dex-watch-runs';
         const ptPlanner   = getArgValue('--planner')            ?? 'data/token-grab/paper-plans/dex-paper-entry-plan.json';
+        const ptDayLog    = getArgValue('--day-log');
         const ptOut       = getArgValue('--out')                ?? 'data/token-grab/paper-positions/dex-paper-positions.json';
         const ptSize      = Number(getArgValue('--position-size')      ?? '1');
         const ptStop      = Number(getArgValue('--stop-loss-pct')      ?? '-20');
@@ -2454,6 +2455,7 @@ async function main(): Promise<void> {
 
         const ptReport = runDexPaperPositionTracker({
           plannerFile: ptPlanner,
+          dayLogFile: ptDayLog ?? undefined,
           runsDir: ptRunsDir,
           out: ptOut,
           positionSize: ptSize,
