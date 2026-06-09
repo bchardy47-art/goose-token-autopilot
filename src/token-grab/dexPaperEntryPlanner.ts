@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { DexWatchOutcome } from './dexWatch';
-import { loadPresignals as dexLoadPresignals, parsePresignals } from './dexWatch';
+import { loadPresignals as dexLoadPresignals } from './dexWatch';
 import { outcomesFromReport, DRAIN_PCT } from './dexWatchSummary';
 import { PASS_PRICE_PCT, PASS_LIQ_PCT, PASS_VLR_MAX, BLOCK_VLR_MAX } from './dexWatchCandidates';
 import { historyRiskReasons, HISTORY_RISK_MIN } from './dexCandidateSim';
@@ -14,6 +14,9 @@ export const PLAN_STOP_LOSS_PCT = -20;
 export const PLAN_FIRST_TP_PCT = 25;
 export const PLAN_RUNNER_TARGET_PCT = 50;
 
+/** Pattern that identifies a real watch run (excludes smoke.json, fixtures, etc.). */
+const REAL_RUN_RE = /^run-.+\.json$/i;
+
 const CANCEL_CONDITIONS = [
   'liquidity falls below entry level',
   `volume/liquidity ratio exceeds ${BLOCK_VLR_MAX} (dangerous churn)`,
@@ -24,7 +27,8 @@ const CANCEL_CONDITIONS = [
 // ── Types ───────────────────────────────────────────────────────────────────────────
 
 export type PlanRecommendation =
-  | 'PAPER_ENTRY_CANDIDATE'
+  | 'CURRENT_CYCLE_PAPER_ENTRY'
+  | 'HISTORICAL_JOURNAL_WINNER'
   | 'WATCH_ONLY'
   | 'BLOCKED_HISTORY_RISK'
   | 'NO_ENTRY';
@@ -33,6 +37,8 @@ export interface PaperEntryPlan {
   symbol?: string;
   contract: string;
   recommendation: PlanRecommendation;
+  isCurrentCycle: boolean;
+  latestRunFile?: string;
   fakeEntrySize: number;
   fakeStopLossPct: number;
   fakeTakeProfitPct: number;
@@ -61,9 +67,11 @@ export interface DexPaperEntryPlanReport {
   journalFile: string;
   fakeBankroll: number;
   fakePositionSize: number;
+  latestRealRunFile?: string;
 
   totalPlans: number;
-  paperEntryCandidates: number;
+  currentCyclePaperEntry: number;
+  historicalJournalWinners: number;
   watchOnly: number;
   blockedHistoryRisk: number;
   noEntry: number;
@@ -91,6 +99,21 @@ export interface DexPaperEntryPlannerOptions {
 function avg(nums: number[]): number | undefined {
   if (!nums.length) return undefined;
   return nums.reduce((s, n) => s + n, 0) / nums.length;
+}
+
+/**
+ * Returns the filename of the newest real run (matching run-*.json).
+ * smoke.json, fixture files, and anything else that doesn't match are ignored.
+ */
+export function findLatestRealRunFile(runs: LoadedRun[]): string | undefined {
+  const real = runs
+    .filter(r => REAL_RUN_RE.test(r.file))
+    .sort((a, b) => {
+      const fa = a.file.toLowerCase();
+      const fb = b.file.toLowerCase();
+      return fa < fb ? 1 : fa > fb ? -1 : 0;
+    });
+  return real[0]?.file;
 }
 
 interface ContractHistory {
@@ -170,10 +193,11 @@ function journalSimilarityNote(
 }
 
 const RECOMMENDATION_ORDER: Record<PlanRecommendation, number> = {
-  PAPER_ENTRY_CANDIDATE: 0,
-  WATCH_ONLY: 1,
-  BLOCKED_HISTORY_RISK: 2,
-  NO_ENTRY: 3,
+  CURRENT_CYCLE_PAPER_ENTRY: 0,
+  HISTORICAL_JOURNAL_WINNER: 1,
+  WATCH_ONLY: 2,
+  BLOCKED_HISTORY_RISK: 3,
+  NO_ENTRY: 4,
 };
 
 // ── Plan builder — pure ────────────────────────────────────────────────────────────────
@@ -186,11 +210,11 @@ export function buildDexPaperEntryPlans(
 ): DexPaperEntryPlanReport {
   const positionSize = options.positionSize ?? 1;
   const fakeBankroll = options.fakeBankroll ?? 20;
+  const latestRealRunFile = findLatestRealRunFile(runs);
 
   const histories = rollupHistory(runs);
   const plans: PaperEntryPlan[] = [];
 
-  // Evaluate each contract seen in watch runs
   for (const h of histories.values()) {
     const avgVlr = avg(h.vlrs);
     const strongest = h.strongest;
@@ -208,16 +232,29 @@ export function buildDexPaperEntryPlans(
     const passes = meetsPassThresholds(strongest);
     const isBlocked = riskReasons.length > 0;
     const anyMovement = hasAnyMovement(strongest);
+    // Current-cycle means the best outcome came from the newest real run file.
+    const isCurrentCycle =
+      !!latestRealRunFile &&
+      !!h.strongestRunFile &&
+      h.strongestRunFile === latestRealRunFile;
 
     let recommendation: PlanRecommendation;
     const reasons: string[] = [];
 
-    if (passes && !isBlocked) {
-      recommendation = 'PAPER_ENTRY_CANDIDATE';
+    if (passes && !isBlocked && isCurrentCycle) {
+      recommendation = 'CURRENT_CYCLE_PAPER_ENTRY';
       reasons.push(`price +${price!.toFixed(1)}% >= +${PASS_PRICE_PCT}% threshold`);
       reasons.push(`liquidity +${liq!.toFixed(1)}% >= +${PASS_LIQ_PCT}% threshold`);
       reasons.push(`v/l ratio ${vlr!.toFixed(2)} <= ${PASS_VLR_MAX} threshold`);
       reasons.push('history clean — no losses, no drains, no missing data');
+      reasons.push(`from newest run: ${latestRealRunFile}`);
+    } else if (passes && !isBlocked && !isCurrentCycle) {
+      recommendation = 'HISTORICAL_JOURNAL_WINNER';
+      reasons.push(`price +${price!.toFixed(1)}% >= +${PASS_PRICE_PCT}% threshold (historical)`);
+      reasons.push(`liquidity +${liq!.toFixed(1)}% >= +${PASS_LIQ_PCT}% threshold (historical)`);
+      reasons.push(`v/l ratio ${vlr!.toFixed(2)} <= ${PASS_VLR_MAX} threshold (historical)`);
+      reasons.push('history clean — but best outcome is from an older run, not the newest cycle');
+      if (h.strongestRunFile) reasons.push(`source: ${h.strongestRunFile}`);
     } else if (passes && isBlocked) {
       recommendation = 'BLOCKED_HISTORY_RISK';
       reasons.push(`would pass PASS thresholds (price +${price!.toFixed(1)}%, liq +${liq!.toFixed(1)}%, v/l ${vlr!.toFixed(2)})`);
@@ -259,6 +296,8 @@ export function buildDexPaperEntryPlans(
       symbol: h.symbol,
       contract: h.contract,
       recommendation,
+      isCurrentCycle,
+      latestRunFile: latestRealRunFile,
       fakeEntrySize: positionSize,
       fakeStopLossPct: PLAN_STOP_LOSS_PCT,
       fakeTakeProfitPct: PLAN_FIRST_TP_PCT,
@@ -280,7 +319,7 @@ export function buildDexPaperEntryPlans(
     });
   }
 
-  // Signals not seen in any run → NO_ENTRY
+  // Signals with no watch run data → NO_ENTRY
   for (const sig of signals) {
     if (!sig.contract) continue;
     const key = sig.contract.toLowerCase();
@@ -289,6 +328,8 @@ export function buildDexPaperEntryPlans(
         symbol: sig.symbol,
         contract: sig.contract,
         recommendation: 'NO_ENTRY',
+        isCurrentCycle: false,
+        latestRunFile: latestRealRunFile,
         fakeEntrySize: positionSize,
         fakeStopLossPct: PLAN_STOP_LOSS_PCT,
         fakeTakeProfitPct: PLAN_FIRST_TP_PCT,
@@ -318,8 +359,10 @@ export function buildDexPaperEntryPlans(
     journalFile: options.journalFile,
     fakeBankroll,
     fakePositionSize: positionSize,
+    latestRealRunFile,
     totalPlans: plans.length,
-    paperEntryCandidates: plans.filter(p => p.recommendation === 'PAPER_ENTRY_CANDIDATE').length,
+    currentCyclePaperEntry: plans.filter(p => p.recommendation === 'CURRENT_CYCLE_PAPER_ENTRY').length,
+    historicalJournalWinners: plans.filter(p => p.recommendation === 'HISTORICAL_JOURNAL_WINNER').length,
     watchOnly: plans.filter(p => p.recommendation === 'WATCH_ONLY').length,
     blockedHistoryRisk: plans.filter(p => p.recommendation === 'BLOCKED_HISTORY_RISK').length,
     noEntry: plans.filter(p => p.recommendation === 'NO_ENTRY').length,
@@ -409,32 +452,47 @@ export function renderDexPaperEntryPlanReport(report: DexPaperEntryPlanReport): 
   lines.push(`  Signals file             : ${report.signalsFile}`);
   lines.push(`  Runs dir                 : ${report.runsDir}`);
   lines.push(`  Journal file             : ${report.journalFile}`);
+  lines.push(`  Latest real run          : ${report.latestRealRunFile ?? '(none)'}`);
   lines.push(`  Fake bankroll            : $${report.fakeBankroll.toFixed(2)}`);
   lines.push(`  Fake position size       : $${report.fakePositionSize.toFixed(2)}`);
   lines.push(`  Total plans              : ${report.totalPlans}`);
   lines.push('');
-  lines.push(`  PAPER_ENTRY_CANDIDATE    : ${report.paperEntryCandidates}`);
-  lines.push(`  WATCH_ONLY               : ${report.watchOnly}`);
-  lines.push(`  BLOCKED_HISTORY_RISK     : ${report.blockedHistoryRisk}`);
-  lines.push(`  NO_ENTRY                 : ${report.noEntry}`);
+  lines.push(`  CURRENT_CYCLE_PAPER_ENTRY : ${report.currentCyclePaperEntry}`);
+  lines.push(`  HISTORICAL_JOURNAL_WINNER : ${report.historicalJournalWinners}`);
+  lines.push(`  WATCH_ONLY                : ${report.watchOnly}`);
+  lines.push(`  BLOCKED_HISTORY_RISK      : ${report.blockedHistoryRisk}`);
+  lines.push(`  NO_ENTRY                  : ${report.noEntry}`);
 
-  const topPlans = report.plans.filter(p => p.recommendation !== 'NO_ENTRY').slice(0, 5);
-  if (topPlans.length > 0) {
+  const currentCycle = report.plans.filter(p => p.recommendation === 'CURRENT_CYCLE_PAPER_ENTRY');
+  if (currentCycle.length > 0) {
     lines.push('');
     lines.push(THIN);
-    lines.push('  Top plans (PAPER_ENTRY_CANDIDATE and WATCH_ONLY, top 5):');
-    for (const p of topPlans) {
+    lines.push(`  CURRENT_CYCLE_PAPER_ENTRY — from newest run (${report.latestRealRunFile ?? '?'}):`);
+    for (const p of currentCycle.slice(0, 10)) {
       const sym = (p.symbol ? `$${p.symbol}` : '(no sym)').padEnd(14);
       const vlr = p.volumeLiquidityRatio != null ? p.volumeLiquidityRatio.toFixed(2) : 'n/a';
       lines.push(
-        `    ${p.recommendation.padEnd(24)} ${sym}` +
-          ` price ${fmtPct(p.priceChangePct).padStart(8)}` +
+        `    ${sym} price ${fmtPct(p.priceChangePct).padStart(8)}` +
           `  liq ${fmtPct(p.liquidityChangePct).padStart(8)}  v/l ${vlr.padStart(6)}`,
       );
       if (p.journalSimilarity) lines.push(`      JOURNAL: ${p.journalSimilarity}`);
       lines.push(`      stop ${p.fakeStopLossPct}%  first-TP +${p.fakeTakeProfitPct}%  runner +${p.fakeRunnerTargetPct}%`);
-      lines.push(`      ${p.reasons.slice(0, 2).join(' | ')}`);
-      if (p.sourceRunFile) lines.push(`      source run: ${p.sourceRunFile}`);
+    }
+  }
+
+  const historical = report.plans.filter(p => p.recommendation === 'HISTORICAL_JOURNAL_WINNER');
+  if (historical.length > 0) {
+    lines.push('');
+    lines.push(THIN);
+    lines.push(`  HISTORICAL_JOURNAL_WINNER — passed in older runs, not current cycle (${historical.length}):`);
+    for (const p of historical.slice(0, 10)) {
+      const sym = (p.symbol ? `$${p.symbol}` : '(no sym)').padEnd(14);
+      const vlr = p.volumeLiquidityRatio != null ? p.volumeLiquidityRatio.toFixed(2) : 'n/a';
+      lines.push(
+        `    ${sym} price ${fmtPct(p.priceChangePct).padStart(8)}` +
+          `  liq ${fmtPct(p.liquidityChangePct).padStart(8)}  v/l ${vlr.padStart(6)}` +
+          `  (${p.sourceRunFile ?? '?'})`,
+      );
     }
   }
 
