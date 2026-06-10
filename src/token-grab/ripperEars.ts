@@ -85,6 +85,16 @@ export function earSignalToRipperInput(signal: RipperEarSignal): RipperInput | n
     vlr = signal.volumeUsd / signal.liquidityUsd;
   }
 
+  // Map holderRiskHint → holderConcentrationStatus so the ripper engine can score holder risk.
+  // hint values: 'CLEAN' | 'WATCH' | 'RISKY' (set by ripperFeed.ts from enriched candidates)
+  // engine values: 'CLEAN' | 'WARNING' | 'DANGER' | 'UNKNOWN'
+  const holderConcentrationStatus = (() => {
+    if (signal.holderRiskHint === 'CLEAN') return 'CLEAN'  as const;
+    if (signal.holderRiskHint === 'WATCH') return 'WARNING' as const;
+    if (signal.holderRiskHint === 'RISKY') return 'DANGER'  as const;
+    return undefined;
+  })();
+
   return {
     contract,
     symbol: signal.symbol,
@@ -92,6 +102,7 @@ export function earSignalToRipperInput(signal: RipperEarSignal): RipperInput | n
     priceChangePct: signal.priceChangePct,
     liquidityChangePct: signal.liquidityChangePct,
     volumeLiquidityRatio: vlr,
+    holderConcentrationStatus,
   };
 }
 

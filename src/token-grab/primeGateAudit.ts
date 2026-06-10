@@ -9,6 +9,7 @@ import {
   type LiquidityQuality,
 } from './dexRipperEngine';
 import { readFixturesFromJsonl, type LiveRipperFixture } from './liveFixtureCapture';
+import { maybeHolderRiskFromFixture } from './holderRiskProvider';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -88,6 +89,15 @@ function inferSafety(fixture: LiveRipperFixture): InferredSafety {
     clusterRisk     = scored.holderCluster.clusterRisk;
     botRisk         = scored.botRiskProfile.botRisk;
     liquidityQuality = scored.liquidityProfile.quality;
+  }
+
+  // Upgrade holderRisk from fixture raw when local enrichment data is present.
+  // Enriched candidates store holderConcentrationStatus in raw; this is more
+  // accurate than inferring from ripperInput (which may not carry holder fields).
+  const holderFromRaw = maybeHolderRiskFromFixture(fixture);
+  if (holderFromRaw) {
+    holderRisk = holderFromRaw.holderRisk;
+    // clusterRisk stays UNKNOWN — BubbleMaps not connected in V1
   }
 
   const sig = fixture.normalizedSignal as Record<string, unknown> | undefined;

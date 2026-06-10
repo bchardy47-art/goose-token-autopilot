@@ -163,6 +163,7 @@ import { runLiveFixtureCapture, runLiveFixtureReport, runLiveFixtureAutopsy, ren
 import { runRipperFeed, renderRipperFeedResult, renderRipperFeedUsage } from './token-grab/ripperFeed';
 import { runFreshPoolFeed, renderFreshPoolFeedResult, renderFreshPoolFeedUsage } from './token-grab/freshPoolFeed';
 import { runPrimeGateAudit, renderPrimeGateAuditReport, renderPrimeGateAuditUsage } from './token-grab/primeGateAudit';
+import { runHolderRiskAudit, renderHolderRiskAuditReport, renderHolderRiskAuditUsage } from './token-grab/holderRiskAudit';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2775,6 +2776,17 @@ async function main(): Promise<void> {
         const pgaStrictPreview = process.argv.includes('--strict-preview');
         const pgaResult = runPrimeGateAudit({ inputPath: pgaFixtures, strictPreview: pgaStrictPreview });
         console.log(renderPrimeGateAuditReport(pgaResult));
+        break;
+      }
+
+      case 'token:holder-risk-audit': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderHolderRiskAuditUsage());
+          break;
+        }
+        const hraFixtures = getArgValue('--fixtures') ?? 'data/token-grab/ripper/live-fixtures.jsonl';
+        const hraResult   = runHolderRiskAudit({ inputPath: hraFixtures });
+        console.log(renderHolderRiskAuditReport(hraResult));
         break;
       }
 
