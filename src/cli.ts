@@ -159,6 +159,7 @@ import { runDexWinnerCandidateReport, renderDexWinnerCandidateReport, renderDexW
 import { runDexCandidateSafetyEnrich, renderDexCandidateSafetyEnrichReport, renderDexCandidateSafetyEnrichUsage } from './token-grab/dexCandidateSafetyEnrich';
 import { runRipperSession, runRipperAutopilot, loadOrCreateSessionState, renderRipperSessionSummary, renderRipperDashboard, renderRipperSessionUsage, renderRipperAutopilotUsage, renderRipperDashboardUsage } from './token-grab/dexRipperSession';
 import { runRipperEarsReport, runRipperNearMiss, renderRipperEarsReport, renderRipperNearMissReport, renderRipperEarsUsage, renderRipperNearMissUsage, type EarsInputFormat } from './token-grab/ripperEarsReport';
+import { runLiveFixtureCapture, runLiveFixtureReport, runLiveFixtureAutopsy, renderCaptureResult, renderFixtureReport, renderAutopsyReport, renderLiveFixtureCaptureUsage, renderLiveFixtureReportUsage, renderLiveFixtureAutopsyUsage } from './token-grab/liveFixtureCapture';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2683,6 +2684,50 @@ async function main(): Promise<void> {
 
         const rnResult = runRipperNearMiss({ inputPath: rnInput, format: rnFormat });
         console.log(renderRipperNearMissReport(rnResult));
+        break;
+      }
+
+      case 'token:live-fixture-capture': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderLiveFixtureCaptureUsage());
+          break;
+        }
+        const lfcInput   = getArgValue('--input')   ?? 'data/token-grab/ripper/ripper-ears-input.json';
+        const lfcOutput  = getArgValue('--output')  ?? 'data/token-grab/ripper/live-fixtures.jsonl';
+        const lfcFmtRaw  = getArgValue('--format')  ?? 'ear-signals';
+        const lfcFormat: EarsInputFormat = lfcFmtRaw === 'dexscreener' ? 'dexscreener' : 'ear-signals';
+        const lfcReset   = process.argv.includes('--reset');
+        const lfcDebug   = process.argv.includes('--debug');
+
+        const lfcResult = runLiveFixtureCapture({
+          inputPath: lfcInput,
+          outputPath: lfcOutput,
+          format: lfcFormat,
+          reset: lfcReset,
+        });
+        console.log(renderCaptureResult(lfcResult, lfcDebug));
+        break;
+      }
+
+      case 'token:live-fixture-report': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderLiveFixtureReportUsage());
+          break;
+        }
+        const lfrFixtures = getArgValue('--fixtures') ?? 'data/token-grab/ripper/live-fixtures.jsonl';
+        const lfrResult   = runLiveFixtureReport(lfrFixtures);
+        console.log(renderFixtureReport(lfrResult));
+        break;
+      }
+
+      case 'token:live-fixture-autopsy': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderLiveFixtureAutopsyUsage());
+          break;
+        }
+        const lfaFixtures = getArgValue('--fixtures') ?? 'data/token-grab/ripper/live-fixtures.jsonl';
+        const lfaResult   = runLiveFixtureAutopsy(lfaFixtures);
+        console.log(renderAutopsyReport(lfaResult));
         break;
       }
 
