@@ -102,6 +102,7 @@
     "token:fresh-pool-feed": "tsx src/cli.ts token:fresh-pool-feed",
     "token:prime-gate-audit": "tsx src/cli.ts token:prime-gate-audit",
     "token:holder-risk-audit": "tsx src/cli.ts token:holder-risk-audit",
+    "token:fixture-holder-enrich": "tsx src/cli.ts token:fixture-holder-enrich",
     "token:ripper-feed": "tsx src/cli.ts token:ripper-feed",
     "token:live-fixture-capture": "tsx src/cli.ts token:live-fixture-capture",
     "token:live-fixture-report": "tsx src/cli.ts token:live-fixture-report",

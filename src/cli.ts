@@ -164,6 +164,7 @@ import { runRipperFeed, renderRipperFeedResult, renderRipperFeedUsage } from './
 import { runFreshPoolFeed, renderFreshPoolFeedResult, renderFreshPoolFeedUsage } from './token-grab/freshPoolFeed';
 import { runPrimeGateAudit, renderPrimeGateAuditReport, renderPrimeGateAuditUsage } from './token-grab/primeGateAudit';
 import { runHolderRiskAudit, renderHolderRiskAuditReport, renderHolderRiskAuditUsage } from './token-grab/holderRiskAudit';
+import { runFixtureHolderEnrich, renderFixtureHolderEnrichReport, renderFixtureHolderEnrichUsage } from './token-grab/fixtureHolderEnrich';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2787,6 +2788,33 @@ async function main(): Promise<void> {
         const hraFixtures = getArgValue('--fixtures') ?? 'data/token-grab/ripper/live-fixtures.jsonl';
         const hraResult   = runHolderRiskAudit({ inputPath: hraFixtures });
         console.log(renderHolderRiskAuditReport(hraResult));
+        break;
+      }
+
+      case 'token:fixture-holder-enrich': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderFixtureHolderEnrichUsage());
+          break;
+        }
+        const fheInput    = getArgValue('--input');
+        const fheOutput   = getArgValue('--output');
+        const fheLimit    = getArgValue('--limit')    ? parseInt(getArgValue('--limit')!,    10) : undefined;
+        const fheDelay    = getArgValue('--delay-ms') ? parseInt(getArgValue('--delay-ms')!, 10) : undefined;
+        const fheRpcUrl   = getArgValue('--rpc-url');
+        const fheForce    = process.argv.includes('--force');
+        const fheOffline  = process.argv.includes('--offline');
+        const fheDryRun   = process.argv.includes('--dry-run');
+        const fheResult   = await runFixtureHolderEnrich({
+          inputPath:  fheInput,
+          outputPath: fheOutput,
+          limitN:     fheLimit,
+          delayMs:    fheDelay,
+          rpcUrl:     fheRpcUrl,
+          force:      fheForce,
+          offline:    fheOffline,
+          dryRun:     fheDryRun,
+        });
+        console.log(renderFixtureHolderEnrichReport(fheResult));
         break;
       }
 
