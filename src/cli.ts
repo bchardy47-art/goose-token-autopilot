@@ -155,6 +155,7 @@ import { runDexValidationLoop, renderValidationLoopSummary, renderValidationLoop
 import { runDexDayWatch, renderDayWatchUsage, loadDayLog, buildDayReport, renderDayReport, renderDayReportUsage } from './token-grab/dexDayWatch';
 import { runDexPaperPositionTracker, renderDexPaperPositionTrackerReport, renderDexPaperPositionTrackerUsage } from './token-grab/dexPaperPositionTracker';
 import { runDexLegitimacyReport, renderDexLegitimacyReport, renderDexLegitimacyReportUsage } from './token-grab/dexLegitimacyReport';
+import { runDexWinnerCandidateReport, renderDexWinnerCandidateReport, renderDexWinnerCandidateReportUsage } from './token-grab/dexWinnerCandidateReport';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2498,6 +2499,35 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(lrReport, null, 2));
         } else {
           console.log(renderDexLegitimacyReport(lrReport));
+        }
+        break;
+      }
+
+      case 'token:dex-winner-candidates': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderDexWinnerCandidateReportUsage());
+          break;
+        }
+        const wcLegitimacy = getArgValue('--legitimacy') ?? 'data/token-grab/legitimacy/dex-legitimacy-report-today.json';
+        const wcDayLog     = getArgValue('--day-log');
+        const wcPositions  = getArgValue('--positions');
+        const wcOut        = getArgValue('--out') ?? 'data/token-grab/legitimacy/dex-winner-candidates-today.json';
+        const wcDebug      = process.argv.includes('--debug');
+        const wcJson       = process.argv.includes('--json');
+
+        const wcReport = runDexWinnerCandidateReport({
+          legitimacyPath: wcLegitimacy,
+          dayLogPath: wcDayLog,
+          positionsPath: wcPositions,
+          outPath: wcOut,
+          debug: wcDebug,
+          generatedAt: new Date().toISOString(),
+        });
+
+        if (wcJson) {
+          console.log(JSON.stringify(wcReport, null, 2));
+        } else {
+          console.log(renderDexWinnerCandidateReport(wcReport, wcDebug));
         }
         break;
       }
