@@ -34,6 +34,8 @@ export interface ClusterRiskResult {
   clusterNotes:      string[];
   clusterFetchError?: string;
   rawMetrics?:       ClusterMetrics;
+  httpStatus?:       number;    // HTTP status code for diagnostics
+  dataAvailable?:    boolean;   // false when API says map not available (400)
 }
 
 // ── Provider interface ────────────────────────────────────────────────────────
@@ -142,8 +144,8 @@ export function extractClusterRiskFromCandidate(
  * Returns the ClusterRisk value from fixture.raw enrichment data, or null
  * when no cluster data is present.
  *
- * Used by autonomyReadinessAudit and primeGateAudit to override the engine's
- * hardcoded UNKNOWN clusterRisk when real enrichment data is available.
+ * Used by primeGateAudit to override the engine's hardcoded UNKNOWN clusterRisk
+ * when real enrichment data is available.
  */
 export function maybeClusterRiskFromFixture(fixture: LiveRipperFixture): ClusterRisk | null {
   const raw = fixture.raw as Record<string, unknown> | undefined;
@@ -178,17 +180,23 @@ export interface BubbleMapsProviderConfig {
 /**
  * Create a BubbleMaps cluster risk provider.
  *
- * IMPORTANT: BubbleMaps API response format is not yet integrated.
- * This provider makes the HTTP call and attempts to parse cluster metrics
- * from the response using common field names. If the response does not
- * match the expected shape, it returns UNKNOWN safely.
+ * Endpoint: GET {apiUrl}/tokens/map/solana/{tokenMint}
+ * Auth:     X-ApiKey: {apiKey}
  *
- * When BubbleMaps API access is obtained, update parseClusterMetrics() below
- * to match the actual response schema.
+ * BubbleMaps v0 real response shape:
+ *   { metadata, metrics: { supply_stats, scores: { bubblemaps_score, gini_index, ... } }, nodes, relationships }
  *
- * Required config:
- *   apiUrl  — e.g. https://api.bubblemaps.io/v1  (env BUBBLEMAPS_API_URL)
- *   apiKey  — optional Bearer token              (env BUBBLEMAPS_API_KEY)
+ * bubblemaps_score is 0–100 where higher = more decentralised/safer.
+ * Mapped to decentralisationScore for classifyClusterRisk.
+ *
+ * Degradation rules:
+ *   200            → success; clusterRisk may be UNKNOWN if metrics unrecognised
+ *   400 (no data)  → UNKNOWN, no error (API responded; token not yet mapped by BubbleMaps)
+ *   400 (other)    → UNKNOWN + clusterFetchError
+ *   401/403        → UNKNOWN + clusterFetchError (auth/config failure)
+ *   429            → UNKNOWN + clusterFetchError (rate limit)
+ *   other non-2xx  → UNKNOWN + clusterFetchError
+ *   network error  → UNKNOWN + clusterFetchError
  */
 export function createBubbleMapsClusterProvider(
   config: BubbleMapsProviderConfig,
@@ -201,23 +209,64 @@ export function createBubbleMapsClusterProvider(
       const timer = setTimeout(() => controller.abort(), 10_000);
 
       try {
-        const url = `${config.apiUrl.replace(/\/$/, '')}/token/${tokenMint}`;
+        const base = config.apiUrl.replace(/\/$/, '');
+        const url = `${base}/tokens/map/solana/${tokenMint}`;
         const headers: Record<string, string> = {
           accept: 'application/json',
           'user-agent': 'goose-token-autopilot/1.0',
         };
-        if (config.apiKey) headers['authorization'] = `Bearer ${config.apiKey}`;
+        if (config.apiKey) headers['X-ApiKey'] = config.apiKey;
 
         const response = await fetch(url, { signal: controller.signal, headers });
 
-        if (!response.ok) {
+        // 400 may mean "map data not yet available for this token" (normal, not a failure)
+        if (response.status === 400) {
+          let bodyText = '';
+          try { bodyText = await response.text(); } catch (_) { /* ignore */ }
+          const isNoData =
+            bodyText.toLowerCase().includes('not available') ||
+            bodyText.toLowerCase().includes('no data') ||
+            bodyText.toLowerCase().includes('not found') ||
+            bodyText.toLowerCase().includes('map data');
+          if (isNoData || bodyText === '') {
+            // Token not yet mapped by BubbleMaps — expected, not a provider failure
+            return {
+              clusterRisk:       'UNKNOWN',
+              clusterProvider:   'bubblemaps',
+              clusterCheckedAt:  checkedAt,
+              clusterConfidence: 'UNKNOWN',
+              clusterNotes:      ['BubbleMaps: map data not yet available for this token'],
+              httpStatus:        400,
+              dataAvailable:     false,
+              // No clusterFetchError → counts as rpcSucceeded
+            };
+          }
           return {
             clusterRisk:       'UNKNOWN',
             clusterProvider:   'bubblemaps',
             clusterCheckedAt:  checkedAt,
             clusterConfidence: 'UNKNOWN',
-            clusterNotes:      [`BubbleMaps HTTP ${response.status}`],
-            clusterFetchError: `http ${response.status}`,
+            clusterNotes:      ['BubbleMaps HTTP 400'],
+            clusterFetchError: 'http 400 (bad request)',
+            httpStatus:        400,
+          };
+        }
+
+        if (!response.ok) {
+          const status = response.status;
+          const detail =
+            status === 401 ? `http 401 (auth failed — check BUBBLEMAPS_API_KEY)` :
+            status === 403 ? `http 403 (access denied — check API key permissions)` :
+            status === 429 ? `http 429 (rate limited)` :
+            `http ${status}`;
+          return {
+            clusterRisk:       'UNKNOWN',
+            clusterProvider:   'bubblemaps',
+            clusterCheckedAt:  checkedAt,
+            clusterConfidence: 'UNKNOWN',
+            clusterNotes:      [`BubbleMaps HTTP ${status}`],
+            clusterFetchError: detail,
+            httpStatus:        status,
           };
         }
 
@@ -225,13 +274,20 @@ export function createBubbleMapsClusterProvider(
         const metrics = parseClusterMetrics(data);
         const clusterRisk = classifyClusterRisk(metrics);
 
+        const hasRichMetrics = metrics && (
+          metrics.riskScore         !== undefined ||
+          metrics.topClusterPct     !== undefined ||
+          metrics.decentralisationScore !== undefined
+        );
         const confidence: ClusterRiskResult['clusterConfidence'] =
-          metrics && (metrics.riskScore !== undefined || metrics.topClusterPct !== undefined)
-            ? 'HIGH' : 'LOW';
+          hasRichMetrics ? 'HIGH' : clusterRisk !== 'UNKNOWN' ? 'MEDIUM' : 'LOW';
 
         const notes: string[] = [];
         if (clusterRisk === 'UNKNOWN') {
           notes.push('BubbleMaps response did not contain recognisable cluster metrics — integration may need updating');
+        }
+        if (metrics?.decentralisationScore !== undefined) {
+          notes.push(`bubbleMapsScore ${metrics.decentralisationScore.toFixed(1)}`);
         }
         if (metrics?.topClusterPct !== undefined) {
           notes.push(`top cluster ${metrics.topClusterPct.toFixed(1)}%`);
@@ -247,15 +303,17 @@ export function createBubbleMapsClusterProvider(
           clusterConfidence: confidence,
           clusterNotes:      notes,
           rawMetrics:        metrics ?? undefined,
+          httpStatus:        200,
         };
       } catch (err) {
+        const msg = err instanceof Error ? err.message : 'cluster fetch failed';
         return {
           clusterRisk:       'UNKNOWN',
           clusterProvider:   'bubblemaps',
           clusterCheckedAt:  checkedAt,
           clusterConfidence: 'UNKNOWN',
           clusterNotes:      [],
-          clusterFetchError: err instanceof Error ? err.message : 'cluster fetch failed',
+          clusterFetchError: msg,
         };
       } finally {
         clearTimeout(timer);
@@ -265,34 +323,55 @@ export function createBubbleMapsClusterProvider(
 }
 
 /**
- * Parse cluster metrics from a BubbleMaps (or compatible) API response.
+ * Parse cluster metrics from a BubbleMaps API response.
  *
- * Tries common field names from known cluster API patterns.
- * Returns null when no recognisable fields are found — the caller will
- * classify this as UNKNOWN rather than guessing.
+ * Tries the real BubbleMaps v0 structure first:
+ *   data.metrics.scores.bubblemaps_score  (0–100, higher = safer → decentralisationScore)
  *
- * Update this function when BubbleMaps API access is obtained and the
- * exact response schema is known.
+ * Falls back to flat top-level field names for backward compat with mocks/tests:
+ *   risk_score / riskScore, top_cluster_pct / topClusterPct, is_rug / isRug,
+ *   decentralization_score / decentralisationScore
+ *
+ * Returns null when no recognisable fields found — caller classifies as UNKNOWN.
+ *
+ * Update the "real BubbleMaps structure" block when API shape changes.
  */
 function parseClusterMetrics(data: Record<string, unknown>): ClusterMetrics | null {
   const metrics: ClusterMetrics = {};
   let found = false;
 
-  // BubbleMaps may expose a decentralization score
-  const decScore = data['decentralization_score'] ?? data['decentralisationScore'] ?? data['decentralization'];
-  if (typeof decScore === 'number') { metrics.decentralisationScore = decScore; found = true; }
+  // ── Real BubbleMaps v0 response structure ──────────────────────────────────
+  const metricsObj = data['metrics'] as Record<string, unknown> | undefined;
+  if (metricsObj) {
+    const scoresObj = metricsObj['scores'] as Record<string, unknown> | undefined;
+    if (scoresObj) {
+      // bubblemaps_score: 0-100, higher = more decentralised/safer
+      const bScore = scoresObj['bubblemaps_score'];
+      if (typeof bScore === 'number') {
+        metrics.decentralisationScore = bScore;
+        found = true;
+      }
+    }
+    // Could also check metricsObj.supply_stats for top-holder data in future
+  }
 
-  // Risk / safety score
-  const riskScore = data['risk_score'] ?? data['riskScore'] ?? data['score'];
-  if (typeof riskScore === 'number') { metrics.riskScore = riskScore; found = true; }
+  // ── Flat fallback field names (for mocks, tests, and compatible providers) ─
+  if (!found) {
+    const decScore =
+      data['decentralization_score'] ??
+      data['decentralisationScore'] ??
+      data['decentralization'];
+    if (typeof decScore === 'number') { metrics.decentralisationScore = decScore; found = true; }
 
-  // Top-cluster percentage
-  const topPct = data['top_cluster_pct'] ?? data['topClusterPct'] ?? data['cluster_pct'];
-  if (typeof topPct === 'number') { metrics.topClusterPct = topPct; found = true; }
+    const riskScore = data['risk_score'] ?? data['riskScore'] ?? data['score'];
+    if (typeof riskScore === 'number') { metrics.riskScore = riskScore; found = true; }
 
-  // Explicit rug flag
-  const isRug = data['is_rug'] ?? data['isRug'] ?? data['flagged'];
-  if (typeof isRug === 'boolean') { metrics.isRug = isRug; found = true; }
+    const topPct = data['top_cluster_pct'] ?? data['topClusterPct'] ?? data['cluster_pct'];
+    if (typeof topPct === 'number') { metrics.topClusterPct = topPct; found = true; }
+
+    const isRug = data['is_rug'] ?? data['isRug'] ?? data['flagged'];
+    if (typeof isRug === 'boolean') { metrics.isRug = isRug; found = true; }
+  }
 
   return found ? metrics : null;
 }

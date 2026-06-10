@@ -41,6 +41,8 @@ export interface FixtureClusterEnrichResult {
   rpcAttempted:           number;
   rpcSucceeded:           number;
   rpcFailed:              number;
+  httpStatusCounts:       Record<number, number>;
+  firstFailureDetail:     string | null;
   clusterRiskCounts:      Record<string, number>;
   tradingExecuted:        0;
   noRealTradeSent:        true;
@@ -106,6 +108,8 @@ export interface PatchClusterResult {
   succeeded:              boolean;
   failed:                 boolean;
   patched:                boolean;
+  httpStatus?:            number;
+  failureDetail?:         string;
 }
 
 export async function patchFixtureCluster(
@@ -171,6 +175,8 @@ export async function patchFixtureCluster(
     result: {
       skippedMissingContract: false, skippedAlreadyEnriched: false, skippedNotCandidate: false,
       attempted: true, succeeded, failed, patched: true,
+      httpStatus:    clusterResult.httpStatus,
+      failureDetail: clusterResult.clusterFetchError,
     },
   };
 }
@@ -212,6 +218,8 @@ export async function runFixtureClusterEnrich(
     fixturesRead: 0, candidatesEvaluated: 0, fixturesPatched: 0,
     skippedAlreadyEnriched: 0, skippedMissingContract: 0, skippedNotCandidate: 0,
     rpcAttempted: 0, rpcSucceeded: 0, rpcFailed: 0,
+    httpStatusCounts: {} as Record<number, number>,
+    firstFailureDetail: null as string | null,
     clusterRiskCounts: {} as Record<string, number>,
     tradingExecuted: 0 as const, noRealTradeSent: true as const,
     paperOnly: true as const, readOnly: true as const,
@@ -239,6 +247,8 @@ export async function runFixtureClusterEnrich(
   let candidatesEvaluated = 0, fixturesPatched = 0;
   let skippedAlreadyEnriched = 0, skippedMissingContract = 0, skippedNotCandidate = 0;
   let rpcAttempted = 0, rpcSucceeded = 0, rpcFailed = 0;
+  const httpStatusCounts: Record<number, number> = {};
+  let firstFailureDetail: string | null = null;
 
   for (const fixture of fixtures) {
     const underLimit = limitN === undefined || candidatesEvaluated < limitN;
@@ -257,9 +267,19 @@ export async function runFixtureClusterEnrich(
     if (pr.skippedAlreadyEnriched) { skippedAlreadyEnriched++; enriched.push(fixture); continue; }
 
     candidatesEvaluated++;
-    if (pr.attempted && !offline) { rpcAttempted++; }
+    if (pr.attempted && !offline) {
+      rpcAttempted++;
+      if (pr.httpStatus !== undefined) {
+        httpStatusCounts[pr.httpStatus] = (httpStatusCounts[pr.httpStatus] ?? 0) + 1;
+      }
+    }
     if (pr.succeeded  && !offline) rpcSucceeded++;
-    if (pr.failed     && !offline) rpcFailed++;
+    if (pr.failed     && !offline) {
+      rpcFailed++;
+      if (firstFailureDetail === null && pr.failureDetail) {
+        firstFailureDetail = pr.failureDetail;
+      }
+    }
     if (pr.patched) fixturesPatched++;
 
     enriched.push(patched);
@@ -289,6 +309,7 @@ export async function runFixtureClusterEnrich(
     skippedMissingContract,
     skippedNotCandidate,
     rpcAttempted, rpcSucceeded, rpcFailed,
+    httpStatusCounts, firstFailureDetail,
     clusterRiskCounts,
     tradingExecuted: 0, noRealTradeSent: true, paperOnly: true, readOnly: true,
   };
@@ -342,6 +363,14 @@ export function renderFixtureClusterEnrichReport(result: FixtureClusterEnrichRes
     lines.push(`  Attempted  : ${result.rpcAttempted}`);
     lines.push(`  Succeeded  : ${result.rpcSucceeded}`);
     lines.push(`  Failed     : ${result.rpcFailed}`);
+    const statusEntries = Object.entries(result.httpStatusCounts ?? {});
+    if (statusEntries.length > 0) {
+      const statusStr = statusEntries.map(([k, v]) => `${k}×${v}`).join('  ');
+      lines.push(`  HTTP status: ${statusStr}`);
+    }
+    if (result.firstFailureDetail) {
+      lines.push(`  Error      : ${result.firstFailureDetail}`);
+    }
     lines.push('');
   }
 

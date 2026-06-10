@@ -661,18 +661,25 @@ describe('safety invariants', () => {
 
 // ── Renderer ──────────────────────────────────────────────────────────────────
 
+function makeBaseRendererResult(overrides: Record<string, unknown> = {}) {
+  return {
+    inputPath: '/path/to/file.jsonl', outputPath: '/path/to/file.jsonl',
+    inputMissing: false, offlineMode: false, dryRun: false, configNote: null,
+    fixturesRead: 0, candidatesEvaluated: 0, fixturesPatched: 0,
+    skippedAlreadyEnriched: 0, skippedMissingContract: 0, skippedNotCandidate: 0,
+    rpcAttempted: 0, rpcSucceeded: 0, rpcFailed: 0,
+    httpStatusCounts: {} as Record<number, number>,
+    firstFailureDetail: null as string | null,
+    clusterRiskCounts: {} as Record<string, number>,
+    tradingExecuted: 0 as const, noRealTradeSent: true as const,
+    paperOnly: true as const, readOnly: true as const,
+    ...overrides,
+  };
+}
+
 describe('renderFixtureClusterEnrichReport', () => {
   it('renders inputMissing report without error', () => {
-    const result = {
-      inputPath: '/path/to/file.jsonl', outputPath: '/path/to/file.jsonl',
-      inputMissing: true, offlineMode: false, dryRun: false, configNote: null,
-      fixturesRead: 0, candidatesEvaluated: 0, fixturesPatched: 0,
-      skippedAlreadyEnriched: 0, skippedMissingContract: 0, skippedNotCandidate: 0,
-      rpcAttempted: 0, rpcSucceeded: 0, rpcFailed: 0,
-      clusterRiskCounts: {},
-      tradingExecuted: 0 as const, noRealTradeSent: true as const,
-      paperOnly: true as const, readOnly: true as const,
-    };
+    const result = makeBaseRendererResult({ inputMissing: true });
     const report = renderFixtureClusterEnrichReport(result);
     expect(report).toContain('FIXTURE CLUSTER ENRICH');
     expect(report).toContain('No fixture file found');
@@ -680,16 +687,12 @@ describe('renderFixtureClusterEnrichReport', () => {
   });
 
   it('renders normal report without error', () => {
-    const result = {
-      inputPath: '/path/to/file.jsonl', outputPath: '/path/to/file.jsonl',
-      inputMissing: false, offlineMode: true, dryRun: false, configNote: null,
+    const result = makeBaseRendererResult({
+      offlineMode: true,
       fixturesRead: 5, candidatesEvaluated: 3, fixturesPatched: 3,
-      skippedAlreadyEnriched: 1, skippedMissingContract: 0, skippedNotCandidate: 1,
-      rpcAttempted: 0, rpcSucceeded: 0, rpcFailed: 0,
+      skippedAlreadyEnriched: 1, skippedNotCandidate: 1,
       clusterRiskCounts: { UNKNOWN: 5 },
-      tradingExecuted: 0 as const, noRealTradeSent: true as const,
-      paperOnly: true as const, readOnly: true as const,
-    };
+    });
     const report = renderFixtureClusterEnrichReport(result);
     expect(report).toContain('FIXTURE CLUSTER ENRICH');
     expect(report).toContain('REAL TRADING LOCKED');
@@ -697,18 +700,25 @@ describe('renderFixtureClusterEnrichReport', () => {
     expect(report).toContain('UNKNOWN');
   });
 
+  it('shows HTTP status counts and error detail when rpcFailed > 0', () => {
+    const result = makeBaseRendererResult({
+      candidatesEvaluated: 2, rpcAttempted: 2, rpcSucceeded: 1, rpcFailed: 1,
+      httpStatusCounts: { 401: 1 },
+      firstFailureDetail: 'http 401 (auth failed — check BUBBLEMAPS_API_KEY)',
+    });
+    const report = renderFixtureClusterEnrichReport(result);
+    expect(report).toContain('401');
+    expect(report).toContain('auth failed');
+    expect(report).not.toContain('my-secret'); // no secrets
+  });
+
   it('includes configNote when present', () => {
-    const result = {
-      inputPath: '/path/to/file.jsonl', outputPath: '/path/to/file.jsonl',
-      inputMissing: false, offlineMode: false, dryRun: false,
+    const result = makeBaseRendererResult({
       configNote: 'No cluster API configured — using offline provider',
       fixturesRead: 2, candidatesEvaluated: 1, fixturesPatched: 1,
-      skippedAlreadyEnriched: 0, skippedMissingContract: 0, skippedNotCandidate: 1,
-      rpcAttempted: 0, rpcSucceeded: 0, rpcFailed: 0,
+      skippedNotCandidate: 1,
       clusterRiskCounts: { UNKNOWN: 2 },
-      tradingExecuted: 0 as const, noRealTradeSent: true as const,
-      paperOnly: true as const, readOnly: true as const,
-    };
+    });
     const report = renderFixtureClusterEnrichReport(result);
     expect(report).toContain('CONFIG NOTE');
   });

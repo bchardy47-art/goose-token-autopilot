@@ -248,7 +248,103 @@ describe('createBubbleMapsClusterProvider', () => {
     expect(p.name).toBe('bubblemaps');
   });
 
-  it('returns UNKNOWN on HTTP error', async () => {
+  // ── URL and auth ─────────────────────────────────────────────────────────
+
+  it('uses correct path /tokens/map/solana/{mint}', async () => {
+    const originalFetch = global.fetch;
+    let capturedUrl = '';
+    global.fetch = vi.fn().mockImplementation((url: string) => {
+      capturedUrl = url;
+      return Promise.resolve({ ok: false, status: 404 });
+    }) as unknown as typeof fetch;
+
+    const p = createBubbleMapsClusterProvider({ apiUrl: 'https://api.bubblemaps.io/v0' });
+    await p.fetchClusterRisk('MY_TOKEN_MINT');
+    expect(capturedUrl).toBe('https://api.bubblemaps.io/v0/tokens/map/solana/MY_TOKEN_MINT');
+
+    global.fetch = originalFetch;
+  });
+
+  it('strips trailing slash from base URL', async () => {
+    const originalFetch = global.fetch;
+    let capturedUrl = '';
+    global.fetch = vi.fn().mockImplementation((url: string) => {
+      capturedUrl = url;
+      return Promise.resolve({ ok: false, status: 404 });
+    }) as unknown as typeof fetch;
+
+    const p = createBubbleMapsClusterProvider({ apiUrl: 'https://api.bubblemaps.io/v0/' });
+    await p.fetchClusterRisk('MINT_ABC');
+    expect(capturedUrl).toBe('https://api.bubblemaps.io/v0/tokens/map/solana/MINT_ABC');
+    expect(capturedUrl).not.toContain('//tokens'); // no double slash
+
+    global.fetch = originalFetch;
+  });
+
+  it('sends X-ApiKey header when apiKey is set', async () => {
+    const originalFetch = global.fetch;
+    let capturedHeaders: Record<string, string> = {};
+    global.fetch = vi.fn().mockImplementation((_url: string, opts: RequestInit) => {
+      capturedHeaders = opts?.headers as Record<string, string> ?? {};
+      return Promise.resolve({ ok: false, status: 401 });
+    }) as unknown as typeof fetch;
+
+    const p = createBubbleMapsClusterProvider({ apiUrl: 'https://test.api/v1', apiKey: 'my-key' });
+    await p.fetchClusterRisk('TOKEN_MINT');
+    expect(capturedHeaders['X-ApiKey']).toBe('my-key');
+
+    global.fetch = originalFetch;
+  });
+
+  it('does NOT send Authorization header (BubbleMaps uses X-ApiKey, not Bearer)', async () => {
+    const originalFetch = global.fetch;
+    let capturedHeaders: Record<string, string> = {};
+    global.fetch = vi.fn().mockImplementation((_url: string, opts: RequestInit) => {
+      capturedHeaders = opts?.headers as Record<string, string> ?? {};
+      return Promise.resolve({ ok: false, status: 401 });
+    }) as unknown as typeof fetch;
+
+    const p = createBubbleMapsClusterProvider({ apiUrl: 'https://test.api/v1', apiKey: 'my-key' });
+    await p.fetchClusterRisk('TOKEN_MINT');
+    expect(capturedHeaders['authorization']).toBeUndefined();
+
+    global.fetch = originalFetch;
+  });
+
+  it('does not include X-ApiKey when no apiKey configured', async () => {
+    const originalFetch = global.fetch;
+    let capturedHeaders: Record<string, string> = {};
+    global.fetch = vi.fn().mockImplementation((_url: string, opts: RequestInit) => {
+      capturedHeaders = opts?.headers as Record<string, string> ?? {};
+      return Promise.resolve({ ok: false, status: 401 });
+    }) as unknown as typeof fetch;
+
+    const p = createBubbleMapsClusterProvider({ apiUrl: 'https://test.api/v1' });
+    await p.fetchClusterRisk('TOKEN_MINT');
+    expect(capturedHeaders['X-ApiKey']).toBeUndefined();
+
+    global.fetch = originalFetch;
+  });
+
+  it('queries the token endpoint with contract as path segment', async () => {
+    const originalFetch = global.fetch;
+    let capturedUrl = '';
+    global.fetch = vi.fn().mockImplementation((url: string) => {
+      capturedUrl = url;
+      return Promise.resolve({ ok: false, status: 404 });
+    }) as unknown as typeof fetch;
+
+    const p = createBubbleMapsClusterProvider({ apiUrl: 'https://test.api/v1' });
+    await p.fetchClusterRisk('MY_TOKEN_MINT');
+    expect(capturedUrl).toContain('MY_TOKEN_MINT');
+    expect(capturedUrl).toContain('/tokens/map/solana/');
+
+    global.fetch = originalFetch;
+  });
+
+  // ── HTTP error handling ───────────────────────────────────────────────────
+
+  it('returns UNKNOWN with clusterFetchError on 429 (rate limit)', async () => {
     const originalFetch = global.fetch;
     global.fetch = vi.fn().mockResolvedValue({
       ok: false,
@@ -259,6 +355,101 @@ describe('createBubbleMapsClusterProvider', () => {
     const result = await p.fetchClusterRisk('TOKEN_MINT');
     expect(result.clusterRisk).toBe('UNKNOWN');
     expect(result.clusterFetchError).toContain('429');
+    expect(result.httpStatus).toBe(429);
+
+    global.fetch = originalFetch;
+  });
+
+  it('returns UNKNOWN with clusterFetchError on 401 (auth failure)', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+    }) as unknown as typeof fetch;
+
+    const p = createBubbleMapsClusterProvider({ apiUrl: 'https://test.api/v1' });
+    const result = await p.fetchClusterRisk('TOKEN_MINT');
+    expect(result.clusterRisk).toBe('UNKNOWN');
+    expect(result.clusterFetchError).toContain('401');
+    expect(result.httpStatus).toBe(401);
+
+    global.fetch = originalFetch;
+  });
+
+  it('returns UNKNOWN with clusterFetchError on 403 (access denied)', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+    }) as unknown as typeof fetch;
+
+    const p = createBubbleMapsClusterProvider({ apiUrl: 'https://test.api/v1' });
+    const result = await p.fetchClusterRisk('TOKEN_MINT');
+    expect(result.clusterRisk).toBe('UNKNOWN');
+    expect(result.clusterFetchError).toContain('403');
+    expect(result.httpStatus).toBe(403);
+
+    global.fetch = originalFetch;
+  });
+
+  it('401/403 error message mentions BUBBLEMAPS_API_KEY (sanitized, no actual key)', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 401 }) as unknown as typeof fetch;
+
+    const p = createBubbleMapsClusterProvider({ apiUrl: 'https://test.api/v1', apiKey: 'secret-key-xyz' });
+    const result = await p.fetchClusterRisk('TOKEN_MINT');
+    // Error message should mention key config but NOT the actual key value
+    expect(result.clusterFetchError).toContain('BUBBLEMAPS_API_KEY');
+    expect(result.clusterFetchError).not.toContain('secret-key-xyz');
+
+    global.fetch = originalFetch;
+  });
+
+  it('400 with "not available" body → UNKNOWN with no clusterFetchError (success, not failure)', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => 'Map data not available for this token',
+    }) as unknown as typeof fetch;
+
+    const p = createBubbleMapsClusterProvider({ apiUrl: 'https://test.api/v1' });
+    const result = await p.fetchClusterRisk('TOKEN_MINT');
+    expect(result.clusterRisk).toBe('UNKNOWN');
+    expect(result.clusterFetchError).toBeUndefined(); // not a failure
+    expect(result.dataAvailable).toBe(false);
+    expect(result.httpStatus).toBe(400);
+
+    global.fetch = originalFetch;
+  });
+
+  it('400 with "not available" body → clusterNotes mentions "not yet available"', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => 'Map data not available for this token',
+    }) as unknown as typeof fetch;
+
+    const p = createBubbleMapsClusterProvider({ apiUrl: 'https://test.api/v1' });
+    const result = await p.fetchClusterRisk('TOKEN_MINT');
+    expect(result.clusterNotes.some(n => n.includes('not yet available') || n.includes('not available'))).toBe(true);
+
+    global.fetch = originalFetch;
+  });
+
+  it('400 with other body → UNKNOWN with clusterFetchError (counted as failure)', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => 'Invalid request parameter: missing chain',
+    }) as unknown as typeof fetch;
+
+    const p = createBubbleMapsClusterProvider({ apiUrl: 'https://test.api/v1' });
+    const result = await p.fetchClusterRisk('TOKEN_MINT');
+    expect(result.clusterRisk).toBe('UNKNOWN');
+    expect(result.clusterFetchError).toBeDefined();
 
     global.fetch = originalFetch;
   });
@@ -275,7 +466,102 @@ describe('createBubbleMapsClusterProvider', () => {
     global.fetch = originalFetch;
   });
 
-  it('classifies CLEAN from low riskScore response', async () => {
+  // ── Real BubbleMaps response parsing ─────────────────────────────────────
+
+  it('parses real BubbleMaps response: metrics.scores.bubblemaps_score ≥ 60 → CLEAN', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        metadata: { token: 'TEST_MINT', chain: 'solana' },
+        metrics: {
+          supply_stats: {},
+          scores: {
+            bubblemaps_score: 73.5,
+            gini_index: 0.82,
+            herfindahl_hirschman_index: 0.05,
+            nakamoto_coefficient: 8,
+          },
+        },
+        nodes: [],
+        relationships: [],
+      }),
+    }) as unknown as typeof fetch;
+
+    const p = createBubbleMapsClusterProvider({ apiUrl: 'https://api.bubblemaps.io/v0' });
+    const result = await p.fetchClusterRisk('TEST_MINT');
+    expect(result.clusterRisk).toBe('CLEAN');
+    expect(result.httpStatus).toBe(200);
+    expect(result.clusterFetchError).toBeUndefined();
+    expect(result.clusterNotes.some(n => n.includes('73.5') || n.includes('bubbleMapsScore'))).toBe(true);
+
+    global.fetch = originalFetch;
+  });
+
+  it('parses real BubbleMaps response: bubblemaps_score < 60 → WATCH', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        metrics: {
+          scores: { bubblemaps_score: 45.0 },
+        },
+      }),
+    }) as unknown as typeof fetch;
+
+    const p = createBubbleMapsClusterProvider({ apiUrl: 'https://api.bubblemaps.io/v0' });
+    const result = await p.fetchClusterRisk('TEST_MINT');
+    expect(result.clusterRisk).toBe('WATCH');
+    expect(result.clusterFetchError).toBeUndefined();
+
+    global.fetch = originalFetch;
+  });
+
+  it('parses real BubbleMaps response: bubblemaps_score very low → WATCH (not RISKY from score alone)', async () => {
+    // bubblemaps_score maps to decentralisationScore, not riskScore, so low → WATCH (not RISKY)
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        metrics: {
+          scores: { bubblemaps_score: 10.0 },
+        },
+      }),
+    }) as unknown as typeof fetch;
+
+    const p = createBubbleMapsClusterProvider({ apiUrl: 'https://api.bubblemaps.io/v0' });
+    const result = await p.fetchClusterRisk('TEST_MINT');
+    expect(result.clusterRisk).toBe('WATCH');
+    expect(result.clusterFetchError).toBeUndefined();
+
+    global.fetch = originalFetch;
+  });
+
+  it('200 response with no recognisable metrics → UNKNOWN (not an error)', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        metadata: { token: 'TEST_MINT' },
+        nodes: [],
+        relationships: [],
+        // No metrics object
+      }),
+    }) as unknown as typeof fetch;
+
+    const p = createBubbleMapsClusterProvider({ apiUrl: 'https://api.bubblemaps.io/v0' });
+    const result = await p.fetchClusterRisk('TEST_MINT');
+    expect(result.clusterRisk).toBe('UNKNOWN');
+    expect(result.httpStatus).toBe(200);
+    expect(result.clusterFetchError).toBeUndefined(); // 200 is not an error
+    expect(result.clusterNotes.some(n => n.includes('recognisable') || n.includes('metric'))).toBe(true);
+
+    global.fetch = originalFetch;
+  });
+
+  // ── Backward compat: flat field names still work ──────────────────────────
+
+  it('classifies CLEAN from flat risk_score response (mock/test compat)', async () => {
     const originalFetch = global.fetch;
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -289,7 +575,7 @@ describe('createBubbleMapsClusterProvider', () => {
     global.fetch = originalFetch;
   });
 
-  it('classifies RISKY from high riskScore response', async () => {
+  it('classifies RISKY from flat risk_score=85 response', async () => {
     const originalFetch = global.fetch;
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -331,32 +617,27 @@ describe('createBubbleMapsClusterProvider', () => {
     global.fetch = originalFetch;
   });
 
-  it('includes Authorization header when apiKey is set', async () => {
-    const originalFetch = global.fetch;
-    let capturedHeaders: Record<string, string> = {};
-    global.fetch = vi.fn().mockImplementation((_url: string, opts: RequestInit) => {
-      capturedHeaders = opts?.headers as Record<string, string> ?? {};
-      return Promise.resolve({ ok: false, status: 401 });
-    }) as unknown as typeof fetch;
+  // ── No secrets in output ─────────────────────────────────────────────────
 
-    const p = createBubbleMapsClusterProvider({ apiUrl: 'https://test.api/v1', apiKey: 'my-key' });
-    await p.fetchClusterRisk('TOKEN_MINT');
-    expect(capturedHeaders['authorization']).toBe('Bearer my-key');
+  it('clusterFetchError and clusterNotes never contain the API key', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockRejectedValue(new Error('Request failed')) as unknown as typeof fetch;
+
+    const p = createBubbleMapsClusterProvider({ apiUrl: 'https://test.api/v1', apiKey: 'super-secret-key' });
+    const result = await p.fetchClusterRisk('TOKEN_MINT');
+    const allText = JSON.stringify(result);
+    expect(allText).not.toContain('super-secret-key');
 
     global.fetch = originalFetch;
   });
 
-  it('queries the token endpoint with contract as path segment', async () => {
+  it('error messages do not include the full URL with embedded credentials', async () => {
     const originalFetch = global.fetch;
-    let capturedUrl = '';
-    global.fetch = vi.fn().mockImplementation((url: string) => {
-      capturedUrl = url;
-      return Promise.resolve({ ok: false, status: 404 });
-    }) as unknown as typeof fetch;
+    global.fetch = vi.fn().mockRejectedValue(new Error('ECONNREFUSED')) as unknown as typeof fetch;
 
-    const p = createBubbleMapsClusterProvider({ apiUrl: 'https://test.api/v1' });
-    await p.fetchClusterRisk('MY_TOKEN_MINT');
-    expect(capturedUrl).toContain('MY_TOKEN_MINT');
+    const p = createBubbleMapsClusterProvider({ apiUrl: 'https://test.api/v1', apiKey: 'my-secret' });
+    const result = await p.fetchClusterRisk('MINT');
+    expect(JSON.stringify(result)).not.toContain('my-secret');
 
     global.fetch = originalFetch;
   });
