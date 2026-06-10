@@ -19,6 +19,15 @@ export type FinalRecommendation =
   | 'TOO_MUCH_JUNK'
   | 'NO_CLEAN_SIGNAL';
 
+// Status types — widened so enrichment layers can populate real values.
+export type MintAuthorityStatus = 'RENOUNCED' | 'ACTIVE' | 'UNKNOWN';
+export type FreezeAuthorityStatus = 'RENOUNCED' | 'ACTIVE' | 'UNKNOWN';
+export type HolderConcentrationStatus = 'CLEAN' | 'WARNING' | 'DANGER' | 'UNKNOWN';
+export type CreatorWalletStatus = 'UNKNOWN';    // V1: not yet connected
+export type BubbleMapStatus = 'UNKNOWN';         // V1: not yet connected
+export type SocialChatterStatus = 'UNKNOWN';     // V1: not yet connected
+export type LiquidityLockStatus = 'UNKNOWN';     // V1: not yet connected
+
 export interface LegitimacyItem {
   symbol?: string;
   contract: string;
@@ -36,13 +45,13 @@ export interface LegitimacyItem {
   confidence: LegitimacyConfidence;
   reasons: string[];
   missingSignals: string[];
-  holderConcentrationStatus: 'UNKNOWN';
-  creatorWalletStatus: 'UNKNOWN';
-  bubbleMapStatus: 'UNKNOWN';
-  socialChatterStatus: 'UNKNOWN';
-  mintAuthorityStatus: 'UNKNOWN';
-  freezeAuthorityStatus: 'UNKNOWN';
-  liquidityLockStatus: 'UNKNOWN';
+  holderConcentrationStatus: HolderConcentrationStatus;
+  creatorWalletStatus: CreatorWalletStatus;
+  bubbleMapStatus: BubbleMapStatus;
+  socialChatterStatus: SocialChatterStatus;
+  mintAuthorityStatus: MintAuthorityStatus;
+  freezeAuthorityStatus: FreezeAuthorityStatus;
+  liquidityLockStatus: LiquidityLockStatus;
 }
 
 export interface BlockedMoverItem {
