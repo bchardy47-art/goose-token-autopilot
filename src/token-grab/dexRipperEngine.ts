@@ -441,7 +441,9 @@ export function checkPaperBuyGate(
     blockers.push(`launch age ${signal.launchAgeBucket} — must be PRIME_WINDOW`);
   }
   if (signal.holderCluster.holderRisk === 'RISKY') {
-    blockers.push('holder concentration RISKY — buy blocked');
+    const pctNote = signal.holderCluster.concentrationNotes.find(n => n.includes('%'));
+    const detail  = pctNote ? ` (${pctNote})` : '';
+    blockers.push(`holderRisk RISKY — top holder concentration unsafe${detail}`);
   }
   if (signal.holderCluster.clusterRisk === 'RISKY') {
     blockers.push('cluster risk RISKY — buy blocked');

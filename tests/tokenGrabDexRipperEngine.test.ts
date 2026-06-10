@@ -612,3 +612,121 @@ describe('runRipperSession', () => {
     fs.rmSync(dir, { recursive: true });
   });
 });
+
+// ── Holder Gate Tightening V1 — hard blocker for RISKY concentration ──────────
+
+describe('holder gate — RISKY concentration is a hard paper-buy blocker', () => {
+  it('blocks BUY_APPROVED_PAPER when holderConcentrationStatus=DANGER, even with perfect score and prime age', () => {
+    const signal = scoreRipper(
+      primeInput({ holderConcentrationStatus: 'DANGER', priceChangePct: 80 }),
+      cfg, NOW_MS,
+    );
+    expect(signal.ripperScore).toBeGreaterThan(0); // not a zero-score token
+    expect(signal.launchAgeBucket).toBe('PRIME_WINDOW');
+    const gate = checkPaperBuyGate(signal, cfg);
+    expect(gate.decision).toBe('BUY_REJECTED');
+  });
+
+  it('blocker message contains "holderRisk RISKY" and "unsafe"', () => {
+    const signal = scoreRipper(primeInput({ holderConcentrationStatus: 'DANGER' }), cfg, NOW_MS);
+    const gate   = checkPaperBuyGate(signal, cfg);
+    const holderBlocker = gate.blockers.find(b => b.includes('holderRisk') && b.includes('RISKY'));
+    expect(holderBlocker).toBeDefined();
+    expect(holderBlocker).toMatch(/unsafe/i);
+  });
+
+  it('blocker includes topHolderPercent when available (e.g. 45%)', () => {
+    const signal = scoreRipper(
+      primeInput({ holderConcentrationStatus: 'DANGER', topHolderPercent: 45 }),
+      cfg, NOW_MS,
+    );
+    const gate = checkPaperBuyGate(signal, cfg);
+    const holderBlocker = gate.blockers.find(b => b.includes('holderRisk') && b.includes('RISKY'));
+    expect(holderBlocker).toContain('45.0%');
+  });
+
+  it('blocker includes topHolderPercent when status absent but percent >= 30', () => {
+    const signal = scoreRipper(
+      primeInput({ topHolderPercent: 55 }),  // no status, numeric DANGER threshold
+      cfg, NOW_MS,
+    );
+    const gate = checkPaperBuyGate(signal, cfg);
+    expect(gate.decision).toBe('BUY_REJECTED');
+    const holderBlocker = gate.blockers.find(b => b.includes('holderRisk') && b.includes('RISKY'));
+    expect(holderBlocker).toBeDefined();
+    expect(holderBlocker).toContain('55.0%');
+  });
+
+  it('holderConcentrationStatus=DANGER → holderRisk=RISKY → gate rejects', () => {
+    const signal = scoreRipper(primeInput({ holderConcentrationStatus: 'DANGER' }), cfg, NOW_MS);
+    expect(signal.holderCluster.holderRisk).toBe('RISKY');
+    const gate = checkPaperBuyGate(signal, cfg);
+    expect(gate.decision).toBe('BUY_REJECTED');
+  });
+});
+
+describe('holder gate — WATCH does NOT block in V1', () => {
+  it('WATCH holderRisk (WARNING status) does not produce BUY_REJECTED by itself', () => {
+    const signal = scoreRipper(primeInput({ holderConcentrationStatus: 'WARNING' }), cfg, NOW_MS);
+    expect(signal.holderCluster.holderRisk).toBe('WATCH');
+    const gate = checkPaperBuyGate(signal, cfg);
+    // Gate may still reject for other reasons but holder WATCH alone must not be the blocker
+    const holderBlock = gate.blockers.find(b => b.toLowerCase().includes('holder') && b.includes('RISKY'));
+    expect(holderBlock).toBeUndefined();
+  });
+
+  it('WATCH with otherwise-clean signal still approves', () => {
+    const signal = scoreRipper(primeInput({ holderConcentrationStatus: 'WARNING' }), cfg, NOW_MS);
+    const gate = checkPaperBuyGate(signal, cfg);
+    // holderRisk=WATCH should NOT produce a holder-specific blocker
+    expect(gate.blockers.every(b => !b.includes('holderRisk RISKY'))).toBe(true);
+  });
+});
+
+describe('holder gate — UNKNOWN does NOT block in V1', () => {
+  it('UNKNOWN holderRisk (no holder data) does not block', () => {
+    // No holderConcentrationStatus, no topHolderPercent → UNKNOWN
+    const signal = scoreRipper(primeInput(), cfg, NOW_MS);
+    expect(signal.holderCluster.holderRisk).toBe('UNKNOWN');
+    const gate = checkPaperBuyGate(signal, cfg);
+    expect(gate.blockers.every(b => !b.includes('holderRisk RISKY'))).toBe(true);
+  });
+
+  it('UNKNOWN does not cause BUY_REJECTED by itself', () => {
+    const signal = scoreRipper(primeInput(), cfg, NOW_MS);
+    const gate = checkPaperBuyGate(signal, cfg);
+    // primeInput() is a clean passing signal — UNKNOWN holder should not block it
+    expect(gate.decision).toBe('BUY_APPROVED_PAPER');
+  });
+});
+
+describe('holder gate — CLEAN allows approval', () => {
+  it('CLEAN holderRisk with prime-window clean signal produces BUY_APPROVED_PAPER', () => {
+    const signal = scoreRipper(
+      primeInput({ holderConcentrationStatus: 'CLEAN', topHolderPercent: 5 }),
+      cfg, NOW_MS,
+    );
+    expect(signal.holderCluster.holderRisk).toBe('CLEAN');
+    const gate = checkPaperBuyGate(signal, cfg);
+    expect(gate.decision).toBe('BUY_APPROVED_PAPER');
+    expect(gate.blockers).toHaveLength(0);
+  });
+
+  it('CLEAN holderRisk does not add any holder-related blocker', () => {
+    const signal = scoreRipper(
+      primeInput({ holderConcentrationStatus: 'CLEAN' }),
+      cfg, NOW_MS,
+    );
+    const gate = checkPaperBuyGate(signal, cfg);
+    expect(gate.blockers.every(b => !b.toLowerCase().includes('holder'))).toBe(true);
+  });
+});
+
+describe('holder gate — safety', () => {
+  it('changing holderRisk from RISKY to CLEAN unblocks the gate', () => {
+    const riskySignal = scoreRipper(primeInput({ holderConcentrationStatus: 'DANGER' }), cfg, NOW_MS);
+    const cleanSignal = scoreRipper(primeInput({ holderConcentrationStatus: 'CLEAN' }), cfg, NOW_MS);
+    expect(checkPaperBuyGate(riskySignal, cfg).decision).toBe('BUY_REJECTED');
+    expect(checkPaperBuyGate(cleanSignal, cfg).decision).toBe('BUY_APPROVED_PAPER');
+  });
+});
