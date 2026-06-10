@@ -11,6 +11,7 @@ import {
 import { readFixturesFromJsonl, type LiveRipperFixture } from './liveFixtureCapture';
 import { maybeHolderRiskFromFixture } from './holderRiskProvider';
 import { type SlippageRisk } from './fixtureQuotePreview';
+import { maybeClusterRiskFromFixture } from './clusterRiskProvider';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -97,12 +98,16 @@ function inferSafety(fixture: LiveRipperFixture): InferredSafety {
   }
 
   // Upgrade holderRisk from fixture raw when local enrichment data is present.
-  // Enriched candidates store holderConcentrationStatus in raw; this is more
-  // accurate than inferring from ripperInput (which may not carry holder fields).
   const holderFromRaw = maybeHolderRiskFromFixture(fixture);
   if (holderFromRaw) {
     holderRisk = holderFromRaw.holderRisk;
-    // clusterRisk stays UNKNOWN — BubbleMaps not connected in V1
+  }
+
+  // Upgrade clusterRisk from fixture raw when cluster enrichment data is present.
+  // Falls back to UNKNOWN (scoreRipper's hardcoded value) when no raw cluster data exists.
+  const clusterFromRaw = maybeClusterRiskFromFixture(fixture);
+  if (clusterFromRaw !== null) {
+    clusterRisk = clusterFromRaw;
   }
 
   const sig = fixture.normalizedSignal as Record<string, unknown> | undefined;

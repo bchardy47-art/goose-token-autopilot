@@ -103,19 +103,20 @@ export function extractReadinessFields(fixture: LiveRipperFixture): ReadinessFie
     liquidityQuality = scored.liquidityProfile.quality;
   }
 
+  const raw = fixture.raw as Record<string, unknown> | undefined;
+
   // holderRisk override from enriched raw fields (higher fidelity than ripperInput inference)
   const holderFromRaw = maybeHolderRiskFromFixture(fixture);
   if (holderFromRaw) {
     holderRisk = holderFromRaw.holderRisk;
   }
 
-  // clusterRisk override from raw — used when BubbleMaps or cluster provider writes raw.clusterRisk.
-  // In V1, BubbleMaps is not connected so raw.clusterRisk is never set; scoreRipper returns UNKNOWN.
-  // This field enables testing FUTURE_AUTONOMY_CANDIDATE and future cluster provider integration.
-  const raw = fixture.raw as Record<string, unknown> | undefined;
+  // clusterRisk override from fixture.raw cluster enrichment data.
+  // Reads raw.clusterRisk directly so test fixtures (no clusterCheckedAt) and enriched fixtures both work.
+  // maybeClusterRiskFromFixture is used by primeGateAudit for the stricter "was it enriched?" check.
   const rawCluster = raw?.['clusterRisk'];
   if (rawCluster === 'CLEAN' || rawCluster === 'WATCH' || rawCluster === 'RISKY') {
-    clusterRisk = rawCluster as ClusterRisk;
+    clusterRisk = rawCluster;
   }
 
   const rawSlip = raw?.['slippageRisk'];

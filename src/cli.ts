@@ -168,6 +168,8 @@ import { runFixtureHolderEnrich, renderFixtureHolderEnrichReport, renderFixtureH
 import { runFixtureQuotePreview, renderFixtureQuotePreviewReport, renderFixtureQuotePreviewUsage } from './token-grab/fixtureQuotePreview';
 import { runQuotePreviewAudit, renderQuotePreviewAuditReport } from './token-grab/quotePreviewAudit';
 import { runAutonomyReadinessAudit, renderAutonomyReadinessAuditReport } from './token-grab/autonomyReadinessAudit';
+import { runFixtureClusterEnrich, renderFixtureClusterEnrichReport, renderFixtureClusterEnrichUsage } from './token-grab/fixtureClusterEnrich';
+import { runClusterRiskAudit, renderClusterRiskAuditReport } from './token-grab/clusterRiskAudit';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2858,6 +2860,48 @@ async function main(): Promise<void> {
         const araInput  = getArgValue('--input') ?? 'data/token-grab/ripper/live-fixtures.jsonl';
         const araResult = runAutonomyReadinessAudit({ inputPath: araInput });
         console.log(renderAutonomyReadinessAuditReport(araResult));
+        break;
+      }
+
+      case 'token:fixture-cluster-enrich': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderFixtureClusterEnrichUsage());
+          break;
+        }
+        const fceInput   = getArgValue('--input');
+        const fceOutput  = getArgValue('--output');
+        const fceLimit   = getArgValue('--limit')    ? parseInt(getArgValue('--limit')!,    10) : undefined;
+        const fceDelay   = getArgValue('--delay-ms') ? parseInt(getArgValue('--delay-ms')!, 10) : undefined;
+        const fceApiUrl  = getArgValue('--api-url');
+        const fceApiKey  = getArgValue('--api-key');
+        const fceForce   = process.argv.includes('--force');
+        const fceOffline = process.argv.includes('--offline');
+        const fceDryRun  = process.argv.includes('--dry-run');
+        const fceAll     = process.argv.includes('--all');
+        const fceResult  = await runFixtureClusterEnrich({
+          inputPath:  fceInput,
+          outputPath: fceOutput,
+          limitN:     fceLimit,
+          delayMs:    fceDelay,
+          apiUrl:     fceApiUrl ?? undefined,
+          apiKey:     fceApiKey ?? undefined,
+          force:      fceForce,
+          offline:    fceOffline,
+          dryRun:     fceDryRun,
+          all:        fceAll,
+        });
+        console.log(renderFixtureClusterEnrichReport(fceResult));
+        break;
+      }
+
+      case 'token:cluster-risk-audit': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log('token:cluster-risk-audit — audit cluster risk coverage in live fixtures');
+          break;
+        }
+        const craInput  = getArgValue('--input') ?? 'data/token-grab/ripper/live-fixtures.jsonl';
+        const craResult = runClusterRiskAudit({ inputPath: craInput });
+        console.log(renderClusterRiskAuditReport(craResult));
         break;
       }
 

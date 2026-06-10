@@ -104,6 +104,8 @@
     "token:holder-risk-audit": "tsx src/cli.ts token:holder-risk-audit",
     "token:fixture-holder-enrich": "tsx src/cli.ts token:fixture-holder-enrich",
     "token:autonomy-readiness-audit": "tsx src/cli.ts token:autonomy-readiness-audit",
+    "token:fixture-cluster-enrich": "tsx src/cli.ts token:fixture-cluster-enrich",
+    "token:cluster-risk-audit": "tsx src/cli.ts token:cluster-risk-audit",
     "token:fixture-quote-preview": "tsx src/cli.ts token:fixture-quote-preview",
     "token:quote-preview-audit": "tsx src/cli.ts token:quote-preview-audit",
     "token:ripper-feed": "tsx src/cli.ts token:ripper-feed",
