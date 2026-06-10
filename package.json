@@ -91,6 +91,7 @@
     "token:dex-day-watch": "tsx src/cli.ts token:dex-day-watch",
     "token:dex-day-report": "tsx src/cli.ts token:dex-day-report",
     "token:dex-paper-position-tracker": "tsx src/cli.ts token:dex-paper-position-tracker",
+    "token:dex-legitimacy-report": "tsx src/cli.ts token:dex-legitimacy-report",
     "test": "vitest run"
   },
   "dependencies": {

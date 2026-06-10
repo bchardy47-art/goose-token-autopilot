@@ -154,6 +154,7 @@ import { runDexPaperEntryPlanner, renderDexPaperEntryPlanReport } from './token-
 import { runDexValidationLoop, renderValidationLoopSummary, renderValidationLoopUsage } from './token-grab/dexValidationLoop';
 import { runDexDayWatch, renderDayWatchUsage, loadDayLog, buildDayReport, renderDayReport, renderDayReportUsage } from './token-grab/dexDayWatch';
 import { runDexPaperPositionTracker, renderDexPaperPositionTrackerReport, renderDexPaperPositionTrackerUsage } from './token-grab/dexPaperPositionTracker';
+import { runDexLegitimacyReport, renderDexLegitimacyReport, renderDexLegitimacyReportUsage } from './token-grab/dexLegitimacyReport';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2470,6 +2471,33 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(ptReport, null, 2));
         } else {
           console.log(renderDexPaperPositionTrackerReport(ptReport));
+        }
+        break;
+      }
+
+      case 'token:dex-legitimacy-report': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderDexLegitimacyReportUsage());
+          break;
+        }
+        const lrDayLog   = getArgValue('--day-log')   ?? 'data/token-grab/day-watch/dex-day-watch-today.jsonl';
+        const lrRunsDir  = getArgValue('--runs-dir')  ?? 'data/token-grab/dex-watch-runs';
+        const lrPositions = getArgValue('--positions') ?? 'data/token-grab/paper-positions/dex-paper-positions-today.json';
+        const lrOut      = getArgValue('--out')       ?? 'data/token-grab/legitimacy/dex-legitimacy-report.json';
+        const lrJson     = process.argv.includes('--json');
+
+        const lrReport = runDexLegitimacyReport({
+          dayLogPath: lrDayLog,
+          runsDir: lrRunsDir,
+          positionsPath: lrPositions,
+          outPath: lrOut,
+          generatedAt: new Date().toISOString(),
+        });
+
+        if (lrJson) {
+          console.log(JSON.stringify(lrReport, null, 2));
+        } else {
+          console.log(renderDexLegitimacyReport(lrReport));
         }
         break;
       }
