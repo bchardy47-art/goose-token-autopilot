@@ -165,6 +165,8 @@ import { runFreshPoolFeed, renderFreshPoolFeedResult, renderFreshPoolFeedUsage }
 import { runPrimeGateAudit, renderPrimeGateAuditReport, renderPrimeGateAuditUsage } from './token-grab/primeGateAudit';
 import { runHolderRiskAudit, renderHolderRiskAuditReport, renderHolderRiskAuditUsage } from './token-grab/holderRiskAudit';
 import { runFixtureHolderEnrich, renderFixtureHolderEnrichReport, renderFixtureHolderEnrichUsage } from './token-grab/fixtureHolderEnrich';
+import { runFixtureQuotePreview, renderFixtureQuotePreviewReport, renderFixtureQuotePreviewUsage } from './token-grab/fixtureQuotePreview';
+import { runQuotePreviewAudit, renderQuotePreviewAuditReport } from './token-grab/quotePreviewAudit';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2815,6 +2817,46 @@ async function main(): Promise<void> {
           dryRun:     fheDryRun,
         });
         console.log(renderFixtureHolderEnrichReport(fheResult));
+        break;
+      }
+
+      case 'token:fixture-quote-preview': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderFixtureQuotePreviewUsage());
+          break;
+        }
+        const fqpInput       = getArgValue('--input');
+        const fqpOutput      = getArgValue('--output');
+        const fqpLimit       = getArgValue('--limit')     ? parseInt(getArgValue('--limit')!,     10) : undefined;
+        const fqpDelay       = getArgValue('--delay-ms')  ? parseInt(getArgValue('--delay-ms')!,  10) : undefined;
+        const fqpAmountUsd   = getArgValue('--amount-usd') ? parseFloat(getArgValue('--amount-usd')!) : undefined;
+        const fqpForce       = process.argv.includes('--force');
+        const fqpOffline     = process.argv.includes('--offline');
+        const fqpDryRun      = process.argv.includes('--dry-run');
+        const fqpIncludeWatch = process.argv.includes('--include-watch');
+        const fqpResult      = await runFixtureQuotePreview({
+          inputPath:    fqpInput,
+          outputPath:   fqpOutput,
+          limitN:       fqpLimit,
+          delayMs:      fqpDelay,
+          amountUsd:    fqpAmountUsd,
+          force:        fqpForce,
+          offline:      fqpOffline,
+          dryRun:       fqpDryRun,
+          includeWatch: fqpIncludeWatch,
+        });
+        console.log(renderFixtureQuotePreviewReport(fqpResult));
+        break;
+      }
+
+      case 'token:quote-preview-audit': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log('token:quote-preview-audit — audit quote/slippage coverage in live fixtures');
+          break;
+        }
+        const qpaInput  = getArgValue('--input') ?? 'data/token-grab/ripper/live-fixtures.jsonl';
+        const qpaResult = runQuotePreviewAudit({ inputPath: qpaInput });
+        console.log(renderQuotePreviewAuditReport(qpaResult));
         break;
       }
 

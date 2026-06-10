@@ -10,6 +10,7 @@ import {
 } from './dexRipperEngine';
 import { readFixturesFromJsonl, type LiveRipperFixture } from './liveFixtureCapture';
 import { maybeHolderRiskFromFixture } from './holderRiskProvider';
+import { type SlippageRisk } from './fixtureQuotePreview';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -20,6 +21,8 @@ export interface InferredSafety {
   liquidityQuality: LiquidityQuality;
   hasLiquidityUsd: boolean;
   hasSlippage: boolean;
+  hasQuoteData: boolean;
+  slippageRisk: SlippageRisk;
 }
 
 export interface AuditedApproval {
@@ -61,6 +64,8 @@ export interface PrimeGateAuditResult {
   unknownBotRiskCount: number;
   unknownLiquidityCount: number;
   missingLiquidityUsdCount: number;
+  missingQuoteCount: number;
+  slippageRiskCounts: Record<string, number>;
   softApprovalCount: number;
   approvals: AuditedApproval[];
   softApprovals: AuditedApproval[];
@@ -102,9 +107,17 @@ function inferSafety(fixture: LiveRipperFixture): InferredSafety {
 
   const sig = fixture.normalizedSignal as Record<string, unknown> | undefined;
   const hasLiquidityUsd = !!(sig?.liquidityUsd != null || (ripperInput as Record<string, unknown> | null)?.liquidityUsd != null);
-  const hasSlippage = false; // V1 fixture schema does not include slippage data
 
-  return { holderRisk, clusterRisk, botRisk, liquidityQuality, hasLiquidityUsd, hasSlippage };
+  const rawFields = fixture.raw as Record<string, unknown> | undefined;
+  const rawSlipRisk = rawFields?.['slippageRisk'];
+  const slippageRisk: SlippageRisk =
+    rawSlipRisk === 'CLEAN' ? 'CLEAN' :
+    rawSlipRisk === 'WATCH'  ? 'WATCH'  :
+    rawSlipRisk === 'RISKY'  ? 'RISKY'  : 'UNKNOWN';
+  const hasQuoteData = rawFields?.['quoteCheckedAt'] !== undefined;
+  const hasSlippage = hasQuoteData && slippageRisk !== 'UNKNOWN';
+
+  return { holderRisk, clusterRisk, botRisk, liquidityQuality, hasLiquidityUsd, hasSlippage, hasQuoteData, slippageRisk };
 }
 
 // ── Soft approval classification ──────────────────────────────────────────────
@@ -125,7 +138,9 @@ function classifySoftApproval(approval: Omit<AuditedApproval, 'softApprovalReaso
   if (inferredSafety.liquidityQuality === 'UNKNOWN') {
     reasons.push('UNKNOWN liquidityQuality — no VLR data');
   }
-  if (!inferredSafety.hasSlippage) {
+  if (inferredSafety.slippageRisk === 'RISKY') {
+    reasons.push('RISKY slippage — may not be tradable at acceptable price impact');
+  } else if (!inferredSafety.hasSlippage) {
     reasons.push('missing slippage/quote data — V1 does not connect quote provider');
   }
   if (!inferredSafety.hasLiquidityUsd) {
@@ -164,8 +179,12 @@ function applyStrictPreview(approvals: AuditedApproval[]): StrictPreviewResult {
     if (s.liquidityQuality !== 'GOOD') {
       reasons.push(`liquidityQuality ${s.liquidityQuality} (strict requires GOOD)`);
     }
-    if (!s.hasSlippage) {
+    if (s.slippageRisk === 'CLEAN') {
+      // CLEAN slippage — no strict rejection
+    } else if (s.slippageRisk === 'UNKNOWN') {
       reasons.push('missing slippage data (strict requires quote confirmation)');
+    } else {
+      reasons.push(`slippageRisk ${s.slippageRisk} (strict requires CLEAN)`);
     }
     if (a.launchAgeBucket !== 'PRIME_WINDOW') {
       reasons.push(`age bucket ${a.launchAgeBucket} (strict requires PRIME_WINDOW)`);
@@ -215,6 +234,8 @@ export function runPrimeGateAudit(options: PrimeGateAuditOptions = {}): PrimeGat
     unknownBotRiskCount: 0,
     unknownLiquidityCount: 0,
     missingLiquidityUsdCount: 0,
+    missingQuoteCount: 0,
+    slippageRiskCounts: {},
     softApprovalCount: 0,
     approvals: [],
     softApprovals: [],
@@ -264,6 +285,8 @@ export function runPrimeGateAudit(options: PrimeGateAuditOptions = {}): PrimeGat
   let unknownBotRisk = 0;
   let unknownLiq     = 0;
   let missingLiqUsd  = 0;
+  let missingQuote   = 0;
+  const slippageRiskCounts: Record<string, number> = {};
 
   for (const a of auditedApprovals) {
     byAgeBucket[a.launchAgeBucket] = (byAgeBucket[a.launchAgeBucket] ?? 0) + 1;
@@ -276,6 +299,8 @@ export function runPrimeGateAudit(options: PrimeGateAuditOptions = {}): PrimeGat
     if (s.botRisk         === 'UNKNOWN') unknownBotRisk++;
     if (s.liquidityQuality === 'UNKNOWN') unknownLiq++;
     if (!s.hasLiquidityUsd) missingLiqUsd++;
+    if (!s.hasQuoteData)    missingQuote++;
+    slippageRiskCounts[s.slippageRisk] = (slippageRiskCounts[s.slippageRisk] ?? 0) + 1;
   }
 
   const softApprovals = auditedApprovals.filter(a => a.isSoftApproval);
@@ -296,8 +321,10 @@ export function runPrimeGateAudit(options: PrimeGateAuditOptions = {}): PrimeGat
   if (unknownLiq > 0) {
     notes.push(`${unknownLiq}/${approved.length} (${pct(unknownLiq, approved.length)}) approvals had UNKNOWN liquidityQuality — signals lacked VLR data`);
   }
-  if (approved.length > 0) {
+  if (missingQuote === approved.length && approved.length > 0) {
     notes.push('slippage/quote data missing for all approvals — no quote provider connected in V1');
+  } else if (missingQuote > 0) {
+    notes.push(`${missingQuote}/${approved.length} (${pct(missingQuote, approved.length)}) approvals missing quote data — run token:fixture-quote-preview`);
   }
 
   const strictPreview = options.strictPreview ? applyStrictPreview(auditedApprovals) : null;
@@ -315,6 +342,8 @@ export function runPrimeGateAudit(options: PrimeGateAuditOptions = {}): PrimeGat
     unknownBotRiskCount:     unknownBotRisk,
     unknownLiquidityCount:   unknownLiq,
     missingLiquidityUsdCount: missingLiqUsd,
+    missingQuoteCount:       missingQuote,
+    slippageRiskCounts,
     softApprovalCount: softApprovals.length,
     approvals: auditedApprovals,
     softApprovals,
@@ -362,7 +391,8 @@ export function renderPrimeGateAuditReport(result: PrimeGateAuditResult): string
 
   const { totalFixtures, approvedCount, approvalRate, byAgeBucket, byScoreBand,
           unknownHolderCount, unknownClusterCount, unknownBotRiskCount,
-          unknownLiquidityCount, missingLiquidityUsdCount, softApprovalCount,
+          unknownLiquidityCount, missingLiquidityUsdCount, missingQuoteCount,
+          softApprovalCount,
           approvals, softApprovals, strictPreview, gateTighteningNotes } = result;
 
   // 1. Summary
@@ -396,7 +426,10 @@ export function renderPrimeGateAuditReport(result: PrimeGateAuditResult): string
   lines.push(`     UNKNOWN botRisk      : ${unknownBotRiskCount}/${approvedCount}  ${pct(unknownBotRiskCount, approvedCount)}`);
   lines.push(`     UNKNOWN liqQuality   : ${unknownLiquidityCount}/${approvedCount}  ${pct(unknownLiquidityCount, approvedCount)}`);
   lines.push(`     Missing liquidityUsd : ${missingLiquidityUsdCount}/${approvedCount}`);
-  lines.push(`     Missing slippage     : ${approvedCount}/${approvedCount}  100.0%  ← V1 no quote provider`);
+  const slipLabel = missingQuoteCount === approvedCount && approvedCount > 0
+    ? `${missingQuoteCount}/${approvedCount}  100.0%  ← V1 no quote provider`
+    : `${missingQuoteCount}/${approvedCount}  ${pct(missingQuoteCount, approvedCount)}`;
+  lines.push(`     Missing quote data   : ${slipLabel}`);
   lines.push('');
 
   // 5. Top approved candidates (up to 15)
