@@ -260,6 +260,37 @@ describe('enrichCandidateResult — UNKNOWN / offline', () => {
       expect(result.candidate.mintAuthorityStatus).toBe('UNKNOWN');
     }
   });
+
+  it('fetchTopHolderPct throw (e.g. 429) is captured as holderFetchError, not a crash', async () => {
+    const provider: SolanaTokenSafetyProvider = {
+      fetchMintAuthority: async () => 'RENOUNCED',
+      fetchFreezeAuthority: async () => 'RENOUNCED',
+      fetchTopHolderPct: async () => { throw new Error('RPC error (429): Too many requests for a specific RPC call'); },
+    };
+    const result = await enrichCandidateResult(makeCandidate({ tier: 'HIGH_CONVICTION_WATCH' }), provider);
+    expect(result.type).toBe('survivor');
+    if (result.type === 'survivor') {
+      expect(result.candidate.holderConcentrationStatus).toBe('UNKNOWN');
+      expect(result.candidate.holderFetchError).toMatch(/429/);
+      expect(result.candidate.missingSignals).toContain('HOLDER_MAP_NOT_CONNECTED');
+      // Candidate still survives at its tier — 429 does not kill
+      expect(result.candidate.safetyVerdict).toBe('HIGH_CONVICTION_WATCH');
+    }
+  });
+
+  it('fetchTopHolderPct returning null (no data) leaves holderFetchError undefined', async () => {
+    const provider: SolanaTokenSafetyProvider = {
+      fetchMintAuthority: async () => 'RENOUNCED',
+      fetchFreezeAuthority: async () => 'RENOUNCED',
+      fetchTopHolderPct: async () => null,
+    };
+    const result = await enrichCandidateResult(makeCandidate(), provider);
+    expect(result.type).toBe('survivor');
+    if (result.type === 'survivor') {
+      expect(result.candidate.holderConcentrationStatus).toBe('UNKNOWN');
+      expect(result.candidate.holderFetchError).toBeUndefined();
+    }
+  });
 });
 
 // ── enrichCandidateResult — mocked XRPS-style golden path ────────────────────────────────
@@ -549,6 +580,41 @@ describe('renderDexCandidateSafetyEnrichReport', () => {
     const rendered = renderDexCandidateSafetyEnrichReport(report, false);
     expect(rendered).toContain('missing:');
     expect(rendered).toContain('MINT_FREEZE_NOT_CONNECTED');
+    expect(rendered).toContain('HOLDER_MAP_NOT_CONNECTED');
+  });
+
+  it('debug renderer shows holderFetchError when holder RPC fails', async () => {
+    const rpcErrorProvider: SolanaTokenSafetyProvider = {
+      fetchMintAuthority: async () => 'RENOUNCED',
+      fetchFreezeAuthority: async () => 'RENOUNCED',
+      fetchTopHolderPct: async () => { throw new Error('RPC error (429): Too many requests for a specific RPC call'); },
+    };
+    const winnerReport = makeWinnerReport([makeCandidate({ symbol: 'XRPS' })]);
+    const report = await buildDexCandidateSafetyEnrichReport(winnerReport, {
+      sourceFile: 'test.json',
+      provider: rpcErrorProvider,
+      debug: true,
+      generatedAt: '2026-06-10T00:00:00.000Z',
+    });
+    const rendered = renderDexCandidateSafetyEnrichReport(report, true);
+    expect(rendered).toContain('holder fetch failed:');
+    expect(rendered).toContain('429');
+  });
+
+  it('normal renderer does NOT show holderFetchError even when present', async () => {
+    const rpcErrorProvider: SolanaTokenSafetyProvider = {
+      fetchMintAuthority: async () => 'RENOUNCED',
+      fetchFreezeAuthority: async () => 'RENOUNCED',
+      fetchTopHolderPct: async () => { throw new Error('RPC error (429): Too many requests'); },
+    };
+    const winnerReport = makeWinnerReport([makeCandidate()]);
+    const report = await buildDexCandidateSafetyEnrichReport(winnerReport, {
+      sourceFile: 'test.json',
+      provider: rpcErrorProvider,
+      generatedAt: '2026-06-10T00:00:00.000Z',
+    });
+    const rendered = renderDexCandidateSafetyEnrichReport(report, false);
+    expect(rendered).not.toContain('holder fetch failed:');
     expect(rendered).toContain('HOLDER_MAP_NOT_CONNECTED');
   });
 });
