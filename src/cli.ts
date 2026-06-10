@@ -157,6 +157,7 @@ import { runDexPaperPositionTracker, renderDexPaperPositionTrackerReport, render
 import { runDexLegitimacyReport, renderDexLegitimacyReport, renderDexLegitimacyReportUsage } from './token-grab/dexLegitimacyReport';
 import { runDexWinnerCandidateReport, renderDexWinnerCandidateReport, renderDexWinnerCandidateReportUsage } from './token-grab/dexWinnerCandidateReport';
 import { runDexCandidateSafetyEnrich, renderDexCandidateSafetyEnrichReport, renderDexCandidateSafetyEnrichUsage } from './token-grab/dexCandidateSafetyEnrich';
+import { runRipperSession, runRipperAutopilot, loadOrCreateSessionState, renderRipperSessionSummary, renderRipperDashboard, renderRipperSessionUsage, renderRipperAutopilotUsage, renderRipperDashboardUsage } from './token-grab/dexRipperSession';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2559,6 +2560,90 @@ async function main(): Promise<void> {
         } else {
           console.log(renderDexCandidateSafetyEnrichReport(cseReport, cseDebug));
         }
+        break;
+      }
+
+      case 'token:ripper-session': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderRipperSessionUsage());
+          break;
+        }
+        const rsCandidates  = getArgValue('--candidates')    ?? 'data/token-grab/legitimacy/dex-winner-candidates-today.json';
+        const rsState       = getArgValue('--session-state') ?? 'data/token-grab/ripper/ripper-session.json';
+        const rsMinScore    = getArgValue('--min-score');
+        const rsMaxHold     = getArgValue('--max-hold-minutes');
+        const rsNoPrime     = process.argv.includes('--no-prime-required');
+        const rsReset       = process.argv.includes('--reset');
+        const rsDebug       = process.argv.includes('--debug');
+
+        if (rsReset && fs.existsSync(rsState)) fs.unlinkSync(rsState);
+
+        const rsConfig: Record<string, number | boolean> = {};
+        if (rsMinScore) rsConfig['minScoreToBuy'] = parseInt(rsMinScore, 10);
+        if (rsMaxHold)  rsConfig['maxHoldMinutes'] = parseInt(rsMaxHold, 10);
+        if (rsNoPrime)  rsConfig['requirePrimeWindow'] = false;
+
+        const rsResult = runRipperSession({
+          candidatesPath: rsCandidates,
+          sessionStatePath: rsState,
+          config: rsConfig as Parameters<typeof runRipperSession>[0]['config'],
+          debug: rsDebug,
+        });
+
+        console.log(renderRipperSessionSummary(rsResult, rsDebug));
+        break;
+      }
+
+      case 'token:ripper-autopilot': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderRipperAutopilotUsage());
+          break;
+        }
+        const raCandidates    = getArgValue('--candidates')       ?? 'data/token-grab/legitimacy/dex-winner-candidates-today.json';
+        const raState         = getArgValue('--session-state')    ?? 'data/token-grab/ripper/ripper-session.json';
+        const raIntervalStr   = getArgValue('--interval-minutes') ?? '5';
+        const raCyclesStr     = getArgValue('--cycles')           ?? '0';
+        const raMinScore      = getArgValue('--min-score');
+        const raMaxHold       = getArgValue('--max-hold-minutes');
+        const raNoPrime       = process.argv.includes('--no-prime-required');
+        const raReset         = process.argv.includes('--reset');
+        const raDebug         = process.argv.includes('--debug');
+
+        if (raReset && fs.existsSync(raState)) fs.unlinkSync(raState);
+
+        const raConfig: Record<string, number | boolean> = {};
+        if (raMinScore) raConfig['minScoreToBuy'] = parseInt(raMinScore, 10);
+        if (raMaxHold)  raConfig['maxHoldMinutes'] = parseInt(raMaxHold, 10);
+        if (raNoPrime)  raConfig['requirePrimeWindow'] = false;
+
+        const raIntervalMs = parseFloat(raIntervalStr) * 60 * 1000;
+        const raCycles     = parseInt(raCyclesStr, 10);
+
+        console.log(`[ripper-autopilot] Starting — interval=${raIntervalStr}m  maxCycles=${raCycles === 0 ? 'unlimited' : raCycles}  REAL TRADING LOCKED`);
+
+        await runRipperAutopilot({
+          candidatesPath: raCandidates,
+          sessionStatePath: raState,
+          config: raConfig as Parameters<typeof runRipperSession>[0]['config'],
+          debug: raDebug,
+          intervalMs: raIntervalMs,
+          maxCycles: raCycles === 0 ? undefined : raCycles,
+          onCycle: (result, cycleNum) => {
+            console.log(`\n[ripper-autopilot] Cycle ${cycleNum}`);
+            console.log(renderRipperSessionSummary(result, raDebug));
+          },
+        });
+        break;
+      }
+
+      case 'token:ripper-dashboard': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderRipperDashboardUsage());
+          break;
+        }
+        const rdState = getArgValue('--session-state') ?? 'data/token-grab/ripper/ripper-session.json';
+        const rdSessionState = loadOrCreateSessionState(rdState, new Date().toISOString());
+        console.log(renderRipperDashboard(rdSessionState));
         break;
       }
 
