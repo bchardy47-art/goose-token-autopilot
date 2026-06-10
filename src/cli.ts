@@ -170,6 +170,7 @@ import { runQuotePreviewAudit, renderQuotePreviewAuditReport } from './token-gra
 import { runAutonomyReadinessAudit, renderAutonomyReadinessAuditReport } from './token-grab/autonomyReadinessAudit';
 import { runFixtureClusterEnrich, renderFixtureClusterEnrichReport, renderFixtureClusterEnrichUsage } from './token-grab/fixtureClusterEnrich';
 import { runClusterRiskAudit, renderClusterRiskAuditReport } from './token-grab/clusterRiskAudit';
+import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2902,6 +2903,17 @@ async function main(): Promise<void> {
         const craInput  = getArgValue('--input') ?? 'data/token-grab/ripper/live-fixtures.jsonl';
         const craResult = runClusterRiskAudit({ inputPath: craInput });
         console.log(renderClusterRiskAuditReport(craResult));
+        break;
+      }
+
+      case 'token:outcome-tracker': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log('token:outcome-tracker — fetch current prices and track outcomes for FUTURE_AUTONOMY_CANDIDATE fixtures');
+          break;
+        }
+        const otInput  = getArgValue('--input') ?? 'data/token-grab/ripper/live-fixtures.jsonl';
+        const otResult = await runOutcomeTracker({ inputPath: otInput });
+        console.log(renderOutcomeTrackerReport(otResult));
         break;
       }
 
