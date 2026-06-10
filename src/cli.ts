@@ -162,6 +162,7 @@ import { runRipperEarsReport, runRipperNearMiss, renderRipperEarsReport, renderR
 import { runLiveFixtureCapture, runLiveFixtureReport, runLiveFixtureAutopsy, renderCaptureResult, renderFixtureReport, renderAutopsyReport, renderLiveFixtureCaptureUsage, renderLiveFixtureReportUsage, renderLiveFixtureAutopsyUsage } from './token-grab/liveFixtureCapture';
 import { runRipperFeed, renderRipperFeedResult, renderRipperFeedUsage } from './token-grab/ripperFeed';
 import { runFreshPoolFeed, renderFreshPoolFeedResult, renderFreshPoolFeedUsage } from './token-grab/freshPoolFeed';
+import { runPrimeGateAudit, renderPrimeGateAuditReport, renderPrimeGateAuditUsage } from './token-grab/primeGateAudit';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2762,6 +2763,18 @@ async function main(): Promise<void> {
         const lfaFixtures = getArgValue('--fixtures') ?? 'data/token-grab/ripper/live-fixtures.jsonl';
         const lfaResult   = runLiveFixtureAutopsy(lfaFixtures);
         console.log(renderAutopsyReport(lfaResult));
+        break;
+      }
+
+      case 'token:prime-gate-audit': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderPrimeGateAuditUsage());
+          break;
+        }
+        const pgaFixtures     = getArgValue('--fixtures') ?? 'data/token-grab/ripper/live-fixtures.jsonl';
+        const pgaStrictPreview = process.argv.includes('--strict-preview');
+        const pgaResult = runPrimeGateAudit({ inputPath: pgaFixtures, strictPreview: pgaStrictPreview });
+        console.log(renderPrimeGateAuditReport(pgaResult));
         break;
       }
 

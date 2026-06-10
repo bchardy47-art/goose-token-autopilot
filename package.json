@@ -100,6 +100,7 @@
     "token:ripper-ears": "tsx src/cli.ts token:ripper-ears",
     "token:ripper-near-miss": "tsx src/cli.ts token:ripper-near-miss",
     "token:fresh-pool-feed": "tsx src/cli.ts token:fresh-pool-feed",
+    "token:prime-gate-audit": "tsx src/cli.ts token:prime-gate-audit",
     "token:ripper-feed": "tsx src/cli.ts token:ripper-feed",
     "token:live-fixture-capture": "tsx src/cli.ts token:live-fixture-capture",
     "token:live-fixture-report": "tsx src/cli.ts token:live-fixture-report",
