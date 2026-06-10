@@ -167,6 +167,7 @@ import { runHolderRiskAudit, renderHolderRiskAuditReport, renderHolderRiskAuditU
 import { runFixtureHolderEnrich, renderFixtureHolderEnrichReport, renderFixtureHolderEnrichUsage } from './token-grab/fixtureHolderEnrich';
 import { runFixtureQuotePreview, renderFixtureQuotePreviewReport, renderFixtureQuotePreviewUsage } from './token-grab/fixtureQuotePreview';
 import { runQuotePreviewAudit, renderQuotePreviewAuditReport } from './token-grab/quotePreviewAudit';
+import { runAutonomyReadinessAudit, renderAutonomyReadinessAuditReport } from './token-grab/autonomyReadinessAudit';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2846,6 +2847,17 @@ async function main(): Promise<void> {
           includeWatch: fqpIncludeWatch,
         });
         console.log(renderFixtureQuotePreviewReport(fqpResult));
+        break;
+      }
+
+      case 'token:autonomy-readiness-audit': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log('token:autonomy-readiness-audit — classify fixture readiness for autonomous trading');
+          break;
+        }
+        const araInput  = getArgValue('--input') ?? 'data/token-grab/ripper/live-fixtures.jsonl';
+        const araResult = runAutonomyReadinessAudit({ inputPath: araInput });
+        console.log(renderAutonomyReadinessAuditReport(araResult));
         break;
       }
 
