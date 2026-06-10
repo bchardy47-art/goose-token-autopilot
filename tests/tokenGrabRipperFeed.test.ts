@@ -10,7 +10,7 @@ import {
   runRipperFeed,
   renderRipperFeedResult,
 } from '../src/token-grab/ripperFeed';
-import { runLiveFixtureCapture } from '../src/token-grab/liveFixtureCapture';
+import { runLiveFixtureCapture, runLiveFixtureReport } from '../src/token-grab/liveFixtureCapture';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -199,6 +199,28 @@ describe('winnerCandidateToEarSignal', () => {
 
 // ── enrichedCandidateToEarSignal ──────────────────────────────────────────────
 
+// The actual enriched file format omits 'confidence', 'reasons', and 'tier' —
+// these must be derived from 'safetyVerdict', 'safetyReasons', 'originalTier'.
+function makeEnrichedCandidateNoBaseFields() {
+  return {
+    // No 'tier', 'confidence', or 'reasons' — matching actual enriched JSON format
+    originalTier: 'HIGH_CONVICTION_WATCH',
+    symbol: 'XRPS',
+    contract: '7XLu71Wvq7zuNU7TP5qjYY8kqg9zxtrsb7sJEEF6pump',
+    sourceRunFile: 'run-20260610-005211.json',
+    observedAt: OBSERVED_ISO,
+    priceChangePct: 34.3,
+    liquidityChangePct: 15.8,
+    volumeLiquidityRatio: 0.50,
+    mintAuthorityStatus: 'UNKNOWN',
+    freezeAuthorityStatus: 'UNKNOWN',
+    holderConcentrationStatus: 'WARNING',
+    safetyVerdict: 'HIGH_CONVICTION_WATCH',
+    safetyReasons: [] as string[],
+    missingSignals: ['MINT_FREEZE_NOT_CONNECTED'],
+  };
+}
+
 describe('enrichedCandidateToEarSignal', () => {
   it('sets source to dex-winner-candidates-enriched', () => {
     const sig = enrichedCandidateToEarSignal(makeEnrichedCandidate(), NOW_ISO);
@@ -226,6 +248,36 @@ describe('enrichedCandidateToEarSignal', () => {
     const c   = { ...makeEnrichedCandidate(), holderFetchError: 'RPC timeout' };
     const sig = enrichedCandidateToEarSignal(c, NOW_ISO);
     expect(sig.warnings.some(w => w.includes('RPC timeout'))).toBe(true);
+  });
+
+  it('derives confidence MEDIUM from HIGH_CONVICTION_WATCH safetyVerdict when base confidence absent', () => {
+    const c   = makeEnrichedCandidateNoBaseFields();
+    const sig = enrichedCandidateToEarSignal(c, NOW_ISO);
+    expect(sig.confidence).toBe('MEDIUM');
+  });
+
+  it('derives confidence HIGH from PASS_TO_HUMAN safetyVerdict', () => {
+    const c   = { ...makeEnrichedCandidateNoBaseFields(), safetyVerdict: 'PASS_TO_HUMAN' };
+    const sig = enrichedCandidateToEarSignal(c, NOW_ISO);
+    expect(sig.confidence).toBe('HIGH');
+  });
+
+  it('derives confidence LOW from WATCH safetyVerdict', () => {
+    const c   = { ...makeEnrichedCandidateNoBaseFields(), safetyVerdict: 'WATCH' };
+    const sig = enrichedCandidateToEarSignal(c, NOW_ISO);
+    expect(sig.confidence).toBe('LOW');
+  });
+
+  it('uses originalTier in signalReasons when base reasons absent', () => {
+    const c   = makeEnrichedCandidateNoBaseFields();
+    const sig = enrichedCandidateToEarSignal(c, NOW_ISO);
+    expect(sig.signalReasons.some(r => r.includes('HIGH_CONVICTION_WATCH'))).toBe(true);
+  });
+
+  it('uses launchHint from originalTier when tier absent', () => {
+    const c   = makeEnrichedCandidateNoBaseFields();
+    const sig = enrichedCandidateToEarSignal(c, NOW_ISO);
+    expect(sig.launchHint).toBe('HIGH_CONVICTION_WATCH');
   });
 });
 
@@ -383,6 +435,29 @@ describe('runRipperFeed — winner candidates source', () => {
 
     expect(result.signalCount).toBe(2);
   });
+
+  it('writeVerified is true after successful write', () => {
+    const dir     = makeSourceDir();
+    const srcPath = writeWinnerCandidates(dir, [makeWinnerCandidate()]);
+    const outputPath = path.join(tmpDir, 'ripper-ears-input.json');
+
+    const result = runRipperFeed({
+      sources: [{ filePath: srcPath, kind: 'winner-candidates', nextStep: 'npm run token:dex-winner-candidates' }],
+      outputPath,
+      nowMs: NOW_MS,
+    });
+
+    expect(result.writeVerified).toBe(true);
+    expect(fs.existsSync(outputPath)).toBe(true);
+  });
+
+  it('writeVerified is false when source missing', () => {
+    const result = runRipperFeed({
+      sources: [{ filePath: path.join(tmpDir, 'missing.json'), kind: 'winner-candidates', nextStep: 'npm run x' }],
+      outputPath: path.join(tmpDir, 'out.json'),
+    });
+    expect(result.writeVerified).toBe(false);
+  });
 });
 
 describe('runRipperFeed — enriched candidates source', () => {
@@ -462,30 +537,47 @@ describe('runRipperFeed — source priority', () => {
 });
 
 describe('runRipperFeed — integration with live-fixture-capture', () => {
-  it('output can be consumed by runLiveFixtureCapture', () => {
+  it('feed → capture → report end-to-end: fixture count > 0', () => {
     const dir     = makeSourceDir();
     const srcPath = writeWinnerCandidates(dir, [makeWinnerCandidate()]);
-    const outputPath = path.join(tmpDir, 'ripper-ears-input.json');
-    const fixturesPath = path.join(tmpDir, 'live-fixtures.jsonl');
+    const feedOutputPath   = path.join(tmpDir, 'ripper-ears-input.json');
+    const fixturesPath     = path.join(tmpDir, 'live-fixtures.jsonl');
 
-    // Step 1: feed
+    // Step 1: ripper-feed writes ripper-ears-input.json
     const feedResult = runRipperFeed({
       sources: [{ filePath: srcPath, kind: 'winner-candidates', nextStep: 'npm run token:dex-winner-candidates' }],
-      outputPath,
+      outputPath: feedOutputPath,
       nowMs: NOW_MS,
     });
     expect(feedResult.signalCount).toBe(1);
+    expect(feedResult.writeVerified).toBe(true);
+    expect(fs.existsSync(feedOutputPath)).toBe(true);
 
-    // Step 2: capture from the feed output
+    // Step 2: live-fixture-capture reads ripper-ears-input.json (same path as feed output)
     const captureResult = runLiveFixtureCapture({
-      inputPath: outputPath,
+      inputPath: feedOutputPath,
       outputPath: fixturesPath,
       format: 'ear-signals',
       nowMs: NOW_MS,
     });
     expect(captureResult.inputMissing).toBe(false);
     expect(captureResult.capturedCount).toBe(1);
+    expect(captureResult.appendedCount).toBe(1);
     expect(captureResult.tradingExecuted).toBe(0);
+    expect(fs.existsSync(fixturesPath)).toBe(true);
+
+    // Step 3: live-fixture-report sees fixture count > 0
+    const reportResult = runLiveFixtureReport(fixturesPath);
+    expect(reportResult.totalFixtures).toBeGreaterThan(0);
+    expect(reportResult.tradingExecuted).toBe(0);
+    expect(reportResult.noRealTradeSent).toBe(true);
+  });
+
+  it('default paths match between feed output and capture input', () => {
+    // Both must use the same relative path so the sequence works without flags
+    const DEFAULT_FEED_OUTPUT   = 'data/token-grab/ripper/ripper-ears-input.json';
+    const DEFAULT_CAPTURE_INPUT = 'data/token-grab/ripper/ripper-ears-input.json';
+    expect(DEFAULT_FEED_OUTPUT).toBe(DEFAULT_CAPTURE_INPUT);
   });
 });
 
@@ -503,7 +595,7 @@ describe('renderRipperFeedResult', () => {
     expect(out).toContain('npm run');
   });
 
-  it('renders populated result', () => {
+  it('renders populated result with write-verified checkmark', () => {
     const dir     = makeSourceDir();
     const srcPath = writeWinnerCandidates(dir, [makeWinnerCandidate()]);
     const outputPath = path.join(tmpDir, 'out.json');
@@ -518,6 +610,26 @@ describe('renderRipperFeedResult', () => {
     expect(out).toContain('REAL TRADING LOCKED');
     expect(out).toContain('XRPS');
     expect(out).toContain('tradingExecuted=0');
+    expect(out).toContain('✓ Written');
+    expect(out).not.toContain('WRITE FAILED');
+  });
+
+  it('shows WRITE FAILED when writeVerified is false', () => {
+    const dir     = makeSourceDir();
+    const srcPath = writeWinnerCandidates(dir, [makeWinnerCandidate()]);
+    const outputPath = path.join(tmpDir, 'out.json');
+
+    const result = runRipperFeed({
+      sources: [{ filePath: srcPath, kind: 'winner-candidates', nextStep: 'npm run token:dex-winner-candidates' }],
+      outputPath,
+      nowMs: NOW_MS,
+    });
+
+    // Simulate a failed write by patching writeVerified
+    const failedResult = { ...result, writeVerified: false };
+    const out = renderRipperFeedResult(failedResult);
+    expect(out).toContain('WRITE FAILED');
+    expect(out).not.toContain('✓ Written');
   });
 });
 

@@ -89,6 +89,14 @@ function normalizeConfidence(raw: string | undefined): 'HIGH' | 'MEDIUM' | 'LOW'
   return 'UNKNOWN';
 }
 
+// Derive confidence from enriched safety verdict when base confidence is absent
+function confidenceFromSafetyVerdict(verdict: string | undefined): 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN' {
+  if (verdict === 'PASS_TO_HUMAN')         return 'HIGH';
+  if (verdict === 'HIGH_CONVICTION_WATCH') return 'MEDIUM';
+  if (verdict === 'WATCH')                 return 'LOW';
+  return 'UNKNOWN';
+}
+
 function holderHintFromStatus(status: string | undefined): string | undefined {
   if (status === 'CLEAN')   return 'CLEAN';
   if (status === 'WARNING') return 'WATCH';
@@ -137,10 +145,27 @@ export function enrichedCandidateToEarSignal(
   nowIso: string,
 ): RipperEarSignal {
   const base = winnerCandidateToEarSignal(candidate, nowIso);
+
+  // Enriched format omits 'tier'/'confidence'/'reasons' — recover from enriched fields
+  const confidence = base.confidence !== 'UNKNOWN'
+    ? base.confidence
+    : confidenceFromSafetyVerdict(candidate.safetyVerdict);
+
+  const signalReasons = base.signalReasons.length > 0
+    ? base.signalReasons
+    : [
+        ...(candidate.originalTier ? [`originalTier:${candidate.originalTier}`] : []),
+        ...(candidate.safetyVerdict ? [`safetyVerdict:${candidate.safetyVerdict}`] : []),
+        ...(candidate.safetyReasons ?? []),
+      ];
+
   return {
     ...base,
     id: `enriched:${candidate.contract}:${(candidate.observedAt ?? nowIso).slice(0, 13).replace('T', '-')}`,
     source: 'dex-winner-candidates-enriched',
+    launchHint: candidate.originalTier ?? base.launchHint,
+    confidence,
+    signalReasons,
     holderRiskHint: holderHintFromStatus(candidate.holderConcentrationStatus),
     warnings: [
       ...base.warnings,
@@ -252,6 +277,7 @@ export interface RipperFeedResult {
   signalCount: number;
   signals: RipperEarSignal[];
   warnings: string[];
+  writeVerified: boolean;   // true only if file confirmed on disk after write
   tradingExecuted: 0;
   noRealTradeSent: true;
   paperOnly: true;
@@ -276,8 +302,14 @@ export function runRipperFeed(options: RipperFeedOptions = {}): RipperFeedResult
     }
 
     // Write output
-    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-    fs.writeFileSync(outputPath, JSON.stringify({ signals }, null, 2), 'utf-8');
+    let writeVerified = false;
+    try {
+      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+      fs.writeFileSync(outputPath, JSON.stringify({ signals }, null, 2), 'utf-8');
+      writeVerified = fs.existsSync(outputPath);
+    } catch (err) {
+      warnings.push(`write failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
 
     return {
       sourceUsed: src.filePath,
@@ -288,6 +320,7 @@ export function runRipperFeed(options: RipperFeedOptions = {}): RipperFeedResult
       signalCount: signals.length,
       signals,
       warnings,
+      writeVerified,
       tradingExecuted: 0,
       noRealTradeSent: true,
       paperOnly: true,
@@ -305,6 +338,7 @@ export function runRipperFeed(options: RipperFeedOptions = {}): RipperFeedResult
     signalCount: 0,
     signals: [],
     warnings: ['no source file found — run the pipeline steps below first'],
+    writeVerified: false,
     tradingExecuted: 0,
     noRealTradeSent: true,
     paperOnly: true,
@@ -339,8 +373,14 @@ export function renderRipperFeedResult(result: RipperFeedResult): string {
 
   lines.push(`  Source : ${result.sourceUsed}`);
   lines.push(`  Kind   : ${result.sourceKind}`);
-  lines.push(`  Output : ${result.outputPath}`);
   lines.push(`  Signals: ${result.signalCount}`);
+
+  if (result.writeVerified) {
+    lines.push(`  ✓ Written: ${result.outputPath}`);
+  } else {
+    lines.push(`  ✗ WRITE FAILED: ${result.outputPath}`);
+    lines.push('    Check directory permissions and disk space.');
+  }
   lines.push('');
 
   if (result.warnings.length > 0) {
