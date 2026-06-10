@@ -161,6 +161,7 @@ import { runRipperSession, runRipperAutopilot, loadOrCreateSessionState, renderR
 import { runRipperEarsReport, runRipperNearMiss, renderRipperEarsReport, renderRipperNearMissReport, renderRipperEarsUsage, renderRipperNearMissUsage, type EarsInputFormat } from './token-grab/ripperEarsReport';
 import { runLiveFixtureCapture, runLiveFixtureReport, runLiveFixtureAutopsy, renderCaptureResult, renderFixtureReport, renderAutopsyReport, renderLiveFixtureCaptureUsage, renderLiveFixtureReportUsage, renderLiveFixtureAutopsyUsage } from './token-grab/liveFixtureCapture';
 import { runRipperFeed, renderRipperFeedResult, renderRipperFeedUsage } from './token-grab/ripperFeed';
+import { runFreshPoolFeed, renderFreshPoolFeedResult, renderFreshPoolFeedUsage } from './token-grab/freshPoolFeed';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2685,6 +2686,27 @@ async function main(): Promise<void> {
 
         const rnResult = runRipperNearMiss({ inputPath: rnInput, format: rnFormat });
         console.log(renderRipperNearMissReport(rnResult));
+        break;
+      }
+
+      case 'token:fresh-pool-feed': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderFreshPoolFeedUsage());
+          break;
+        }
+        const fpfRunsDir   = getArgValue('--runs-dir') ?? 'data/token-grab/dex-watch-runs';
+        const fpfOutput    = getArgValue('--output')   ?? 'data/token-grab/ripper/ripper-ears-input.json';
+        const fpfMaxAge    = getArgValue('--max-age-minutes');
+        const fpfIncludeOld = process.argv.includes('--include-old');
+        const fpfDebug     = process.argv.includes('--debug');
+
+        const fpfResult = runFreshPoolFeed({
+          runsDir: fpfRunsDir,
+          outputPath: fpfOutput,
+          maxAgeMinutes: fpfMaxAge != null ? parseFloat(fpfMaxAge) : undefined,
+          includeOld: fpfIncludeOld,
+        });
+        console.log(renderFreshPoolFeedResult(fpfResult, fpfDebug));
         break;
       }
 
