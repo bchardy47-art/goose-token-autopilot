@@ -156,6 +156,7 @@ import { runDexDayWatch, renderDayWatchUsage, loadDayLog, buildDayReport, render
 import { runDexPaperPositionTracker, renderDexPaperPositionTrackerReport, renderDexPaperPositionTrackerUsage } from './token-grab/dexPaperPositionTracker';
 import { runDexLegitimacyReport, renderDexLegitimacyReport, renderDexLegitimacyReportUsage } from './token-grab/dexLegitimacyReport';
 import { runDexWinnerCandidateReport, renderDexWinnerCandidateReport, renderDexWinnerCandidateReportUsage } from './token-grab/dexWinnerCandidateReport';
+import { runDexCandidateSafetyEnrich, renderDexCandidateSafetyEnrichReport, renderDexCandidateSafetyEnrichUsage } from './token-grab/dexCandidateSafetyEnrich';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2528,6 +2529,35 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(wcReport, null, 2));
         } else {
           console.log(renderDexWinnerCandidateReport(wcReport, wcDebug));
+        }
+        break;
+      }
+
+      case 'token:dex-candidate-safety-enrich': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderDexCandidateSafetyEnrichUsage());
+          break;
+        }
+        const cseOut        = getArgValue('--out')        ?? 'data/token-grab/legitimacy/dex-winner-candidates-enriched-today.json';
+        const cseCandidates = getArgValue('--candidates') ?? 'data/token-grab/legitimacy/dex-winner-candidates-today.json';
+        const cseRpcUrl     = getArgValue('--rpc-url');
+        const cseOffline    = process.argv.includes('--offline');
+        const cseDebug      = process.argv.includes('--debug');
+        const cseJson       = process.argv.includes('--json');
+
+        const cseReport = await runDexCandidateSafetyEnrich({
+          candidatesPath: cseCandidates,
+          outPath: cseOut,
+          rpcUrl: cseRpcUrl ?? undefined,
+          offline: cseOffline,
+          debug: cseDebug,
+          generatedAt: new Date().toISOString(),
+        });
+
+        if (cseJson) {
+          console.log(JSON.stringify(cseReport, null, 2));
+        } else {
+          console.log(renderDexCandidateSafetyEnrichReport(cseReport, cseDebug));
         }
         break;
       }
