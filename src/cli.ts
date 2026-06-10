@@ -160,6 +160,7 @@ import { runDexCandidateSafetyEnrich, renderDexCandidateSafetyEnrichReport, rend
 import { runRipperSession, runRipperAutopilot, loadOrCreateSessionState, renderRipperSessionSummary, renderRipperDashboard, renderRipperSessionUsage, renderRipperAutopilotUsage, renderRipperDashboardUsage } from './token-grab/dexRipperSession';
 import { runRipperEarsReport, runRipperNearMiss, renderRipperEarsReport, renderRipperNearMissReport, renderRipperEarsUsage, renderRipperNearMissUsage, type EarsInputFormat } from './token-grab/ripperEarsReport';
 import { runLiveFixtureCapture, runLiveFixtureReport, runLiveFixtureAutopsy, renderCaptureResult, renderFixtureReport, renderAutopsyReport, renderLiveFixtureCaptureUsage, renderLiveFixtureReportUsage, renderLiveFixtureAutopsyUsage } from './token-grab/liveFixtureCapture';
+import { runRipperFeed, renderRipperFeedResult, renderRipperFeedUsage } from './token-grab/ripperFeed';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2684,6 +2685,17 @@ async function main(): Promise<void> {
 
         const rnResult = runRipperNearMiss({ inputPath: rnInput, format: rnFormat });
         console.log(renderRipperNearMissReport(rnResult));
+        break;
+      }
+
+      case 'token:ripper-feed': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderRipperFeedUsage());
+          break;
+        }
+        const rfOutput = getArgValue('--output') ?? 'data/token-grab/ripper/ripper-ears-input.json';
+        const rfResult = runRipperFeed({ outputPath: rfOutput });
+        console.log(renderRipperFeedResult(rfResult));
         break;
       }
 

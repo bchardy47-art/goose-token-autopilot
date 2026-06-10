@@ -99,6 +99,7 @@
     "token:ripper-dashboard": "tsx src/cli.ts token:ripper-dashboard",
     "token:ripper-ears": "tsx src/cli.ts token:ripper-ears",
     "token:ripper-near-miss": "tsx src/cli.ts token:ripper-near-miss",
+    "token:ripper-feed": "tsx src/cli.ts token:ripper-feed",
     "token:live-fixture-capture": "tsx src/cli.ts token:live-fixture-capture",
     "token:live-fixture-report": "tsx src/cli.ts token:live-fixture-report",
     "token:live-fixture-autopsy": "tsx src/cli.ts token:live-fixture-autopsy",
