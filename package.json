@@ -93,6 +93,7 @@
     "token:dex-paper-position-tracker": "tsx src/cli.ts token:dex-paper-position-tracker",
     "token:dex-legitimacy-report": "tsx src/cli.ts token:dex-legitimacy-report",
     "token:dex-winner-candidates": "tsx src/cli.ts token:dex-winner-candidates",
+    "token:dex-candidate-safety-enrich": "tsx src/cli.ts token:dex-candidate-safety-enrich",
     "test": "vitest run"
   },
   "dependencies": {
