@@ -32,7 +32,11 @@ async function rpcRequest(rpcUrl: string, method: string, params: unknown[]): Pr
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
   });
-  const json = await res.json() as { result?: unknown };
+  const json = await res.json() as { result?: unknown; error?: { code?: number; message?: string } };
+  // Throw on JSON-RPC error responses so callers can capture the failure reason.
+  if (json.error) {
+    throw new Error(`RPC error (${json.error.code ?? 'unknown'}): ${json.error.message ?? 'error'}`);
+  }
   return json.result ?? null;
 }
 
@@ -70,19 +74,17 @@ export function createRpcSafetyProvider(rpcUrl: string): SolanaTokenSafetyProvid
       return (await getMintAccount(contract)).freeze;
     },
     async fetchTopHolderPct(contract) {
-      try {
-        const largest = await rpcRequest(rpcUrl, 'getTokenLargestAccounts', [contract]) as { value?: Array<{ amount?: string }> } | null;
-        const value = largest?.value;
-        if (!Array.isArray(value) || value.length === 0) return null;
-        const supply = await rpcRequest(rpcUrl, 'getTokenSupply', [contract]) as { value?: { amount?: string } } | null;
-        const supplyAmt = Number(supply?.value?.amount ?? 0);
-        if (supplyAmt <= 0) return null;
-        const topAmt = Number(value[0]?.amount ?? 0);
-        if (topAmt <= 0) return null;
-        return (topAmt / supplyAmt) * 100;
-      } catch {
-        return null;
-      }
+      // No try/catch — rpcRequest throws on JSON-RPC errors so enrichCandidateResult
+      // can capture the failure reason. Legitimate "no data" cases still return null.
+      const largest = await rpcRequest(rpcUrl, 'getTokenLargestAccounts', [contract]) as { value?: Array<{ amount?: string }> } | null;
+      const value = largest?.value;
+      if (!Array.isArray(value) || value.length === 0) return null;
+      const supply = await rpcRequest(rpcUrl, 'getTokenSupply', [contract]) as { value?: { amount?: string } } | null;
+      const supplyAmt = Number(supply?.value?.amount ?? 0);
+      if (supplyAmt <= 0) return null;
+      const topAmt = Number(value[0]?.amount ?? 0);
+      if (topAmt <= 0) return null;
+      return (topAmt / supplyAmt) * 100;
     },
   };
 }
@@ -107,6 +109,7 @@ export interface EnrichedCandidate {
   freezeAuthorityStatus: FreezeAuthorityStatus;
   holderConcentrationStatus: HolderConcentrationStatus;
   topHolderPercent?: number;
+  holderFetchError?: string;
   safetyVerdict: CandidateSafetyVerdict;
   safetyReasons: string[];
   missingSignals: string[];
@@ -164,11 +167,20 @@ export async function enrichCandidateResult(
   candidate: WinnerCandidate,
   provider: SolanaTokenSafetyProvider,
 ): Promise<EnrichResult> {
-  const [mintStatus, freezeStatus, topHolderPct] = await Promise.all([
+  // Mint + freeze share a cached RPC call; fetch together.
+  const [mintStatus, freezeStatus] = await Promise.all([
     provider.fetchMintAuthority(candidate.contract).catch((): MintAuthorityStatus => 'UNKNOWN'),
     provider.fetchFreezeAuthority(candidate.contract).catch((): FreezeAuthorityStatus => 'UNKNOWN'),
-    provider.fetchTopHolderPct(candidate.contract).catch(() => null as null),
   ]);
+
+  // Holder fetch is separate so RPC error reasons can be captured and shown in --debug.
+  let topHolderPct: number | null = null;
+  let holderFetchError: string | undefined;
+  try {
+    topHolderPct = await provider.fetchTopHolderPct(candidate.contract);
+  } catch (err) {
+    holderFetchError = err instanceof Error ? err.message : String(err);
+  }
 
   const holderStatus = holderPctToStatus(topHolderPct);
 
@@ -235,6 +247,7 @@ export async function enrichCandidateResult(
       freezeAuthorityStatus: freezeStatus,
       holderConcentrationStatus: holderStatus,
       topHolderPercent: topHolderPct ?? undefined,
+      holderFetchError,
       safetyVerdict,
       safetyReasons: safetyReasons.slice(0, 5),
       missingSignals,
@@ -484,6 +497,9 @@ export function renderDexCandidateSafetyEnrichReport(
       }
       if (c.missingSignals.length > 0) {
         lines.push(`  missing: ${c.missingSignals.join(', ')}`);
+      }
+      if (debug && c.holderFetchError) {
+        lines.push(`  holder fetch failed: ${c.holderFetchError}`);
       }
       lines.push('');
     }
