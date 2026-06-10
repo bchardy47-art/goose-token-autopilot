@@ -158,6 +158,7 @@ import { runDexLegitimacyReport, renderDexLegitimacyReport, renderDexLegitimacyR
 import { runDexWinnerCandidateReport, renderDexWinnerCandidateReport, renderDexWinnerCandidateReportUsage } from './token-grab/dexWinnerCandidateReport';
 import { runDexCandidateSafetyEnrich, renderDexCandidateSafetyEnrichReport, renderDexCandidateSafetyEnrichUsage } from './token-grab/dexCandidateSafetyEnrich';
 import { runRipperSession, runRipperAutopilot, loadOrCreateSessionState, renderRipperSessionSummary, renderRipperDashboard, renderRipperSessionUsage, renderRipperAutopilotUsage, renderRipperDashboardUsage } from './token-grab/dexRipperSession';
+import { runRipperEarsReport, runRipperNearMiss, renderRipperEarsReport, renderRipperNearMissReport, renderRipperEarsUsage, renderRipperNearMissUsage, type EarsInputFormat } from './token-grab/ripperEarsReport';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2644,6 +2645,44 @@ async function main(): Promise<void> {
         const rdState = getArgValue('--session-state') ?? 'data/token-grab/ripper/ripper-session.json';
         const rdSessionState = loadOrCreateSessionState(rdState, new Date().toISOString());
         console.log(renderRipperDashboard(rdSessionState));
+        break;
+      }
+
+      case 'token:ripper-ears': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderRipperEarsUsage());
+          break;
+        }
+        const reInput    = getArgValue('--input')  ?? 'data/token-grab/ripper/ripper-ears-input.json';
+        const reFormatRaw = getArgValue('--format') ?? 'ear-signals';
+        const reFormat: EarsInputFormat = reFormatRaw === 'dexscreener' ? 'dexscreener' : 'ear-signals';
+        const reMinScore  = getArgValue('--min-score');
+        const reDebug     = process.argv.includes('--debug');
+
+        const reConfig: Record<string, number> = {};
+        if (reMinScore) reConfig['minScoreToBuy'] = parseInt(reMinScore, 10);
+
+        const reResult = runRipperEarsReport({
+          inputPath: reInput,
+          format: reFormat,
+          config: reConfig as Parameters<typeof runRipperEarsReport>[0]['config'],
+        });
+
+        console.log(renderRipperEarsReport(reResult, reDebug));
+        break;
+      }
+
+      case 'token:ripper-near-miss': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderRipperNearMissUsage());
+          break;
+        }
+        const rnInput    = getArgValue('--input')  ?? 'data/token-grab/ripper/ripper-ears-input.json';
+        const rnFormatRaw = getArgValue('--format') ?? 'ear-signals';
+        const rnFormat: EarsInputFormat = rnFormatRaw === 'dexscreener' ? 'dexscreener' : 'ear-signals';
+
+        const rnResult = runRipperNearMiss({ inputPath: rnInput, format: rnFormat });
+        console.log(renderRipperNearMissReport(rnResult));
         break;
       }
 

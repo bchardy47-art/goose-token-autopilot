@@ -97,6 +97,8 @@
     "token:ripper-session": "tsx src/cli.ts token:ripper-session",
     "token:ripper-autopilot": "tsx src/cli.ts token:ripper-autopilot",
     "token:ripper-dashboard": "tsx src/cli.ts token:ripper-dashboard",
+    "token:ripper-ears": "tsx src/cli.ts token:ripper-ears",
+    "token:ripper-near-miss": "tsx src/cli.ts token:ripper-near-miss",
     "test": "vitest run"
   },
   "dependencies": {
