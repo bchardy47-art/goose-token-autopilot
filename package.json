@@ -109,6 +109,7 @@
     "token:outcome-tracker": "tsx src/cli.ts token:outcome-tracker",
     "token:outcome-autopsy": "tsx src/cli.ts token:outcome-autopsy",
     "token:outcome-tracker-v2": "tsx src/cli.ts token:outcome-tracker-v2",
+    "token:outcome-watch-session": "tsx src/cli.ts token:outcome-watch-session",
     "token:fixture-quote-preview": "tsx src/cli.ts token:fixture-quote-preview",
     "token:quote-preview-audit": "tsx src/cli.ts token:quote-preview-audit",
     "token:ripper-feed": "tsx src/cli.ts token:ripper-feed",

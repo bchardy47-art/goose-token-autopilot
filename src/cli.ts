@@ -173,6 +173,7 @@ import { runClusterRiskAudit, renderClusterRiskAuditReport } from './token-grab/
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
+import { runOutcomeWatchSession, renderOutcomeWatchSessionReport } from './token-grab/outcomeWatchSession';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2938,6 +2939,26 @@ async function main(): Promise<void> {
         const otv2Input  = getArgValue('--input') ?? 'data/token-grab/ripper/live-fixtures.jsonl';
         const otv2Result = await runOutcomeTrackerV2({ inputPath: otv2Input });
         console.log(renderOutcomeTrackerV2Report(otv2Result));
+        break;
+      }
+
+      case 'token:outcome-watch-session': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log('token:outcome-watch-session — watch FUTURE_AUTONOMY_CANDIDATE prices over time and store checkpoint snapshots');
+          break;
+        }
+        const owsInput   = getArgValue('--input')  ?? 'data/token-grab/ripper/live-fixtures.jsonl';
+        const owsOutput  = getArgValue('--output') ?? 'data/token-grab/outcomes/outcome-watch-snapshots.jsonl';
+        const owsCycles  = parseNumberArg('--cycles', 1, { integer: true, min: 1 });
+        const owsInterval = parseNumberArg('--interval-seconds', 60, { min: 0 });
+        const owsLimitRaw = getArgValue('--limit');
+        const owsLimit   = owsLimitRaw != null ? parseInt(owsLimitRaw, 10) : undefined;
+        const owsResult  = await runOutcomeWatchSession({
+          inputPath: owsInput, outputPath: owsOutput,
+          cycles: owsCycles, intervalSeconds: owsInterval,
+          limit: owsLimit,
+        });
+        console.log(renderOutcomeWatchSessionReport(owsResult));
         break;
       }
 
