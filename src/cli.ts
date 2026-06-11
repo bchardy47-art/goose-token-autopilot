@@ -174,6 +174,7 @@ import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outc
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
 import { runOutcomeWatchSession, renderOutcomeWatchSessionReport } from './token-grab/outcomeWatchSession';
+import { runResolvedLedger, renderResolvedLedgerReport } from './token-grab/resolvedCandidateLedger';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2940,6 +2941,19 @@ async function main(): Promise<void> {
         const otv2Watch  = getArgValue('--watch-input') ?? 'data/token-grab/outcomes/outcome-watch-snapshots.jsonl';
         const otv2Result = await runOutcomeTrackerV2({ inputPath: otv2Input, watchInputPath: otv2Watch });
         console.log(renderOutcomeTrackerV2Report(otv2Result));
+        break;
+      }
+
+      case 'token:resolved-ledger': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log('token:resolved-ledger — build/update durable JSONL ledger of resolved FUTURE_AUTONOMY_CANDIDATE outcomes');
+          break;
+        }
+        const rlInput  = getArgValue('--input')       ?? 'data/token-grab/ripper/live-fixtures.jsonl';
+        const rlWatch  = getArgValue('--watch-input') ?? 'data/token-grab/outcomes/outcome-watch-snapshots.jsonl';
+        const rlLedger = getArgValue('--ledger')      ?? 'data/token-grab/outcomes/resolved-candidate-ledger.jsonl';
+        const rlResult = await runResolvedLedger({ inputPath: rlInput, watchInputPath: rlWatch, ledgerPath: rlLedger });
+        console.log(renderResolvedLedgerReport(rlResult));
         break;
       }
 
