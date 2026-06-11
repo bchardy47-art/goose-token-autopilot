@@ -338,6 +338,141 @@ describe('runOutcomeTracker — status classification', () => {
   });
 });
 
+// ── runOutcomeTracker: raw.entry / raw.final price extraction ────────────────
+
+/** Build a fixture whose raw field mirrors the real live-fixture structure (raw.entry/raw.final). */
+function makeLiveCandidateFixture(opts: {
+  contract: string;
+  symbol: string;
+  entryPriceUsd: number;
+  finalPriceUsd?: number;
+} ): LiveRipperFixture {
+  const contract = opts.contract;
+  const entrySnap = {
+    contract,
+    chainId:      'solana',
+    pairAddress:  `PAIR_${contract}`,
+    pairUrl:      `https://dexscreener.com/solana/PAIR_${contract}`,
+    symbol:       opts.symbol,
+    priceUsd:     opts.entryPriceUsd,
+    liquidityUsd: 80000,
+    observedAt:   '2026-06-10T08:43:13.000Z',
+  };
+  const finalSnap = {
+    ...entrySnap,
+    priceUsd:    opts.finalPriceUsd ?? opts.entryPriceUsd,
+    observedAt: '2026-06-10T08:44:15.000Z',
+  };
+  return makeFixture({
+    capturedAt: '2026-06-10T08:46:49.889Z',
+    raw: {
+      contract,
+      chainId:      'solana',
+      pairUrl:      entrySnap.pairUrl,
+      clusterRisk:  'CLEAN',
+      slippageRisk: 'CLEAN',
+      routeFound:   true,
+      quoteCheckedAt:          '2026-06-10T08:43:00.000Z',
+      holderConcentrationStatus: 'CLEAN',
+      topHolderPercent:        9.5,
+      entry: entrySnap,
+      final: finalSnap,
+    },
+    normalizedSignal: {
+      id:      `sig-${contract}`,
+      contract,
+      symbol:  opts.symbol,
+      chainId: 'solana',
+    } as LiveRipperFixture['normalizedSignal'],
+    ripperInput: { contract, volumeLiquidityRatio: 0.5 } as unknown as LiveRipperFixture['ripperInput'],
+  });
+}
+
+describe('runOutcomeTracker — raw.entry/raw.final price extraction', () => {
+  it('reads detectedPriceUsd from raw.entry.priceUsd', async () => {
+    const f = makeLiveCandidateFixture({ contract: 'MINT_LIVE', symbol: 'LIVE', entryPriceUsd: 0.001211 });
+    const opts = makeOptions([f], nullFetch);
+    const result = await runOutcomeTracker(opts);
+    expect(result.candidateCount).toBe(1);
+    expect(result.candidates[0]!.detectedPriceUsd).toBeCloseTo(0.001211, 6);
+  });
+
+  it('reads pairUrl from raw.entry.pairUrl (not normalizedSignal)', async () => {
+    const f = makeLiveCandidateFixture({ contract: 'MINT_PU', symbol: 'PU', entryPriceUsd: 0.001 });
+    const opts = makeOptions([f], nullFetch);
+    const result = await runOutcomeTracker(opts);
+    expect(result.candidates[0]!.pairUrl).toContain('dexscreener.com');
+  });
+
+  it('falls back to raw.final.priceUsd when raw.entry has no priceUsd', async () => {
+    const f = makeFixture({
+      raw: {
+        contract:                  'MINT_FALLBACK',
+        clusterRisk:               'CLEAN',
+        slippageRisk:              'CLEAN',
+        routeFound:                true,
+        quoteCheckedAt:            '2026-06-10T08:00:00.000Z',
+        holderConcentrationStatus: 'CLEAN',
+        // entry exists but no priceUsd
+        entry: { contract: 'MINT_FALLBACK', chainId: 'solana', observedAt: '2026-06-10T08:43:00.000Z' },
+        final: { contract: 'MINT_FALLBACK', chainId: 'solana', priceUsd: 0.0005, observedAt: '2026-06-10T08:44:00.000Z' },
+      },
+      ripperInput: { contract: 'MINT_FALLBACK', volumeLiquidityRatio: 0.5 } as unknown as LiveRipperFixture['ripperInput'],
+      normalizedSignal: {
+        id: 'sig-fb', contract: 'MINT_FALLBACK', symbol: 'FALLBACK', chainId: 'solana',
+      } as LiveRipperFixture['normalizedSignal'],
+    });
+    const opts = makeOptions([f], nullFetch);
+    const result = await runOutcomeTracker(opts);
+    expect(result.candidates[0]!.detectedPriceUsd).toBeCloseTo(0.0005, 6);
+  });
+
+  it('XRPS-style fixture: raw.entry.priceUsd yields real return % when latest price fetched', async () => {
+    const f = makeLiveCandidateFixture({
+      contract:      '7XLu71Wvq7zuNU7TP5qjYY8kqg9zxtrsb7sJEEF6pump',
+      symbol:        'XRPS',
+      entryPriceUsd: 0.001211,
+    });
+    // Simulate DexScreener returning a 2× price
+    const fetch = makeFetch({ '7XLu71Wvq7zuNU7TP5qjYY8kqg9zxtrsb7sJEEF6pump': 0.002422 });
+    const result = await runOutcomeTracker(makeOptions([f], fetch));
+    const c = result.candidates[0]!;
+    expect(c.detectedPriceUsd).toBeCloseTo(0.001211, 6);
+    expect(c.currentReturnPct).toBeCloseTo(100, 3);
+    expect(c.status).toBe('RIPPED');
+    expect(c.status).not.toBe('UNKNOWN');
+  });
+
+  it('XRPS-style fixture: status is UNKNOWN only when fetch returns null (no latest price)', async () => {
+    const f = makeLiveCandidateFixture({
+      contract:      '7XLu71Wvq7zuNU7TP5qjYY8kqg9zxtrsb7sJEEF6pump',
+      symbol:        'XRPS',
+      entryPriceUsd: 0.001211,
+    });
+    const result = await runOutcomeTracker(makeOptions([f], nullFetch));
+    const c = result.candidates[0]!;
+    // Entry price is known — only UNKNOWN because latest price unavailable
+    expect(c.detectedPriceUsd).toBeCloseTo(0.001211, 6);
+    expect(c.latestPriceUsd).toBeNull();
+    expect(c.status).toBe('UNKNOWN');
+  });
+
+  it('uses raw.entry.observedAt as detectedAt', async () => {
+    const f = makeLiveCandidateFixture({ contract: 'MINT_TS', symbol: 'TS', entryPriceUsd: 0.001 });
+    const opts = makeOptions([f], nullFetch);
+    const result = await runOutcomeTracker(opts);
+    expect(result.candidates[0]!.detectedAt).toBe('2026-06-10T08:43:13.000Z');
+  });
+
+  it('normalizedSignal.priceUsd still works as fallback when no raw.entry', async () => {
+    // makeCandidateFixture sets priceUsd in normalizedSignal, raw has no entry/final
+    const f = makeCandidateFixture({ contract: 'MINT_SIG', priceUsd: 0.042 });
+    const opts = makeOptions([f], nullFetch);
+    const result = await runOutcomeTracker(opts);
+    expect(result.candidates[0]!.detectedPriceUsd).toBeCloseTo(0.042, 5);
+  });
+});
+
 // ── runOutcomeTracker: safety invariants ─────────────────────────────────────
 
 describe('runOutcomeTracker — safety invariants', () => {

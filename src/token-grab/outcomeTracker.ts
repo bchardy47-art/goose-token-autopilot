@@ -54,6 +54,11 @@ export function classifyOutcomeStatus(returnPct: number | null): OutcomeStatus {
 
 // ── Field extraction helpers ──────────────────────────────────────────────────
 
+function toPositiveNum(v: unknown): number | null {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) return null;
+  return v;
+}
+
 function extractCandidateFields(fixture: LiveRipperFixture): {
   contract: string | null;
   symbol: string;
@@ -66,38 +71,64 @@ function extractCandidateFields(fixture: LiveRipperFixture): {
   topHolderPercent: number | null;
   clusterRisk: string;
 } {
-  const sig = fixture.normalizedSignal as Record<string, unknown> | undefined;
-  const raw = fixture.raw as Record<string, unknown> | undefined;
-  const ri  = fixture.ripperInput as Record<string, unknown> | null;
+  const sig      = fixture.normalizedSignal as Record<string, unknown> | undefined;
+  const raw      = fixture.raw as Record<string, unknown> | undefined;
+  const ri       = fixture.ripperInput as Record<string, unknown> | null;
+  const rawEntry = raw?.['entry'] as Record<string, unknown> | undefined;
+  const rawFinal = raw?.['final'] as Record<string, unknown> | undefined;
 
   const contract =
-    (raw?.['contract'] as string | undefined) ??
-    (ri?.['contract'] as string | undefined) ??
+    (rawEntry?.['contract'] as string | undefined) ??
+    (raw?.['contract']      as string | undefined) ??
+    (ri?.['contract']       as string | undefined) ??
     null;
 
   const symbol =
-    (sig?.['symbol'] as string | undefined) ??
-    (raw?.['symbol'] as string | undefined) ??
+    (rawEntry?.['symbol'] as string | undefined) ??
+    (sig?.['symbol']      as string | undefined) ??
+    (raw?.['symbol']      as string | undefined) ??
     'UNKNOWN';
 
   const chainId =
-    (sig?.['chainId'] as string | undefined) ??
-    (raw?.['chainId'] as string | undefined) ??
+    (rawEntry?.['chainId'] as string | undefined) ??
+    (raw?.['chainId']      as string | undefined) ??
+    (sig?.['chainId']      as string | undefined) ??
     'solana';
 
-  const pairUrl  = (sig?.['pairUrl']  as string | undefined) ?? null;
-  const pairAddress = (sig?.['pairAddress'] as string | undefined) ?? null;
+  const pairUrl =
+    (rawEntry?.['pairUrl'] as string | undefined) ??
+    (raw?.['pairUrl']      as string | undefined) ??
+    (sig?.['pairUrl']      as string | undefined) ??
+    null;
 
+  const pairAddress =
+    (rawEntry?.['pairAddress'] as string | undefined) ??
+    (raw?.['pairAddress']      as string | undefined) ??
+    (sig?.['pairAddress']      as string | undefined) ??
+    null;
+
+  // Detection timestamp: raw.entry.observedAt → raw.final.observedAt → raw.observedAt → sig.observedAt → capturedAt
   const detectedAt =
-    (sig?.['observedAt'] as string | undefined) ?? fixture.capturedAt;
+    (rawEntry?.['observedAt'] as string | undefined) ??
+    (rawFinal?.['observedAt'] as string | undefined) ??
+    (raw?.['observedAt']      as string | undefined) ??
+    (sig?.['observedAt']      as string | undefined) ??
+    fixture.capturedAt;
 
-  const rawPrice = sig?.['priceUsd'];
+  // Detection price: raw.entry.priceUsd → raw.final.priceUsd → raw.priceUsd → sig.priceUsd → ri.priceUsd
   const detectedPriceUsd =
-    typeof rawPrice === 'number' && rawPrice > 0 ? rawPrice : null;
+    toPositiveNum(rawEntry?.['priceUsd']) ??
+    toPositiveNum(rawFinal?.['priceUsd']) ??
+    toPositiveNum(raw?.['priceUsd'])      ??
+    toPositiveNum(sig?.['priceUsd'])      ??
+    toPositiveNum(ri?.['priceUsd']);
 
-  const rawLiq = sig?.['liquidityUsd'] ?? ri?.['liquidityUsd'];
+  // Liquidity: raw.entry.liquidityUsd → raw.liquidityUsd → sig.liquidityUsd → ri.liquidityUsd
   const liquidityUsd =
-    typeof rawLiq === 'number' && rawLiq > 0 ? rawLiq : null;
+    toPositiveNum(rawEntry?.['liquidityUsd']) ??
+    toPositiveNum(raw?.['liquidityUsd'])      ??
+    toPositiveNum(sig?.['liquidityUsd'])      ??
+    toPositiveNum(ri?.['liquidityUsd']);
 
   const rawHolder = raw?.['topHolderPercent'] ?? ri?.['topHolderPercent'];
   const topHolderPercent =
