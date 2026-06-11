@@ -172,6 +172,7 @@ import { runFixtureClusterEnrich, renderFixtureClusterEnrichReport, renderFixtur
 import { runClusterRiskAudit, renderClusterRiskAuditReport } from './token-grab/clusterRiskAudit';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
+import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2926,6 +2927,17 @@ async function main(): Promise<void> {
         const oaInput  = getArgValue('--input') ?? 'data/token-grab/ripper/live-fixtures.jsonl';
         const oaResult = await runOutcomeAutopsy({ inputPath: oaInput });
         console.log(renderOutcomeAutopsyReport(oaResult));
+        break;
+      }
+
+      case 'token:outcome-tracker-v2': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log('token:outcome-tracker-v2 — checkpoint tracking and exit simulation for FUTURE_AUTONOMY_CANDIDATE fixtures');
+          break;
+        }
+        const otv2Input  = getArgValue('--input') ?? 'data/token-grab/ripper/live-fixtures.jsonl';
+        const otv2Result = await runOutcomeTrackerV2({ inputPath: otv2Input });
+        console.log(renderOutcomeTrackerV2Report(otv2Result));
         break;
       }
 
