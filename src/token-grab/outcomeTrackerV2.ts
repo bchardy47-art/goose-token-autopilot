@@ -28,7 +28,7 @@ export type CheckpointStatus = 'HIT_100' | 'HIT_50' | 'HIT_25' | 'NEVER_RIPPED' 
 export interface PriceSnapshot {
   priceUsd:   number;
   observedAt: string;
-  label:      'entry' | 'final' | 'latest';
+  label:      'entry' | 'final' | 'latest' | 'watch';
 }
 
 export interface ExitSimulations {
@@ -60,7 +60,9 @@ export interface CandidateCheckpointRecord extends OutcomeCandidate {
   exitSimulations:      ExitSimulations;
 }
 
-export interface OutcomeTrackerV2Options extends OutcomeTrackerOptions {}
+export interface OutcomeTrackerV2Options extends OutcomeTrackerOptions {
+  watchInputPath?: string;
+}
 
 export interface OutcomeTrackerV2Result {
   inputPath:         string;
@@ -83,11 +85,47 @@ export interface OutcomeTrackerV2Result {
   readOnly:          true;
 }
 
+// ── Watch snapshot loader ─────────────────────────────────────────────────────
+
+const DEFAULT_WATCH_INPUT = 'data/token-grab/outcomes/outcome-watch-snapshots.jsonl';
+
+export function loadWatchSnapshots(watchPath: string): Map<string, PriceSnapshot[]> {
+  const map = new Map<string, PriceSnapshot[]>();
+  if (!fs.existsSync(watchPath)) return map;
+
+  let content: string;
+  try { content = fs.readFileSync(watchPath, 'utf-8'); } catch { return map; }
+
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    let parsed: unknown;
+    try { parsed = JSON.parse(trimmed); } catch { continue; }
+
+    if (typeof parsed !== 'object' || parsed === null) continue;
+    const obj = parsed as Record<string, unknown>;
+
+    const contract   = typeof obj['contract']   === 'string' ? obj['contract']   : null;
+    const observedAt = typeof obj['observedAt'] === 'string' ? obj['observedAt'] : null;
+    const price      = toPositiveNum(obj['latestPriceUsd']);
+
+    if (!contract || !observedAt || price === null) continue;
+
+    const snap: PriceSnapshot = { priceUsd: price, observedAt, label: 'watch' };
+    if (!map.has(contract)) map.set(contract, []);
+    map.get(contract)!.push(snap);
+  }
+
+  return map;
+}
+
 // ── Pure: snapshot builder ────────────────────────────────────────────────────
 
 export function buildCandidateSnapshots(
   raw: Record<string, unknown> | undefined,
   latestSnap: DexPairSnapshot | null,
+  watchSnaps?: PriceSnapshot[],
 ): PriceSnapshot[] {
   const snapshots: PriceSnapshot[] = [];
   const seen = new Set<string>(); // dedup by observedAt
@@ -107,6 +145,15 @@ export function buildCandidateSnapshots(
   if (finalPrice !== null && finalAt && !seen.has(finalAt)) {
     snapshots.push({ priceUsd: finalPrice, observedAt: finalAt, label: 'final' });
     seen.add(finalAt);
+  }
+
+  if (watchSnaps) {
+    for (const ws of watchSnaps) {
+      if (!seen.has(ws.observedAt)) {
+        snapshots.push(ws);
+        seen.add(ws.observedAt);
+      }
+    }
   }
 
   const latestPrice = toPositiveNum(latestSnap?.priceUsd ?? null);
@@ -220,9 +267,10 @@ const DEFAULT_FETCH = (contract: string, chain: string, observedAt: string) =>
 export async function runOutcomeTrackerV2(
   options: OutcomeTrackerV2Options = {},
 ): Promise<OutcomeTrackerV2Result> {
-  const inputPath   = options.inputPath   ?? DEFAULT_INPUT;
-  const generatedAt = options.generatedAt ?? new Date().toISOString();
-  const doFetch     = options.fetch ?? DEFAULT_FETCH;
+  const inputPath      = options.inputPath      ?? DEFAULT_INPUT;
+  const watchInputPath = options.watchInputPath ?? DEFAULT_WATCH_INPUT;
+  const generatedAt    = options.generatedAt    ?? new Date().toISOString();
+  const doFetch        = options.fetch          ?? DEFAULT_FETCH;
 
   const emptyResult: OutcomeTrackerV2Result = {
     inputPath, inputMissing: true, generatedAt,
@@ -237,7 +285,10 @@ export async function runOutcomeTrackerV2(
   const v1Result = await runOutcomeTracker({ inputPath, generatedAt, fetch: doFetch });
   if (v1Result.inputMissing) return emptyResult;
 
-  // 2. Re-read fixtures for raw.entry/raw.final checkpoint data
+  // 2. Load watch session snapshots for enriched historical data
+  const watchByContract = loadWatchSnapshots(watchInputPath);
+
+  // 3. Re-read fixtures for raw.entry/raw.final checkpoint data
   let fixtures: LiveRipperFixture[];
   try {
     fixtures = readFixturesFromJsonl(inputPath);
@@ -279,7 +330,8 @@ export async function runOutcomeTrackerV2(
               priceUsd: candidate.latestPriceUsd, observedAt: generatedAt }
           : null;
 
-      const snapshots = buildCandidateSnapshots(raw as Record<string, unknown>, latestSnap);
+      const watchSnaps = watchByContract.get(candidate.contract) ?? [];
+      const snapshots = buildCandidateSnapshots(raw as Record<string, unknown>, latestSnap, watchSnaps);
 
       const finalCapturePriceUsd = toPositiveNum(rawFinal?.['priceUsd']);
       const finalCaptureAt       = (rawFinal?.['observedAt'] as string | undefined) ?? null;

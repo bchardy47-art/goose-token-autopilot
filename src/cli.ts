@@ -2936,8 +2936,9 @@ async function main(): Promise<void> {
           console.log('token:outcome-tracker-v2 — checkpoint tracking and exit simulation for FUTURE_AUTONOMY_CANDIDATE fixtures');
           break;
         }
-        const otv2Input  = getArgValue('--input') ?? 'data/token-grab/ripper/live-fixtures.jsonl';
-        const otv2Result = await runOutcomeTrackerV2({ inputPath: otv2Input });
+        const otv2Input  = getArgValue('--input')       ?? 'data/token-grab/ripper/live-fixtures.jsonl';
+        const otv2Watch  = getArgValue('--watch-input') ?? 'data/token-grab/outcomes/outcome-watch-snapshots.jsonl';
+        const otv2Result = await runOutcomeTrackerV2({ inputPath: otv2Input, watchInputPath: otv2Watch });
         console.log(renderOutcomeTrackerV2Report(otv2Result));
         break;
       }

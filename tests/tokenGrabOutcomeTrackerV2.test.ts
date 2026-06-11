@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { writeFileSync } from 'fs';
+import * as OTV2 from '../src/token-grab/outcomeTrackerV2';
 import {
   buildCandidateSnapshots,
   classifyCheckpointStatus,
   simulateExits,
+  loadWatchSnapshots,
   runOutcomeTrackerV2,
   renderOutcomeTrackerV2Report,
   type PriceSnapshot,
@@ -80,10 +82,49 @@ function makeFetch(prices: Record<string, number | null>) {
 }
 
 let counter = 0;
-function makeOptions(fixtures: LiveRipperFixture[], fetchImpl = nullFetch): OutcomeTrackerV2Options {
+// Default watchInputPath points to a nonexistent file so existing tests are unaffected.
+function makeOptions(
+  fixtures:      LiveRipperFixture[],
+  fetchImpl      = nullFetch,
+  watchInputPath = '/tmp/nonexistent-watch-default.jsonl',
+): OutcomeTrackerV2Options {
   const tmpFile = `/tmp/test-v2-fixtures-${++counter}.jsonl`;
   writeFileSync(tmpFile, fixtures.map(f => JSON.stringify(f)).join('\n'));
-  return { inputPath: tmpFile, generatedAt: '2026-06-10T10:00:00.000Z', fetch: fetchImpl };
+  return { inputPath: tmpFile, generatedAt: '2026-06-10T10:00:00.000Z', fetch: fetchImpl, watchInputPath };
+}
+
+// Writes a watch-session JSONL file and returns its path.
+let watchCounter = 0;
+interface WatchSnapSpec {
+  contract:   string;
+  price:      number;
+  observedAt: string;
+}
+function makeWatchFile(specs: WatchSnapSpec[]): string {
+  const tmpFile = `/tmp/test-v2-watch-${++watchCounter}.jsonl`;
+  const lines = specs.map(s => JSON.stringify({
+    observedAt:               s.observedAt,
+    symbol:                   'TST',
+    contract:                 s.contract,
+    pairAddress:              null,
+    pairUrl:                  null,
+    chainId:                  'solana',
+    entryObservedAt:          null,
+    entryPriceUsd:            null,
+    latestPriceUsd:           s.price,
+    latestLiquidityUsd:       50000,
+    latestVolumeUsd:          3000,
+    returnPctFromEntry:       null,
+    holderConcentrationStatus: 'CLEAN',
+    topHolderPercent:         9.5,
+    clusterRisk:              'CLEAN',
+    bubbleMapsScore:          null,
+    slippageRisk:             'CLEAN',
+    estimatedSlippagePct:     null,
+    source:                   'outcome-watch-session',
+  }));
+  writeFileSync(tmpFile, lines.join('\n'));
+  return tmpFile;
 }
 
 // helper: 3-snapshot array
@@ -557,5 +598,242 @@ describe('renderOutcomeTrackerV2Report', () => {
     const f = makeLiveFixture({ contract: 'MINT_FT', symbol: 'FT', entryPrice: 0.01 });
     const r = await runOutcomeTrackerV2(makeOptions([f]));
     expect(renderOutcomeTrackerV2Report(r)).toContain('tradingExecuted=0');
+  });
+});
+
+// ── loadWatchSnapshots ────────────────────────────────────────────────────────
+
+describe('loadWatchSnapshots', () => {
+  it('returns empty map for nonexistent file', () => {
+    expect(loadWatchSnapshots('/tmp/nonexistent-watch.jsonl').size).toBe(0);
+  });
+
+  it('parses valid watch snapshot lines', () => {
+    const path = makeWatchFile([
+      { contract: 'MINT_WA', price: 0.015, observedAt: '2026-06-11T08:00:00.000Z' },
+    ]);
+    const map = loadWatchSnapshots(path);
+    expect(map.has('MINT_WA')).toBe(true);
+    expect(map.get('MINT_WA')![0]!.priceUsd).toBeCloseTo(0.015, 6);
+    expect(map.get('MINT_WA')![0]!.label).toBe('watch');
+  });
+
+  it('groups multiple snaps for the same contract', () => {
+    const path = makeWatchFile([
+      { contract: 'MINT_WB', price: 0.011, observedAt: '2026-06-11T08:00:00.000Z' },
+      { contract: 'MINT_WB', price: 0.012, observedAt: '2026-06-11T08:01:00.000Z' },
+      { contract: 'MINT_WB', price: 0.013, observedAt: '2026-06-11T08:02:00.000Z' },
+    ]);
+    const map = loadWatchSnapshots(path);
+    expect(map.get('MINT_WB')).toHaveLength(3);
+  });
+
+  it('ignores malformed JSON lines without throwing', () => {
+    const tmpFile = `/tmp/test-v2-watch-malformed-${++watchCounter}.jsonl`;
+    writeFileSync(tmpFile, [
+      'not-json',
+      JSON.stringify({ contract: 'MINT_WC', latestPriceUsd: 0.01, observedAt: '2026-06-11T08:00:00.000Z' }),
+      '{broken}',
+      JSON.stringify({ latestPriceUsd: 0.01, observedAt: '2026-06-11T08:01:00.000Z' }), // missing contract
+    ].join('\n'));
+    const map = loadWatchSnapshots(tmpFile);
+    expect(map.has('MINT_WC')).toBe(true);
+    expect(map.size).toBe(1);
+  });
+
+  it('skips lines with null or zero latestPriceUsd', () => {
+    const tmpFile = `/tmp/test-v2-watch-null-price-${++watchCounter}.jsonl`;
+    writeFileSync(tmpFile, [
+      JSON.stringify({ contract: 'MINT_WD', latestPriceUsd: null,  observedAt: '2026-06-11T08:00:00.000Z' }),
+      JSON.stringify({ contract: 'MINT_WD', latestPriceUsd: 0,     observedAt: '2026-06-11T08:01:00.000Z' }),
+      JSON.stringify({ contract: 'MINT_WD', latestPriceUsd: -0.01, observedAt: '2026-06-11T08:02:00.000Z' }),
+    ].join('\n'));
+    expect(loadWatchSnapshots(tmpFile).size).toBe(0);
+  });
+
+  it('separates snaps by contract', () => {
+    const path = makeWatchFile([
+      { contract: 'MINT_X', price: 0.01, observedAt: '2026-06-11T08:00:00.000Z' },
+      { contract: 'MINT_Y', price: 0.02, observedAt: '2026-06-11T08:00:00.000Z' },
+    ]);
+    const map = loadWatchSnapshots(path);
+    expect(map.has('MINT_X')).toBe(true);
+    expect(map.has('MINT_Y')).toBe(true);
+    expect(map.get('MINT_X')).toHaveLength(1);
+    expect(map.get('MINT_Y')).toHaveLength(1);
+  });
+});
+
+// ── buildCandidateSnapshots — watch snapshot merging ─────────────────────────
+
+describe('buildCandidateSnapshots — watch snapshot merging', () => {
+  it('merges watch snaps between entry and latest', () => {
+    const raw: Record<string, unknown> = {
+      entry: { priceUsd: 0.01, observedAt: '2026-06-10T08:43:00.000Z' },
+    };
+    const watchSnaps: PriceSnapshot[] = [
+      { priceUsd: 0.012, observedAt: '2026-06-10T09:00:00.000Z', label: 'watch' },
+      { priceUsd: 0.013, observedAt: '2026-06-10T09:30:00.000Z', label: 'watch' },
+    ];
+    const latest: DexPairSnapshot = { contract: 'X', chainId: 'solana', priceUsd: 0.011, observedAt: '2026-06-10T10:00:00.000Z' };
+    const result = buildCandidateSnapshots(raw, latest, watchSnaps);
+    expect(result).toHaveLength(4); // entry + 2 watch + latest
+    expect(result.some(s => s.label === 'watch')).toBe(true);
+  });
+
+  it('deduplicates watch snap with same observedAt as entry', () => {
+    const sharedAt = '2026-06-10T08:43:00.000Z';
+    const raw: Record<string, unknown> = {
+      entry: { priceUsd: 0.01, observedAt: sharedAt },
+    };
+    const watchSnaps: PriceSnapshot[] = [
+      { priceUsd: 0.015, observedAt: sharedAt, label: 'watch' }, // duplicate timestamp
+    ];
+    const result = buildCandidateSnapshots(raw, null, watchSnaps);
+    expect(result).toHaveLength(1); // only entry survives
+    expect(result[0]!.label).toBe('entry');
+  });
+
+  it('remains sorted chronologically with watch snaps inserted', () => {
+    const raw: Record<string, unknown> = {
+      entry: { priceUsd: 0.01,  observedAt: '2026-06-10T08:43:00.000Z' },
+      final: { priceUsd: 0.011, observedAt: '2026-06-10T08:44:00.000Z' },
+    };
+    const watchSnaps: PriceSnapshot[] = [
+      { priceUsd: 0.013, observedAt: '2026-06-10T09:30:00.000Z', label: 'watch' },
+      { priceUsd: 0.012, observedAt: '2026-06-10T09:00:00.000Z', label: 'watch' },
+    ];
+    const result = buildCandidateSnapshots(raw, null, watchSnaps);
+    for (let i = 1; i < result.length; i++) {
+      expect(result[i]!.observedAt >= result[i - 1]!.observedAt).toBe(true);
+    }
+  });
+});
+
+// ── runOutcomeTrackerV2 — watch snapshot ingestion ────────────────────────────
+
+describe('runOutcomeTrackerV2 — watch snapshot ingestion', () => {
+  it('loads watch snapshots from JSONL and merges them', async () => {
+    const contract = 'MINT_WI1';
+    const f = makeLiveFixture({ contract, symbol: 'WI1', entryPrice: 0.01 });
+    // Without watch snaps: entry + final = 2 snaps
+    // With 3 watch snaps: 2 + 3 = 5 snaps
+    const watchPath = makeWatchFile([
+      { contract, price: 0.011, observedAt: '2026-06-10T09:00:00.000Z' },
+      { contract, price: 0.012, observedAt: '2026-06-10T09:30:00.000Z' },
+      { contract, price: 0.013, observedAt: '2026-06-10T09:45:00.000Z' },
+    ]);
+    const r = await runOutcomeTrackerV2(makeOptions([f], nullFetch, watchPath));
+    expect(r.records[0]!.snapshotCount).toBe(5); // entry + final + 3 watch
+  });
+
+  it('only matches watch snapshots by contract', async () => {
+    const contract = 'MINT_WI2';
+    const f = makeLiveFixture({ contract, symbol: 'WI2', entryPrice: 0.01 });
+    // Watch file has snaps for a DIFFERENT contract
+    const watchPath = makeWatchFile([
+      { contract: 'MINT_OTHER', price: 0.05, observedAt: '2026-06-10T09:00:00.000Z' },
+    ]);
+    const r = await runOutcomeTrackerV2(makeOptions([f], nullFetch, watchPath));
+    // Still only entry + final (no match for MINT_WI2)
+    expect(r.records[0]!.snapshotCount).toBe(2);
+  });
+
+  it('ignores malformed JSONL lines in watch file safely', async () => {
+    const contract = 'MINT_WI3';
+    const f = makeLiveFixture({ contract, symbol: 'WI3', entryPrice: 0.01 });
+    const tmpFile = `/tmp/test-v2-watch-bad-${++watchCounter}.jsonl`;
+    writeFileSync(tmpFile, [
+      'not-json',
+      JSON.stringify({ contract, latestPriceUsd: 0.012, observedAt: '2026-06-10T09:00:00.000Z' }),
+      '{bad}',
+      JSON.stringify({ contract, latestPriceUsd: 0.013, observedAt: '2026-06-10T09:30:00.000Z' }),
+    ].join('\n'));
+    const r = await runOutcomeTrackerV2(makeOptions([f], nullFetch, tmpFile));
+    // 2 valid watch snaps added despite malformed lines
+    expect(r.records[0]!.snapshotCount).toBe(4); // entry + final + 2 watch
+  });
+
+  it('snapshot count increases with watch snapshots present', async () => {
+    const contract = 'MINT_WI4';
+    const f = makeLiveFixture({ contract, symbol: 'WI4', entryPrice: 0.01 });
+    // Without watch — 2 snaps
+    const withoutWatch = await runOutcomeTrackerV2(makeOptions([f], nullFetch));
+    expect(withoutWatch.records[0]!.snapshotCount).toBe(2);
+
+    // With 2 watch snaps — 4 snaps
+    const watchPath = makeWatchFile([
+      { contract, price: 0.011, observedAt: '2026-06-10T09:00:00.000Z' },
+      { contract, price: 0.012, observedAt: '2026-06-10T09:30:00.000Z' },
+    ]);
+    const withWatch = await runOutcomeTrackerV2(makeOptions([f], nullFetch, watchPath));
+    expect(withWatch.records[0]!.snapshotCount).toBe(4);
+  });
+
+  it('sparse warning disappears when watch snapshots bring count to 4+', async () => {
+    const contract = 'MINT_WI5';
+    const f = makeLiveFixture({ contract, symbol: 'WI5', entryPrice: 0.01 });
+    // Without watch: 2 snaps → sparse
+    const withoutWatch = await runOutcomeTrackerV2(makeOptions([f], nullFetch));
+    expect(withoutWatch.records[0]!.isSparse).toBe(true);
+
+    // With 2 watch snaps: 4 snaps → not sparse
+    const watchPath = makeWatchFile([
+      { contract, price: 0.011, observedAt: '2026-06-10T09:00:00.000Z' },
+      { contract, price: 0.012, observedAt: '2026-06-10T09:30:00.000Z' },
+    ]);
+    const withWatch = await runOutcomeTrackerV2(makeOptions([f], nullFetch, watchPath));
+    expect(withWatch.records[0]!.isSparse).toBe(false);
+  });
+
+  it('maxKnownReturnPct uses watch snapshot prices', async () => {
+    const contract = 'MINT_WI6';
+    // entry=0.01, final=0.01 (0%), watch at 0.015 (+50%)
+    const f = makeLiveFixture({ contract, symbol: 'WI6', entryPrice: 0.01, finalPrice: 0.01 });
+    const watchPath = makeWatchFile([
+      { contract, price: 0.015, observedAt: '2026-06-10T09:00:00.000Z' },
+    ]);
+    const r = await runOutcomeTrackerV2(makeOptions([f], nullFetch, watchPath));
+    expect(r.records[0]!.maxKnownReturnPct).toBeCloseTo(50, 3);
+  });
+
+  it('minKnownReturnPct uses watch snapshot prices', async () => {
+    const contract = 'MINT_WI7';
+    // entry=0.01, final=0.01 (0%), watch at 0.007 (-30%)
+    const f = makeLiveFixture({ contract, symbol: 'WI7', entryPrice: 0.01, finalPrice: 0.01 });
+    const watchPath = makeWatchFile([
+      { contract, price: 0.007, observedAt: '2026-06-10T09:00:00.000Z' },
+    ]);
+    const r = await runOutcomeTrackerV2(makeOptions([f], nullFetch, watchPath));
+    expect(r.records[0]!.minKnownReturnPct).toBeCloseTo(-30, 3);
+  });
+
+  it('TP25 fires from watch snapshot price', async () => {
+    const contract = 'MINT_WI8';
+    // entry=0.01, final=0.01 (0%), watch snapshot at +40% → TP25 should lock in +25%
+    const f = makeLiveFixture({ contract, symbol: 'WI8', entryPrice: 0.01, finalPrice: 0.01 });
+    const watchPath = makeWatchFile([
+      { contract, price: 0.014, observedAt: '2026-06-10T09:00:00.000Z' }, // +40%
+    ]);
+    const r = await runOutcomeTrackerV2(makeOptions([f], nullFetch, watchPath));
+    expect(r.records[0]!.exitSimulations.take_profit_25).toBeCloseTo(25, 3);
+  });
+
+  it('SL15 fires from watch snapshot price', async () => {
+    const contract = 'MINT_WI9';
+    // entry=0.01, final=0.01 (0%), watch snapshot at -20% → SL15 should lock in -15%
+    const f = makeLiveFixture({ contract, symbol: 'WI9', entryPrice: 0.01, finalPrice: 0.01 });
+    const watchPath = makeWatchFile([
+      { contract, price: 0.008, observedAt: '2026-06-10T09:00:00.000Z' }, // -20%
+    ]);
+    const r = await runOutcomeTrackerV2(makeOptions([f], nullFetch, watchPath));
+    expect(r.records[0]!.exitSimulations.stop_loss_15).toBeCloseTo(-15, 3);
+  });
+
+  it('does not export sendTransaction, signTransaction, or swap', () => {
+    expect(Object.keys(OTV2)).not.toContain('sendTransaction');
+    expect(Object.keys(OTV2)).not.toContain('signTransaction');
+    expect(Object.keys(OTV2)).not.toContain('swap');
+    expect(Object.keys(OTV2)).not.toContain('privateKey');
   });
 });
