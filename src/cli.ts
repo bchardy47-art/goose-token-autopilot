@@ -175,6 +175,7 @@ import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outc
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
 import { runOutcomeWatchSession, renderOutcomeWatchSessionReport } from './token-grab/outcomeWatchSession';
 import { runResolvedLedger, renderResolvedLedgerReport } from './token-grab/resolvedCandidateLedger';
+import { runLedgerAnalytics, renderLedgerAnalyticsReport } from './token-grab/ledgerAnalytics';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2954,6 +2955,17 @@ async function main(): Promise<void> {
         const rlLedger = getArgValue('--ledger')      ?? 'data/token-grab/outcomes/resolved-candidate-ledger.jsonl';
         const rlResult = await runResolvedLedger({ inputPath: rlInput, watchInputPath: rlWatch, ledgerPath: rlLedger });
         console.log(renderResolvedLedgerReport(rlResult));
+        break;
+      }
+
+      case 'token:ledger-analytics': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log('token:ledger-analytics — read-only analytics report over resolved-candidate-ledger.jsonl');
+          break;
+        }
+        const laLedger = getArgValue('--ledger') ?? 'data/token-grab/outcomes/resolved-candidate-ledger.jsonl';
+        const laResult = runLedgerAnalytics({ ledgerPath: laLedger });
+        console.log(renderLedgerAnalyticsReport(laResult));
         break;
       }
 

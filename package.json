@@ -111,6 +111,7 @@
     "token:outcome-tracker-v2": "tsx src/cli.ts token:outcome-tracker-v2",
     "token:outcome-watch-session": "tsx src/cli.ts token:outcome-watch-session",
     "token:resolved-ledger": "tsx src/cli.ts token:resolved-ledger",
+    "token:ledger-analytics": "tsx src/cli.ts token:ledger-analytics",
     "token:fixture-quote-preview": "tsx src/cli.ts token:fixture-quote-preview",
     "token:quote-preview-audit": "tsx src/cli.ts token:quote-preview-audit",
     "token:ripper-feed": "tsx src/cli.ts token:ripper-feed",
