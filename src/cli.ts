@@ -171,6 +171,7 @@ import { runAutonomyReadinessAudit, renderAutonomyReadinessAuditReport } from '.
 import { runFixtureClusterEnrich, renderFixtureClusterEnrichReport, renderFixtureClusterEnrichUsage } from './token-grab/fixtureClusterEnrich';
 import { runClusterRiskAudit, renderClusterRiskAuditReport } from './token-grab/clusterRiskAudit';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
+import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2914,6 +2915,17 @@ async function main(): Promise<void> {
         const otInput  = getArgValue('--input') ?? 'data/token-grab/ripper/live-fixtures.jsonl';
         const otResult = await runOutcomeTracker({ inputPath: otInput });
         console.log(renderOutcomeTrackerReport(otResult));
+        break;
+      }
+
+      case 'token:outcome-autopsy': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log('token:outcome-autopsy — read-only autopsy comparing FUTURE_AUTONOMY_CANDIDATE winners vs losers');
+          break;
+        }
+        const oaInput  = getArgValue('--input') ?? 'data/token-grab/ripper/live-fixtures.jsonl';
+        const oaResult = await runOutcomeAutopsy({ inputPath: oaInput });
+        console.log(renderOutcomeAutopsyReport(oaResult));
         break;
       }
 
