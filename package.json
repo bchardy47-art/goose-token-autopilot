@@ -103,6 +103,8 @@
     "token:ripper-paper-cycle": "tsx src/cli.ts token:ripper-paper-cycle",
     "token:ripper-paper-loop": "tsx src/cli.ts token:ripper-paper-loop",
     "token:ripper-near-miss-report": "tsx src/cli.ts token:ripper-near-miss-report",
+    "token:ripper-approved-outcomes": "tsx src/cli.ts token:ripper-approved-outcomes",
+    "token:ripper-approved-autopsy": "tsx src/cli.ts token:ripper-approved-autopsy",
     "token:prime-gate-audit": "tsx src/cli.ts token:prime-gate-audit",
     "token:holder-risk-audit": "tsx src/cli.ts token:holder-risk-audit",
     "token:fixture-holder-enrich": "tsx src/cli.ts token:fixture-holder-enrich",

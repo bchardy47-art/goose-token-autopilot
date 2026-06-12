@@ -175,6 +175,8 @@ import { createClusterRiskProvider } from './token-grab/clusterRiskProvider';
 import { runRipperPaperCycle, renderRipperPaperCycleResult, renderRipperPaperCycleUsage } from './token-grab/ripperPaperCycle';
 import { runRipperPaperLoop, renderLoopCycleLine, renderRipperPaperLoopResult, renderRipperPaperLoopUsage } from './token-grab/ripperPaperLoop';
 import { runRipperNearMissReport as runCycleNearMissReport, renderRipperNearMissReport as renderCycleNearMissReport, renderRipperNearMissReportUsage } from './token-grab/ripperNearMissReport';
+import { runRipperApprovedOutcomes, renderRipperApprovedOutcomes, renderRipperApprovedOutcomesUsage } from './token-grab/ripperApprovedOutcomes';
+import { runRipperApprovedAutopsy, renderRipperApprovedAutopsy } from './token-grab/ripperApprovedAutopsy';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3133,6 +3135,30 @@ async function main(): Promise<void> {
         const qpaInput  = getArgValue('--input') ?? 'data/token-grab/ripper/live-fixtures.jsonl';
         const qpaResult = runQuotePreviewAudit({ inputPath: qpaInput });
         console.log(renderQuotePreviewAuditReport(qpaResult));
+        break;
+      }
+
+      case 'token:ripper-approved-autopsy': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log('token:ripper-approved-autopsy — compare approved ripper candidates across saved outcome checkpoint JSON files');
+          console.log('Usage: npm run token:ripper-approved-autopsy -- --input data/token-grab/ripper/outcomes/ripper-approved-outcomes-*.json');
+          break;
+        }
+        const raaPaths: string[] = [];
+        const raaFlagIdx = process.argv.indexOf('--input');
+        if (raaFlagIdx !== -1) {
+          for (let i = raaFlagIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            raaPaths.push(process.argv[i]);
+          }
+        }
+        if (raaPaths.length === 0) {
+          console.error('[token:ripper-approved-autopsy] No --input files specified.');
+          console.error('  Usage: npm run token:ripper-approved-autopsy -- --input data/token-grab/ripper/outcomes/ripper-approved-outcomes-*.json');
+          process.exit(1);
+        }
+        const raaResult = runRipperApprovedAutopsy({ inputPaths: raaPaths });
+        console.log(renderRipperApprovedAutopsy(raaResult));
         break;
       }
 
