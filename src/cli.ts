@@ -2754,11 +2754,12 @@ async function main(): Promise<void> {
           console.log(renderRipperPaperLoopUsage());
           break;
         }
-        const rplRunsDir   = getArgValue('--runs-dir')          ?? 'data/token-grab/dex-watch-runs';
-        const rplCyclesDir = getArgValue('--cycles-dir')        ?? 'data/token-grab/ripper/cycles';
-        const rplStopFile  = getArgValue('--stop-file');
-        const rplInterval  = parseNumberArg('--interval-seconds', 180, { min: 1 });
-        const rplMaxCycles = parseNumberArg('--max-cycles',       10,  { min: 1 });
+        const rplRunsDir      = getArgValue('--runs-dir')          ?? 'data/token-grab/dex-watch-runs';
+        const rplCyclesDir    = getArgValue('--cycles-dir')        ?? 'data/token-grab/ripper/cycles';
+        const rplStopFile     = getArgValue('--stop-file');
+        const rplInterval     = parseNumberArg('--interval-seconds', 180, { min: 1 });
+        const rplMaxCycles    = parseNumberArg('--max-cycles',       10,  { min: 1 });
+        const rplRefreshSrc   = process.argv.includes('--refresh-source');
 
         const { provider: rplClusterProvider, configNote: rplClusterNote } =
           createClusterRiskProvider();
@@ -2771,7 +2772,8 @@ async function main(): Promise<void> {
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log(`  max cycles     : ${rplMaxCycles}`);
         console.log(`  interval       : ${rplInterval}s`);
-        if (rplStopFile) console.log(`  stop file      : ${rplStopFile}`);
+        if (rplStopFile)    console.log(`  stop file      : ${rplStopFile}`);
+        if (rplRefreshSrc)  console.log(`  refresh source : YES (dex-day-watch before each cycle)`);
         console.log('');
 
         const rplResult = await runRipperPaperLoop({
@@ -2781,8 +2783,32 @@ async function main(): Promise<void> {
           intervalSeconds:     rplInterval,
           maxCycles:           rplMaxCycles,
           stopFilePath:        rplStopFile ?? undefined,
-          onCycleComplete: (cycleResult, cycleNumber) => {
-            console.log(renderLoopCycleLine(cycleResult, cycleNumber, rplMaxCycles));
+          refreshSource:       rplRefreshSrc,
+          _refreshSource: rplRefreshSrc
+            ? async () => {
+                try {
+                  await runDexDayWatch({
+                    dexConfigPath:         'config/dex-ears.example.json',
+                    signalsOut:            'data/token-grab/x-ears/presignals.dex.json',
+                    runsDir:               rplRunsDir,
+                    journalOut:            'data/token-grab/paper-journal/dex-paper-journal.json',
+                    plannerOut:            'data/token-grab/paper-plans/dex-paper-entry-plan.json',
+                    dayLogPath:            'data/token-grab/day-watch/dex-day-watch.jsonl',
+                    fakeBankroll:          20,
+                    positionSize:          1,
+                    cycles:                1,
+                    minutes:               1,
+                    intervalSeconds:       30,
+                    sleepBetweenCyclesMs:  0,
+                  });
+                  return { success: true, note: 'dex-day-watch cycle completed' };
+                } catch (err) {
+                  return { success: false, note: err instanceof Error ? err.message : 'dex-day-watch failed' };
+                }
+              }
+            : undefined,
+          onCycleComplete: (cycleResult, cycleNumber, sourceRefresh) => {
+            console.log(renderLoopCycleLine(cycleResult, cycleNumber, rplMaxCycles, sourceRefresh));
           },
         });
         console.log(renderRipperPaperLoopResult(rplResult, rplMaxCycles));

@@ -6,7 +6,9 @@ import {
   runRipperPaperLoop,
   renderLoopCycleLine,
   renderRipperPaperLoopResult,
+  type SourceRefreshResult,
 } from '../src/token-grab/ripperPaperLoop';
+import type { RipperPaperCycleResult } from '../src/token-grab/ripperPaperCycle';
 import { offlineClusterRiskProvider } from '../src/token-grab/clusterRiskProvider';
 
 // ── Time anchor ───────────────────────────────────────────────────────────────
@@ -493,6 +495,255 @@ describe('renderLoopCycleLine', () => {
   });
 });
 
+// ── source refresh ────────────────────────────────────────────────────────────
+
+function makeFakeCycleResult(overrides: Partial<RipperPaperCycleResult> = {}): RipperPaperCycleResult {
+  return {
+    cycleStartedAt:      new Date(BASE_MS).toISOString(),
+    cycleSlug:           '2026-06-12-000000',
+    feedSignalsWritten:  0,
+    feedSkippedOldCount: 0,
+    captureSkipped:      true,
+    captureSkipReason:   'no candidates in run file',
+    fixturesCaptured:    0,
+    clusterRiskCounts:   { CLEAN: 0, WATCH: 0, RISKY: 0, UNKNOWN: 0 },
+    bubblemapsProviderCount: 0,
+    buyApprovedPaper:    0,
+    buyRejected:         0,
+    seenSkippedCount:    0,
+    outputPath:          null,
+    feedOutputPath:      '/tmp/feed.json',
+    realTradingLocked:   true,
+    tradingExecuted:     0,
+    noRealTradeSent:     true,
+    paperOnly:           true,
+    readOnly:            true,
+    ...overrides,
+  };
+}
+
+describe('runRipperPaperLoop — source refresh', () => {
+  it('calls _refreshSource once per cycle when refreshSource=true', async () => {
+    const refreshCalls: number[] = [];
+    let callCount = 0;
+
+    await runRipperPaperLoop({
+      runsDir:    path.join(tmpDir, 'any'),
+      cyclesDir:  path.join(tmpDir, 'cycles'),
+      maxCycles:  3,
+      sleep:      noSleep,
+      getNowMs:   makeClockFn(),
+      refreshSource: true,
+      _refreshSource: async () => {
+        refreshCalls.push(++callCount);
+        return { success: true, note: 'refreshed' };
+      },
+      _runCycle: async () => makeFakeCycleResult(),
+    });
+
+    expect(refreshCalls).toHaveLength(3);
+  });
+
+  it('does not call _refreshSource when refreshSource=false', async () => {
+    let called = false;
+
+    await runRipperPaperLoop({
+      runsDir:    path.join(tmpDir, 'any'),
+      cyclesDir:  path.join(tmpDir, 'cycles'),
+      maxCycles:  2,
+      sleep:      noSleep,
+      getNowMs:   makeClockFn(),
+      refreshSource: false,
+      _refreshSource: async () => { called = true; return { success: true, note: '' }; },
+      _runCycle: async () => makeFakeCycleResult(),
+    });
+
+    expect(called).toBe(false);
+  });
+
+  it('does not call _refreshSource when refreshSource is omitted', async () => {
+    let called = false;
+
+    await runRipperPaperLoop({
+      runsDir:    path.join(tmpDir, 'any'),
+      cyclesDir:  path.join(tmpDir, 'cycles'),
+      maxCycles:  1,
+      sleep:      noSleep,
+      getNowMs:   makeClockFn(),
+      _refreshSource: async () => { called = true; return { success: true, note: '' }; },
+      _runCycle: async () => makeFakeCycleResult(),
+    });
+
+    expect(called).toBe(false);
+  });
+
+  it('passes sourceRefresh result to onCycleComplete', async () => {
+    const received: Array<SourceRefreshResult | undefined> = [];
+
+    await runRipperPaperLoop({
+      runsDir:    path.join(tmpDir, 'any'),
+      cyclesDir:  path.join(tmpDir, 'cycles'),
+      maxCycles:  2,
+      sleep:      noSleep,
+      getNowMs:   makeClockFn(),
+      refreshSource: true,
+      _refreshSource: async () => ({ success: true, note: 'all good' }),
+      _runCycle: async () => makeFakeCycleResult(),
+      onCycleComplete: (_result, _n, sourceRefresh) => { received.push(sourceRefresh); },
+    });
+
+    expect(received).toHaveLength(2);
+    expect(received[0]).toEqual({ success: true, note: 'all good' });
+  });
+
+  it('continues the cycle even when _refreshSource throws', async () => {
+    const result = await runRipperPaperLoop({
+      runsDir:    path.join(tmpDir, 'any'),
+      cyclesDir:  path.join(tmpDir, 'cycles'),
+      maxCycles:  1,
+      sleep:      noSleep,
+      getNowMs:   makeClockFn(),
+      refreshSource: true,
+      _refreshSource: async () => { throw new Error('network timeout'); },
+      _runCycle: async () => makeFakeCycleResult(),
+    });
+
+    expect(result.cyclesCompleted).toBe(1);
+    expect(result.cycles[0].sourceRefresh?.success).toBe(false);
+    expect(result.cycles[0].sourceRefresh?.note).toContain('network timeout');
+  });
+
+  it('sourceRefresh is undefined in cycle summary when refreshSource is off', async () => {
+    const result = await runRipperPaperLoop({
+      runsDir:    path.join(tmpDir, 'any'),
+      cyclesDir:  path.join(tmpDir, 'cycles'),
+      maxCycles:  1,
+      sleep:      noSleep,
+      getNowMs:   makeClockFn(),
+      _runCycle: async () => makeFakeCycleResult(),
+    });
+
+    expect(result.cycles[0].sourceRefresh).toBeUndefined();
+  });
+});
+
+// ── session dedupe ────────────────────────────────────────────────────────────
+
+describe('runRipperPaperLoop — session dedupe', () => {
+  it('second cycle skips contracts seen in first cycle', async () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([makeOutcome({ contract: 'TokenAAA' })]),
+    });
+
+    const result = await runRipperPaperLoop({
+      runsDir,
+      cyclesDir: path.join(tmpDir, 'cycles'),
+      maxCycles: 2,
+      sleep:     noSleep,
+      getNowMs:  makeClockFn(),
+      clusterRiskProvider: offlineClusterRiskProvider,
+    });
+
+    expect(result.cycles[0].result.seenSkippedCount).toBe(0);
+    expect(result.cycles[1].result.seenSkippedCount).toBeGreaterThan(0);
+    expect(result.totalSeenSkipped).toBeGreaterThan(0);
+  });
+
+  it('totalSeenSkipped equals sum of seenSkippedCount across cycles', async () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([makeOutcome()]),
+    });
+
+    const result = await runRipperPaperLoop({
+      runsDir,
+      cyclesDir: path.join(tmpDir, 'cycles'),
+      maxCycles: 3,
+      sleep:     noSleep,
+      getNowMs:  makeClockFn(),
+      clusterRiskProvider: offlineClusterRiskProvider,
+    });
+
+    const sumFromCycles = result.cycles.reduce((sum, c) => sum + c.result.seenSkippedCount, 0);
+    expect(result.totalSeenSkipped).toBe(sumFromCycles);
+  });
+
+  it('totalSeenSkipped is 0 for a single cycle', async () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([makeOutcome()]),
+    });
+
+    const result = await runRipperPaperLoop({
+      runsDir,
+      cyclesDir: path.join(tmpDir, 'cycles'),
+      maxCycles: 1,
+      sleep:     noSleep,
+      getNowMs:  makeClockFn(),
+      clusterRiskProvider: offlineClusterRiskProvider,
+    });
+
+    expect(result.totalSeenSkipped).toBe(0);
+    expect(result.cycles[0].result.seenSkippedCount).toBe(0);
+  });
+
+  it('totalSeenSkipped is 0 when all signals are stale (never processed)', async () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([makeOutcome({ observedAt: TWO_HR_AGO })]),
+    });
+
+    const result = await runRipperPaperLoop({
+      runsDir,
+      cyclesDir: path.join(tmpDir, 'cycles'),
+      maxCycles: 3,
+      sleep:     noSleep,
+      getNowMs:  makeClockFn(),
+      clusterRiskProvider: offlineClusterRiskProvider,
+    });
+
+    expect(result.totalSeenSkipped).toBe(0);
+  });
+});
+
+// ── renderer — refresh and dup tags ──────────────────────────────────────────
+
+describe('renderLoopCycleLine — refresh and dup tags', () => {
+  it('includes refresh=OK when sourceRefresh.success=true', () => {
+    const line = renderLoopCycleLine(
+      makeFakeCycleResult(),
+      1, 5,
+      { success: true, note: 'ok' },
+    );
+    expect(line).toContain('refresh=OK');
+  });
+
+  it('includes refresh=FAIL when sourceRefresh.success=false', () => {
+    const line = renderLoopCycleLine(
+      makeFakeCycleResult(),
+      1, 5,
+      { success: false, note: 'network timeout' },
+    );
+    expect(line).toContain('refresh=FAIL');
+  });
+
+  it('does not include refresh tag when sourceRefresh is undefined', () => {
+    const line = renderLoopCycleLine(makeFakeCycleResult(), 1, 5);
+    expect(line).not.toContain('refresh=');
+  });
+
+  it('includes dup=N when seenSkippedCount > 0', () => {
+    const line = renderLoopCycleLine(
+      makeFakeCycleResult({ seenSkippedCount: 3, captureSkipped: true,
+        captureSkipReason: 'all 3 signals already seen in this session' }),
+      1, 5,
+    );
+    expect(line).toContain('dup=3');
+  });
+
+  it('does not include dup= when seenSkippedCount is 0', () => {
+    const line = renderLoopCycleLine(makeFakeCycleResult({ seenSkippedCount: 0 }), 1, 5);
+    expect(line).not.toContain('dup=');
+  });
+});
+
 describe('renderRipperPaperLoopResult', () => {
   it('contains REAL TRADING LOCKED and safety fields', async () => {
     const result = await runRipperPaperLoop({
@@ -553,5 +804,21 @@ describe('renderRipperPaperLoopResult', () => {
     const out = renderRipperPaperLoopResult(result, 2);
     expect(out).toContain('error');
     expect(out).toContain('Errors:');
+  });
+
+  it('shows Seen/deduped line in session summary', async () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([makeOutcome()]),
+    });
+    const result = await runRipperPaperLoop({
+      runsDir,
+      cyclesDir:  path.join(tmpDir, 'cycles'),
+      maxCycles:  2,
+      sleep:      noSleep,
+      getNowMs:   makeClockFn(),
+      clusterRiskProvider: offlineClusterRiskProvider,
+    });
+    const out = renderRipperPaperLoopResult(result, 2);
+    expect(out).toContain('Seen/deduped');
   });
 });

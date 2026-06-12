@@ -12,6 +12,11 @@ const DEFAULT_RUNS_DIR         = 'data/token-grab/dex-watch-runs';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+export interface SourceRefreshResult {
+  success: boolean;
+  note: string;
+}
+
 export interface RipperPaperLoopOptions {
   runsDir?: string;
   cyclesDir?: string;
@@ -19,19 +24,24 @@ export interface RipperPaperLoopOptions {
   intervalSeconds?: number;
   maxCycles?: number;
   stopFilePath?: string;
+  /** When true, call _refreshSource before each cycle to update dex-watch run files */
+  refreshSource?: boolean;
   /** Injected for testing — defaults to Date.now */
   getNowMs?: () => number;
   /** Injected for testing — defaults to setTimeout-based sleep */
   sleep?: (ms: number) => Promise<void>;
   /** Called after each successful cycle completes (used for inline printing) */
-  onCycleComplete?: (cycleResult: RipperPaperCycleResult, cycleNumber: number) => void;
+  onCycleComplete?: (cycleResult: RipperPaperCycleResult, cycleNumber: number, sourceRefresh?: SourceRefreshResult) => void;
   /** Overrides the cycle runner — for testing error paths only */
-  _runCycle?: (options: { runsDir: string; cyclesDir: string; clusterRiskProvider?: ClusterRiskProvider; nowMs: number }) => Promise<RipperPaperCycleResult>;
+  _runCycle?: (options: { runsDir: string; cyclesDir: string; clusterRiskProvider?: ClusterRiskProvider; nowMs: number; seenContracts?: Set<string> }) => Promise<RipperPaperCycleResult>;
+  /** Source refresh function — injected; required when refreshSource=true */
+  _refreshSource?: () => Promise<SourceRefreshResult>;
 }
 
 export interface RipperPaperLoopCycleSummary {
   cycleNumber: number;
   result: RipperPaperCycleResult;
+  sourceRefresh?: SourceRefreshResult;
 }
 
 export interface RipperPaperLoopError {
@@ -50,6 +60,7 @@ export interface RipperPaperLoopResult {
   totalFixtures: number;
   totalPaperApprovals: number;
   totalRejected: number;
+  totalSeenSkipped: number;
   errors: RipperPaperLoopError[];
   cycles: RipperPaperLoopCycleSummary[];
   realTradingLocked: true;
@@ -72,12 +83,14 @@ export async function runRipperPaperLoop(
   const runCycle        = options._runCycle ?? runRipperPaperCycle;
 
   const sessionStartedAt = new Date(getNowMs()).toISOString();
+  const seenContracts    = new Set<string>();
 
   let cyclesAttempted   = 0;
   let cyclesCompleted   = 0;
   let totalFixtures     = 0;
   let totalPaperApprovals = 0;
   let totalRejected     = 0;
+  let totalSeenSkipped  = 0;
   let stoppedByFile     = false;
   let stoppedByError    = false;
   const errors: RipperPaperLoopError[] = [];
@@ -94,6 +107,19 @@ export async function runRipperPaperLoop(
 
     cyclesAttempted += 1;
 
+    // ── Optional source refresh ───────────────────────────────────────────────
+    let sourceRefresh: SourceRefreshResult | undefined;
+    if (options.refreshSource && options._refreshSource) {
+      try {
+        sourceRefresh = await options._refreshSource();
+      } catch (err) {
+        sourceRefresh = {
+          success: false,
+          note: err instanceof Error ? err.message : 'source refresh failed',
+        };
+      }
+    }
+
     // ── Run one paper cycle ───────────────────────────────────────────────────
     let cycleResult: RipperPaperCycleResult;
     try {
@@ -102,6 +128,7 @@ export async function runRipperPaperLoop(
         cyclesDir:           options.cyclesDir  ?? DEFAULT_CYCLES_DIR,
         clusterRiskProvider: options.clusterRiskProvider,
         nowMs:               getNowMs(),
+        seenContracts,
       });
     } catch (err) {
       errors.push({
@@ -112,13 +139,14 @@ export async function runRipperPaperLoop(
       break;
     }
 
-    cycles.push({ cycleNumber, result: cycleResult });
+    cycles.push({ cycleNumber, result: cycleResult, sourceRefresh });
     cyclesCompleted      += 1;
     totalFixtures        += cycleResult.fixturesCaptured;
     totalPaperApprovals  += cycleResult.buyApprovedPaper;
     totalRejected        += cycleResult.buyRejected;
+    totalSeenSkipped     += cycleResult.seenSkippedCount;
 
-    options.onCycleComplete?.(cycleResult, cycleNumber);
+    options.onCycleComplete?.(cycleResult, cycleNumber, sourceRefresh);
 
     // ── Sleep between cycles (not after the last one) ─────────────────────────
     const isLastCycle = i === maxCycles - 1;
@@ -145,6 +173,7 @@ export async function runRipperPaperLoop(
     totalFixtures,
     totalPaperApprovals,
     totalRejected,
+    totalSeenSkipped,
     errors,
     cycles,
     realTradingLocked: true,
@@ -161,26 +190,31 @@ export function renderLoopCycleLine(
   result: RipperPaperCycleResult,
   cycleNumber: number,
   maxCycles: number,
+  sourceRefresh?: SourceRefreshResult,
 ): string {
   const pad = (n: number) => String(n).padStart(2);
   const num = `[${pad(cycleNumber)}/${pad(maxCycles)}]`;
+  const refreshTag = sourceRefresh
+    ? ` refresh=${sourceRefresh.success ? 'OK' : 'FAIL'}`
+    : '';
+  const dupTag = result.seenSkippedCount > 0 ? ` dup=${result.seenSkippedCount}` : '';
 
   if (result.captureSkipped) {
     return (
-      `  ${num}  skip — ${result.captureSkipReason ?? 'no fresh signals'}` +
-      `  | locked=true tradingExecuted=0`
+      `  ${num}${refreshTag}  skip — ${result.captureSkipReason ?? 'no fresh signals'}` +
+      `${dupTag}  | locked=true tradingExecuted=0`
     );
   }
 
   const cr = result.clusterRiskCounts;
   return (
-    `  ${num}` +
+    `  ${num}${refreshTag}` +
     `  signals=${result.feedSignalsWritten}` +
     `  fixtures=${result.fixturesCaptured}` +
     `  approved=${result.buyApprovedPaper}` +
     `  rejected=${result.buyRejected}` +
     `  CLEAN=${cr.CLEAN} WATCH=${cr.WATCH} RISKY=${cr.RISKY} UNK=${cr.UNKNOWN}` +
-    `  locked=true tradingExecuted=0` +
+    `${dupTag}  locked=true tradingExecuted=0` +
     (result.outputPath ? `\n         artifact: ${result.outputPath}` : '')
   );
 }
@@ -206,6 +240,7 @@ export function renderRipperPaperLoopResult(
   lines.push(`  Total fixtures  : ${result.totalFixtures}`);
   lines.push(`  Paper approvals : ${result.totalPaperApprovals}`);
   lines.push(`  Total rejected  : ${result.totalRejected}`);
+  lines.push(`  Seen/deduped    : ${result.totalSeenSkipped}`);
   lines.push('');
 
   const stopReason = result.stoppedByFile
@@ -244,6 +279,7 @@ Options:
   --max-cycles <n>         stop after this many cycles (default: 10)
   --cycles-dir <path>      directory for cycle artifacts (default: data/token-grab/ripper/cycles)
   --stop-file <path>       if this file exists at cycle start, exit cleanly
+  --refresh-source         run one dex-day-watch cycle before each ripper cycle
   --help                   show this message
 
 Stop mechanisms:

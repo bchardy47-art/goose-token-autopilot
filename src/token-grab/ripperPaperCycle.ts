@@ -4,6 +4,7 @@ import type { ClusterRisk } from './dexRipperEngine';
 import { runFreshPoolFeed } from './freshPoolFeed';
 import { runLiveFixtureCapture, type LiveRipperFixture } from './liveFixtureCapture';
 import type { ClusterRiskProvider } from './clusterRiskProvider';
+import type { RipperEarSignal } from './ripperEars';
 
 const DEFAULT_RUNS_DIR   = 'data/token-grab/dex-watch-runs';
 const DEFAULT_CYCLES_DIR = 'data/token-grab/ripper/cycles';
@@ -15,6 +16,8 @@ export interface RipperPaperCycleOptions {
   cyclesDir?: string;
   clusterRiskProvider?: ClusterRiskProvider;
   nowMs?: number;
+  /** Session-level dedupe set — mutated in place; contracts processed this cycle are added */
+  seenContracts?: Set<string>;
 }
 
 export interface RipperPaperCycleResult {
@@ -29,6 +32,7 @@ export interface RipperPaperCycleResult {
   bubblemapsProviderCount: number;
   buyApprovedPaper: number;
   buyRejected: number;
+  seenSkippedCount: number;
   outputPath: string | null;
   feedOutputPath: string;
   realTradingLocked: true;
@@ -57,6 +61,11 @@ function getClusterRisk(f: LiveRipperFixture): ClusterRisk {
 function isBubblemapsProvider(f: LiveRipperFixture): boolean {
   const raw = f.raw as Record<string, unknown> | undefined;
   return (raw?.['clusterProvider'] as string | undefined) === 'bubblemaps';
+}
+
+/** Stable identity key for session-level dedupe. Prefers the on-chain mint address. */
+function signalKey(s: RipperEarSignal): string {
+  return s.contract ?? s.tokenAddress ?? s.poolAddress ?? s.id;
 }
 
 // ── Orchestrator ──────────────────────────────────────────────────────────────
@@ -104,6 +113,45 @@ export async function runRipperPaperCycle(
       bubblemapsProviderCount: 0,
       buyApprovedPaper:    0,
       buyRejected:         0,
+      seenSkippedCount:    0,
+      outputPath:          null,
+      feedOutputPath,
+      ...safetyFields,
+    };
+  }
+
+  // ── Step 2b: session dedupe — filter signals already seen this session ────
+  let effectiveSignals = feedResult.signals;
+  let seenSkippedCount = 0;
+
+  if (options.seenContracts && options.seenContracts.size > 0) {
+    const newSignals = feedResult.signals.filter(s => !options.seenContracts!.has(signalKey(s)));
+    seenSkippedCount = feedResult.signals.length - newSignals.length;
+
+    if (seenSkippedCount > 0) {
+      effectiveSignals = newSignals;
+      try {
+        fs.writeFileSync(feedOutputPath, JSON.stringify({ signals: newSignals }, null, 2), 'utf-8');
+      } catch {
+        // non-fatal: capture will read missing/stale file and return 0 fixtures
+      }
+    }
+  }
+
+  if (effectiveSignals.length === 0) {
+    return {
+      cycleStartedAt,
+      cycleSlug,
+      feedSignalsWritten:  feedResult.signalsWritten,
+      feedSkippedOldCount: feedResult.skippedOldCount,
+      captureSkipped:      true,
+      captureSkipReason:   `all ${seenSkippedCount} signals already seen in this session`,
+      fixturesCaptured:    0,
+      clusterRiskCounts:   { CLEAN: 0, WATCH: 0, RISKY: 0, UNKNOWN: 0 },
+      bubblemapsProviderCount: 0,
+      buyApprovedPaper:    0,
+      buyRejected:         0,
+      seenSkippedCount,
       outputPath:          null,
       feedOutputPath,
       ...safetyFields,
@@ -133,6 +181,13 @@ export async function runRipperPaperCycle(
     else buyRejected += 1;
   }
 
+  // Mark all processed contracts as seen for the rest of this session
+  if (options.seenContracts) {
+    for (const s of effectiveSignals) {
+      options.seenContracts.add(signalKey(s));
+    }
+  }
+
   return {
     cycleStartedAt,
     cycleSlug,
@@ -144,6 +199,7 @@ export async function runRipperPaperCycle(
     bubblemapsProviderCount,
     buyApprovedPaper,
     buyRejected,
+    seenSkippedCount,
     outputPath:    captureResult.capturedCount > 0 ? fixtureOutputPath : null,
     feedOutputPath,
     ...safetyFields,
