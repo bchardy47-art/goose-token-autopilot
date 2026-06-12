@@ -33,6 +33,8 @@ export interface RipperPaperCycleResult {
   buyApprovedPaper: number;
   buyRejected: number;
   seenSkippedCount: number;
+  /** Fixtures that were TOO_EARLY and not added to seenContracts — will be rechecked next cycle */
+  tooEarlyRecheckableCount: number;
   outputPath: string | null;
   feedOutputPath: string;
   realTradingLocked: true;
@@ -66,6 +68,19 @@ function isBubblemapsProvider(f: LiveRipperFixture): boolean {
 /** Stable identity key for session-level dedupe. Prefers the on-chain mint address. */
 function signalKey(s: RipperEarSignal): string {
   return s.contract ?? s.tokenAddress ?? s.poolAddress ?? s.id;
+}
+
+/**
+ * Returns true when a fixture was rejected ONLY because the token is too young
+ * (launchAgeBucket === 'TOO_EARLY' and every blocker is age-related).
+ * These candidates should NOT be added to the permanent seenContracts set —
+ * they become eligible again once they age into the prime window.
+ */
+function isRecheckableTooEarly(f: LiveRipperFixture): boolean {
+  if (f.launchAgeBucket !== 'TOO_EARLY') return false;
+  return f.blockers.every(
+    b => b.startsWith('too early') || b.startsWith('launch age TOO_EARLY'),
+  );
 }
 
 // ── Orchestrator ──────────────────────────────────────────────────────────────
@@ -114,6 +129,7 @@ export async function runRipperPaperCycle(
       buyApprovedPaper:    0,
       buyRejected:         0,
       seenSkippedCount:    0,
+      tooEarlyRecheckableCount: 0,
       outputPath:          null,
       feedOutputPath,
       ...safetyFields,
@@ -152,6 +168,7 @@ export async function runRipperPaperCycle(
       buyApprovedPaper:    0,
       buyRejected:         0,
       seenSkippedCount,
+      tooEarlyRecheckableCount: 0,
       outputPath:          null,
       feedOutputPath,
       ...safetyFields,
@@ -181,11 +198,19 @@ export async function runRipperPaperCycle(
     else buyRejected += 1;
   }
 
-  // Mark all processed contracts as seen for the rest of this session
+  // Mark processed contracts as seen — skip recheckable TOO_EARLY fixtures so they can
+  // age into the prime window and be evaluated again in a later cycle.
+  let tooEarlyRecheckableCount = 0;
   if (options.seenContracts) {
-    for (const s of effectiveSignals) {
-      options.seenContracts.add(signalKey(s));
+    for (const f of captureResult.fixtures) {
+      if (isRecheckableTooEarly(f)) {
+        tooEarlyRecheckableCount += 1;
+      } else {
+        options.seenContracts.add(signalKey(f.normalizedSignal));
+      }
     }
+  } else {
+    tooEarlyRecheckableCount = captureResult.fixtures.filter(isRecheckableTooEarly).length;
   }
 
   return {
@@ -200,6 +225,7 @@ export async function runRipperPaperCycle(
     buyApprovedPaper,
     buyRejected,
     seenSkippedCount,
+    tooEarlyRecheckableCount,
     outputPath:    captureResult.capturedCount > 0 ? fixtureOutputPath : null,
     feedOutputPath,
     ...safetyFields,

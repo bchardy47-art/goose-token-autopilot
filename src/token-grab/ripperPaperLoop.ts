@@ -61,6 +61,8 @@ export interface RipperPaperLoopResult {
   totalPaperApprovals: number;
   totalRejected: number;
   totalSeenSkipped: number;
+  /** Total TOO_EARLY fixtures not permanently deduped — eligible for recheck next cycle */
+  totalTooEarlyRecheckable: number;
   errors: RipperPaperLoopError[];
   cycles: RipperPaperLoopCycleSummary[];
   realTradingLocked: true;
@@ -91,6 +93,7 @@ export async function runRipperPaperLoop(
   let totalPaperApprovals = 0;
   let totalRejected     = 0;
   let totalSeenSkipped  = 0;
+  let totalTooEarlyRecheckable = 0;
   let stoppedByFile     = false;
   let stoppedByError    = false;
   const errors: RipperPaperLoopError[] = [];
@@ -141,10 +144,11 @@ export async function runRipperPaperLoop(
 
     cycles.push({ cycleNumber, result: cycleResult, sourceRefresh });
     cyclesCompleted      += 1;
-    totalFixtures        += cycleResult.fixturesCaptured;
-    totalPaperApprovals  += cycleResult.buyApprovedPaper;
-    totalRejected        += cycleResult.buyRejected;
-    totalSeenSkipped     += cycleResult.seenSkippedCount;
+    totalFixtures             += cycleResult.fixturesCaptured;
+    totalPaperApprovals       += cycleResult.buyApprovedPaper;
+    totalRejected             += cycleResult.buyRejected;
+    totalSeenSkipped          += cycleResult.seenSkippedCount;
+    totalTooEarlyRecheckable  += cycleResult.tooEarlyRecheckableCount;
 
     options.onCycleComplete?.(cycleResult, cycleNumber, sourceRefresh);
 
@@ -174,6 +178,7 @@ export async function runRipperPaperLoop(
     totalPaperApprovals,
     totalRejected,
     totalSeenSkipped,
+    totalTooEarlyRecheckable,
     errors,
     cycles,
     realTradingLocked: true,
@@ -197,12 +202,13 @@ export function renderLoopCycleLine(
   const refreshTag = sourceRefresh
     ? ` refresh=${sourceRefresh.success ? 'OK' : 'FAIL'}`
     : '';
-  const dupTag = result.seenSkippedCount > 0 ? ` dup=${result.seenSkippedCount}` : '';
+  const dupTag     = result.seenSkippedCount > 0 ? ` dup=${result.seenSkippedCount}` : '';
+  const recheckTag = result.tooEarlyRecheckableCount > 0 ? ` recheck=${result.tooEarlyRecheckableCount}` : '';
 
   if (result.captureSkipped) {
     return (
       `  ${num}${refreshTag}  skip — ${result.captureSkipReason ?? 'no fresh signals'}` +
-      `${dupTag}  | locked=true tradingExecuted=0`
+      `${dupTag}${recheckTag}  | locked=true tradingExecuted=0`
     );
   }
 
@@ -214,7 +220,7 @@ export function renderLoopCycleLine(
     `  approved=${result.buyApprovedPaper}` +
     `  rejected=${result.buyRejected}` +
     `  CLEAN=${cr.CLEAN} WATCH=${cr.WATCH} RISKY=${cr.RISKY} UNK=${cr.UNKNOWN}` +
-    `${dupTag}  locked=true tradingExecuted=0` +
+    `${dupTag}${recheckTag}  locked=true tradingExecuted=0` +
     (result.outputPath ? `\n         artifact: ${result.outputPath}` : '')
   );
 }
@@ -241,6 +247,7 @@ export function renderRipperPaperLoopResult(
   lines.push(`  Paper approvals : ${result.totalPaperApprovals}`);
   lines.push(`  Total rejected  : ${result.totalRejected}`);
   lines.push(`  Seen/deduped    : ${result.totalSeenSkipped}`);
+  lines.push(`  Too-early recheck: ${result.totalTooEarlyRecheckable}`);
   lines.push('');
 
   const stopReason = result.stoppedByFile

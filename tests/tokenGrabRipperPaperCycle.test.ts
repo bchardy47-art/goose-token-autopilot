@@ -13,6 +13,7 @@ import { offlineClusterRiskProvider } from '../src/token-grab/clusterRiskProvide
 
 const NOW_MS       = 1_700_000_000_000;
 const NOW_ISO      = new Date(NOW_MS).toISOString();
+const ONE_MIN_AGO    = new Date(NOW_MS - 1  * 60_000).toISOString();
 const EIGHT_MIN_AGO  = new Date(NOW_MS - 8  * 60_000).toISOString();
 const THIRTY_MIN_AGO = new Date(NOW_MS - 30 * 60_000).toISOString();
 const TWO_HR_AGO     = new Date(NOW_MS - 120 * 60_000).toISOString();
@@ -355,6 +356,163 @@ describe('runRipperPaperCycle — mixed fresh and stale', () => {
     expect(result.feedSignalsWritten).toBe(1);
     expect(result.feedSkippedOldCount).toBe(2);
     expect(result.fixturesCaptured).toBe(1);
+  });
+});
+
+// ── recheck-aware session dedupe ──────────────────────────────────────────────
+
+describe('runRipperPaperCycle — recheck-aware dedupe', () => {
+  it('TOO_EARLY signal is not added to seenContracts', async () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([
+        makeOutcome({ contract: 'TooEarlyToken', observedAt: ONE_MIN_AGO }),
+      ]),
+    });
+    const seenContracts = new Set<string>();
+    await runRipperPaperCycle({
+      runsDir,
+      cyclesDir: path.join(tmpDir, 'cycles'),
+      nowMs: NOW_MS,
+      clusterRiskProvider: offlineClusterRiskProvider,
+      seenContracts,
+    });
+    expect(seenContracts.has('TooEarlyToken')).toBe(false);
+    expect(seenContracts.size).toBe(0);
+  });
+
+  it('tooEarlyRecheckableCount is 1 for a TOO_EARLY signal', async () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([
+        makeOutcome({ contract: 'TooEarlyToken', observedAt: ONE_MIN_AGO }),
+      ]),
+    });
+    const result = await runRipperPaperCycle({
+      runsDir,
+      cyclesDir: path.join(tmpDir, 'cycles'),
+      nowMs: NOW_MS,
+      clusterRiskProvider: offlineClusterRiskProvider,
+    });
+    expect(result.tooEarlyRecheckableCount).toBe(1);
+  });
+
+  it('PRIME_WINDOW signal IS added to seenContracts', async () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([
+        makeOutcome({ contract: 'PrimeToken', observedAt: EIGHT_MIN_AGO }),
+      ]),
+    });
+    const seenContracts = new Set<string>();
+    await runRipperPaperCycle({
+      runsDir,
+      cyclesDir: path.join(tmpDir, 'cycles'),
+      nowMs: NOW_MS,
+      clusterRiskProvider: offlineClusterRiskProvider,
+      seenContracts,
+    });
+    expect(seenContracts.has('PrimeToken')).toBe(true);
+  });
+
+  it('tooEarlyRecheckableCount is 0 for a PRIME_WINDOW signal', async () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([
+        makeOutcome({ contract: 'PrimeToken', observedAt: EIGHT_MIN_AGO }),
+      ]),
+    });
+    const result = await runRipperPaperCycle({
+      runsDir,
+      cyclesDir: path.join(tmpDir, 'cycles'),
+      nowMs: NOW_MS,
+      clusterRiskProvider: offlineClusterRiskProvider,
+    });
+    expect(result.tooEarlyRecheckableCount).toBe(0);
+  });
+
+  it('TOO_EARLY candidate is processed again in later cycle when time advances', async () => {
+    const contract = 'TimeAdvancingToken';
+    const runsDir  = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([
+        makeOutcome({ contract, observedAt: ONE_MIN_AGO }),
+      ]),
+    });
+    const cyclesDir     = path.join(tmpDir, 'cycles');
+    const seenContracts = new Set<string>();
+
+    // Cycle 1: token is 1 min old → TOO_EARLY → NOT added to seenContracts
+    const r1 = await runRipperPaperCycle({
+      runsDir, cyclesDir, nowMs: NOW_MS, seenContracts,
+      clusterRiskProvider: offlineClusterRiskProvider,
+    });
+    expect(r1.tooEarlyRecheckableCount).toBe(1);
+    expect(seenContracts.has(contract)).toBe(false);
+
+    // Cycle 2: 7 minutes later, token is 8 min old → PRIME_WINDOW → processed normally
+    const laterMs = NOW_MS + 7 * 60_000;
+    const r2 = await runRipperPaperCycle({
+      runsDir, cyclesDir, nowMs: laterMs, seenContracts,
+      clusterRiskProvider: offlineClusterRiskProvider,
+    });
+    expect(r2.seenSkippedCount).toBe(0);   // not deduped — seenContracts was empty
+    expect(r2.fixturesCaptured).toBe(1);   // processed again
+    expect(r2.tooEarlyRecheckableCount).toBe(0);
+    expect(seenContracts.has(contract)).toBe(true); // added after PRIME_WINDOW processing
+  });
+
+  it('mixed: TOO_EARLY not deduped, PRIME_WINDOW deduped', async () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([
+        makeOutcome({ contract: 'TooEarlyToken', observedAt: ONE_MIN_AGO }),
+        makeOutcome({ contract: 'PrimeToken',    observedAt: EIGHT_MIN_AGO }),
+      ]),
+    });
+    const seenContracts = new Set<string>();
+    const result = await runRipperPaperCycle({
+      runsDir,
+      cyclesDir: path.join(tmpDir, 'cycles'),
+      nowMs: NOW_MS,
+      clusterRiskProvider: offlineClusterRiskProvider,
+      seenContracts,
+    });
+    expect(result.tooEarlyRecheckableCount).toBe(1);
+    expect(seenContracts.has('TooEarlyToken')).toBe(false);
+    expect(seenContracts.has('PrimeToken')).toBe(true);
+  });
+
+  it('tooEarlyRecheckableCount is 0 on all early-return paths', async () => {
+    // No run files → early return from feed missing
+    const r1 = await runRipperPaperCycle({
+      runsDir:   path.join(tmpDir, 'no-such-dir'),
+      cyclesDir: path.join(tmpDir, 'cycles'),
+      nowMs:     NOW_MS,
+    });
+    expect(r1.tooEarlyRecheckableCount).toBe(0);
+
+    // Stale signals → early return from 0 feed signals
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([makeOutcome({ observedAt: TWO_HR_AGO })]),
+    });
+    const r2 = await runRipperPaperCycle({
+      runsDir, cyclesDir: path.join(tmpDir, 'cycles'), nowMs: NOW_MS,
+    });
+    expect(r2.tooEarlyRecheckableCount).toBe(0);
+  });
+
+  it('safety fields remain true regardless of TOO_EARLY status', async () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([
+        makeOutcome({ contract: 'TooEarlyToken', observedAt: ONE_MIN_AGO }),
+      ]),
+    });
+    const result = await runRipperPaperCycle({
+      runsDir,
+      cyclesDir: path.join(tmpDir, 'cycles'),
+      nowMs: NOW_MS,
+      clusterRiskProvider: offlineClusterRiskProvider,
+    });
+    expect(result.realTradingLocked).toBe(true);
+    expect(result.tradingExecuted).toBe(0);
+    expect(result.noRealTradeSent).toBe(true);
+    expect(result.paperOnly).toBe(true);
+    expect(result.readOnly).toBe(true);
   });
 });
 
