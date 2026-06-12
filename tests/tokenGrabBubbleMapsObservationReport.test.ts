@@ -76,22 +76,22 @@ describe('runBubbleMapsObservationReport', () => {
     expect(result.readOnly).toBe(true);
   });
 
-  it('counts providers, risks, fetch errors, and latest checkedAt', () => {
+  it('counts providers, risks, fetch errors, timestamps, and age buckets', () => {
     const p = tmpJsonl();
-    appendFixtureToJsonl(makeFixture({ id: 'a' }, {
+    appendFixtureToJsonl(makeFixture({ id: 'a', capturedAt: '2026-06-12T03:55:00Z' }, {
       clusterProvider: 'bubblemaps',
       clusterRisk: 'CLEAN',
-      clusterCheckedAt: '2026-06-12T03:01:00Z',
+      clusterCheckedAt: '2026-06-12T03:56:00Z',
       clusterNotes: ['bubbleMapsScore 83.2'],
     }), p);
-    appendFixtureToJsonl(makeFixture({ id: 'b', buyGateDecision: 'BUY_REJECTED' }, {
+    appendFixtureToJsonl(makeFixture({ id: 'b', capturedAt: '2026-06-12T03:30:00Z', buyGateDecision: 'BUY_REJECTED' }, {
       contract: 'MintBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
       clusterProvider: 'offline',
       clusterRisk: 'UNKNOWN',
-      clusterCheckedAt: '2026-06-12T03:02:00Z',
+      clusterCheckedAt: '2026-06-12T03:31:00Z',
       clusterNotes: ['cluster data not available (offline provider)'],
     }), p);
-    appendFixtureToJsonl(makeFixture({ id: 'c' }, {
+    appendFixtureToJsonl(makeFixture({ id: 'c', capturedAt: '2026-06-11T03:00:00Z' }, {
       contract: 'MintCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC',
       clusterProvider: 'bubblemaps',
       clusterRisk: 'WATCH',
@@ -103,16 +103,50 @@ describe('runBubbleMapsObservationReport', () => {
     const result = runBubbleMapsObservationReport({ inputPath: p, generatedAt: '2026-06-12T04:00:00Z' });
     expect(result.inputMissing).toBe(false);
     expect(result.totalFixtures).toBe(3);
+    expect(result.newestCaptureAt).toBe('2026-06-12T03:55:00Z');
+    expect(result.oldestCaptureAt).toBe('2026-06-11T03:00:00Z');
+    expect(result.ageBucketCounts.last15Minutes).toBe(1);
+    expect(result.ageBucketCounts.last1Hour).toBe(1);
+    expect(result.ageBucketCounts.last24Hours).toBe(0);
+    expect(result.ageBucketCounts.olderThan24Hours).toBe(1);
+    expect(result.ageBucketCounts.unknown).toBe(0);
     expect(result.bubblemapsProviderCount).toBe(2);
     expect(result.offlineProviderCount).toBe(1);
     expect(result.clusterRiskCounts.CLEAN).toBe(1);
     expect(result.clusterRiskCounts.WATCH).toBe(1);
     expect(result.clusterRiskCounts.UNKNOWN).toBe(1);
     expect(result.clusterFetchErrorCount).toBe(1);
-    expect(result.latestClusterCheckedAt).toBe('2026-06-12T03:03:00Z');
+    expect(result.latestClusterCheckedAt).toBe('2026-06-12T03:56:00Z');
     expect(result.sampleRecentRows).toHaveLength(3);
     expect(result.sampleRecentRows[0].clusterProvider).toBe('bubblemaps');
-    expect(result.sampleRecentRows[0].clusterNotesSummary).toContain('BubbleMaps HTTP 404');
+    expect(result.sampleRecentRows[0].clusterNotesSummary).toContain('bubbleMapsScore 83.2');
+  });
+
+  it('supports sinceMinutes filter for fresh-only summaries', () => {
+    const p = tmpJsonl();
+    appendFixtureToJsonl(makeFixture({ id: 'fresh', capturedAt: '2026-06-12T03:55:00Z' }, {
+      clusterProvider: 'bubblemaps',
+      clusterRisk: 'CLEAN',
+      clusterCheckedAt: '2026-06-12T03:56:00Z',
+    }), p);
+    appendFixtureToJsonl(makeFixture({ id: 'stale', capturedAt: '2026-06-12T01:00:00Z' }, {
+      clusterProvider: 'bubblemaps',
+      clusterRisk: 'WATCH',
+      clusterCheckedAt: '2026-06-12T01:01:00Z',
+    }), p);
+
+    const result = runBubbleMapsObservationReport({
+      inputPath: p,
+      generatedAt: '2026-06-12T04:00:00Z',
+      sinceMinutes: 15,
+    });
+
+    expect(result.sinceMinutes).toBe(15);
+    expect(result.totalFixtures).toBe(1);
+    expect(result.clusterRiskCounts.CLEAN).toBe(1);
+    expect(result.clusterRiskCounts.WATCH).toBe(0);
+    expect(result.newestCaptureAt).toBe('2026-06-12T03:55:00Z');
+    expect(result.oldestCaptureAt).toBe('2026-06-12T03:55:00Z');
   });
 
   it('shortens contract and preserves safety flags in sample rows', () => {
@@ -136,7 +170,17 @@ describe('renderBubbleMapsObservationReport', () => {
       inputPath: 'data/token-grab/ripper/live-fixtures.jsonl',
       inputMissing: false,
       generatedAt: '2026-06-12T04:00:00Z',
+      sinceMinutes: null,
       totalFixtures: 3,
+      newestCaptureAt: '2026-06-12T03:55:00Z',
+      oldestCaptureAt: '2026-06-11T03:00:00Z',
+      ageBucketCounts: {
+        last15Minutes: 1,
+        last1Hour: 1,
+        last24Hours: 0,
+        olderThan24Hours: 1,
+        unknown: 0,
+      },
       bubblemapsProviderCount: 2,
       offlineProviderCount: 1,
       clusterRiskCounts: { CLEAN: 1, WATCH: 1, RISKY: 0, UNKNOWN: 1 },
@@ -169,13 +213,23 @@ describe('renderBubbleMapsObservationReport', () => {
     expect(out).toContain('tradingExecuted=0');
   });
 
-  it('renders summary counts and sample rows', () => {
+  it('renders summary counts, freshness context, and sample rows', () => {
     const out = renderBubbleMapsObservationReport(makeResult());
     expect(out).toContain('BUBBLEMAPS OBSERVATION REPORT');
     expect(out).toContain('Provider=bubblemaps');
+    expect(out).toContain('Newest capture');
+    expect(out).toContain('Oldest capture');
+    expect(out).toContain('older than 24h');
+    expect(out).toContain('use --since-minutes for fresh validation');
     expect(out).toContain('CLEAN');
     expect(out).toContain('bubbleMapsScore 83.2');
     expect(out).toContain('BUY_APPROVED_PAPER');
+  });
+
+  it('shows active sinceMinutes filter when provided', () => {
+    const out = renderBubbleMapsObservationReport(makeResult({ sinceMinutes: 15, ageBucketCounts: { last15Minutes: 1, last1Hour: 0, last24Hours: 0, olderThan24Hours: 0, unknown: 0 } }));
+    expect(out).toContain('captured within last 15 minute(s)');
+    expect(out).not.toContain('predate current BubbleMaps gate behavior');
   });
 
   it('includes safety footer confirming no trading', () => {

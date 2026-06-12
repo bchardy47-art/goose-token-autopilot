@@ -5,6 +5,7 @@ import type { ClusterRisk } from './dexRipperEngine';
 export interface BubbleMapsObservationReportOptions {
   inputPath?: string;
   generatedAt?: string;
+  sinceMinutes?: number;
 }
 
 export interface BubbleMapsObservationRow {
@@ -22,7 +23,17 @@ export interface BubbleMapsObservationReportResult {
   inputPath: string;
   inputMissing: boolean;
   generatedAt: string;
+  sinceMinutes: number | null;
   totalFixtures: number;
+  newestCaptureAt: string | null;
+  oldestCaptureAt: string | null;
+  ageBucketCounts: {
+    last15Minutes: number;
+    last1Hour: number;
+    last24Hours: number;
+    olderThan24Hours: number;
+    unknown: number;
+  };
   bubblemapsProviderCount: number;
   offlineProviderCount: number;
   clusterRiskCounts: Record<ClusterRisk, number>;
@@ -96,15 +107,33 @@ function shortenContract(contract: string): string {
   return `${contract.slice(0, 4)}…${contract.slice(-4)}`;
 }
 
+function toTimeMs(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
 export function runBubbleMapsObservationReport(
   options: BubbleMapsObservationReportOptions = {},
 ): BubbleMapsObservationReportResult {
   const inputPath = options.inputPath ?? DEFAULT_INPUT;
   const generatedAt = options.generatedAt ?? new Date().toISOString();
+  const sinceMinutes = options.sinceMinutes ?? null;
   const emptyCounts: Record<ClusterRisk, number> = { CLEAN: 0, WATCH: 0, RISKY: 0, UNKNOWN: 0 };
+  const generatedAtMs = toTimeMs(generatedAt);
 
   const base: Omit<BubbleMapsObservationReportResult, 'inputPath' | 'inputMissing' | 'generatedAt'> = {
+    sinceMinutes,
     totalFixtures: 0,
+    newestCaptureAt: null,
+    oldestCaptureAt: null,
+    ageBucketCounts: {
+      last15Minutes: 0,
+      last1Hour: 0,
+      last24Hours: 0,
+      olderThan24Hours: 0,
+      unknown: 0,
+    },
     bubblemapsProviderCount: 0,
     offlineProviderCount: 0,
     clusterRiskCounts: { ...emptyCounts },
@@ -121,7 +150,18 @@ export function runBubbleMapsObservationReport(
     return { inputPath, inputMissing: true, generatedAt, ...base };
   }
 
-  const fixtures = readFixturesFromJsonl(inputPath);
+  const allFixtures = readFixturesFromJsonl(inputPath);
+  const sinceCutoffMs = sinceMinutes != null && generatedAtMs != null
+    ? generatedAtMs - sinceMinutes * 60_000
+    : null;
+
+  const fixtures = sinceCutoffMs == null
+    ? allFixtures
+    : allFixtures.filter(f => {
+        const capturedMs = toTimeMs(f.capturedAt);
+        return capturedMs != null && capturedMs >= sinceCutoffMs;
+      });
+
   base.totalFixtures = fixtures.length;
 
   for (const f of fixtures) {
@@ -134,6 +174,25 @@ export function runBubbleMapsObservationReport(
     const checkedAt = getClusterCheckedAt(f);
     if (checkedAt && (!base.latestClusterCheckedAt || checkedAt > base.latestClusterCheckedAt)) {
       base.latestClusterCheckedAt = checkedAt;
+    }
+
+    const capturedAt = typeof f.capturedAt === 'string' && f.capturedAt.trim() ? f.capturedAt : null;
+    if (capturedAt && (!base.newestCaptureAt || capturedAt > base.newestCaptureAt)) {
+      base.newestCaptureAt = capturedAt;
+    }
+    if (capturedAt && (!base.oldestCaptureAt || capturedAt < base.oldestCaptureAt)) {
+      base.oldestCaptureAt = capturedAt;
+    }
+
+    const capturedMs = toTimeMs(capturedAt);
+    if (capturedMs == null || generatedAtMs == null) {
+      base.ageBucketCounts.unknown++;
+    } else {
+      const ageMinutes = (generatedAtMs - capturedMs) / 60_000;
+      if (ageMinutes <= 15) base.ageBucketCounts.last15Minutes++;
+      else if (ageMinutes <= 60) base.ageBucketCounts.last1Hour++;
+      else if (ageMinutes <= 24 * 60) base.ageBucketCounts.last24Hours++;
+      else base.ageBucketCounts.olderThan24Hours++;
     }
   }
 
@@ -179,12 +238,31 @@ export function renderBubbleMapsObservationReport(result: BubbleMapsObservationR
 
   lines.push(`  Generated              : ${result.generatedAt}`);
   lines.push(`  Input                  : ${result.inputPath}`);
+  if (result.sinceMinutes != null) {
+    lines.push(`  Filter                 : captured within last ${result.sinceMinutes} minute(s)`);
+  }
   lines.push(`  Total fixtures         : ${result.totalFixtures}`);
+  lines.push(`  Newest capture         : ${result.newestCaptureAt ?? 'n/a'}`);
+  lines.push(`  Oldest capture         : ${result.oldestCaptureAt ?? 'n/a'}`);
   lines.push(`  Provider=bubblemaps    : ${result.bubblemapsProviderCount}`);
   lines.push(`  Provider=offline       : ${result.offlineProviderCount}`);
   lines.push(`  clusterFetchError count: ${result.clusterFetchErrorCount}`);
   lines.push(`  Latest clusterCheckedAt: ${result.latestClusterCheckedAt ?? 'n/a'}`);
   lines.push('');
+
+  lines.push('  FIXTURE AGE BUCKETS');
+  lines.push(`    last 15 minutes : ${result.ageBucketCounts.last15Minutes}`);
+  lines.push(`    last 1 hour     : ${result.ageBucketCounts.last1Hour}`);
+  lines.push(`    last 24 hours   : ${result.ageBucketCounts.last24Hours}`);
+  lines.push(`    older than 24h  : ${result.ageBucketCounts.olderThan24Hours}`);
+  lines.push(`    unknown         : ${result.ageBucketCounts.unknown}`);
+  lines.push('');
+
+  if (result.ageBucketCounts.olderThan24Hours > 0 && result.sinceMinutes == null) {
+    lines.push('  NOTE');
+    lines.push('  Older fixtures may predate current BubbleMaps gate behavior; use --since-minutes for fresh validation.');
+    lines.push('');
+  }
 
   lines.push('  CLUSTER RISK COUNTS');
   for (const risk of ['CLEAN', 'WATCH', 'RISKY', 'UNKNOWN'] as const) {
