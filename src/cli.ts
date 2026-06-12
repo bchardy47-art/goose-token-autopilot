@@ -2924,7 +2924,10 @@ async function main(): Promise<void> {
           break;
         }
         const bmorInput = getArgValue('--input') ?? 'data/token-grab/ripper/live-fixtures.jsonl';
-        const bmorResult = runBubbleMapsObservationReport({ inputPath: bmorInput });
+        const bmorSinceMinutes = getArgValue('--since-minutes') != null
+          ? parseNumberArg('--since-minutes', 0, { min: 0 })
+          : undefined;
+        const bmorResult = runBubbleMapsObservationReport({ inputPath: bmorInput, sinceMinutes: bmorSinceMinutes });
         console.log(renderBubbleMapsObservationReport(bmorResult));
         break;
       }
