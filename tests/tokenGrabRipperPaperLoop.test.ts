@@ -760,6 +760,49 @@ describe('renderLoopCycleLine — refresh and dup tags', () => {
   });
 });
 
+// ── firstSeen map passthrough ─────────────────────────────────────────────────
+
+describe('runRipperPaperLoop — firstSeen map passthrough', () => {
+  it('passes the same firstSeenMap instance to each cycle', async () => {
+    const receivedMaps: Array<Map<string, string> | undefined> = [];
+
+    await runRipperPaperLoop({
+      runsDir:   path.join(tmpDir, 'any'),
+      cyclesDir: path.join(tmpDir, 'cycles'),
+      maxCycles: 3,
+      sleep:     noSleep,
+      getNowMs:  makeClockFn(),
+      _runCycle: async (opts) => {
+        receivedMaps.push(opts.firstSeenMap);
+        return makeFakeCycleResult();
+      },
+    });
+
+    expect(receivedMaps).toHaveLength(3);
+    expect(receivedMaps.every(m => m instanceof Map)).toBe(true);
+    expect(receivedMaps[0]).toBe(receivedMaps[1]);
+    expect(receivedMaps[1]).toBe(receivedMaps[2]);
+  });
+
+  it('firstSeenMap starts empty at session start', async () => {
+    const receivedMaps: Array<Map<string, string>> = [];
+
+    await runRipperPaperLoop({
+      runsDir:   path.join(tmpDir, 'any'),
+      cyclesDir: path.join(tmpDir, 'cycles'),
+      maxCycles: 1,
+      sleep:     noSleep,
+      getNowMs:  makeClockFn(),
+      _runCycle: async (opts) => {
+        if (opts.firstSeenMap) receivedMaps.push(opts.firstSeenMap);
+        return makeFakeCycleResult();
+      },
+    });
+
+    expect(receivedMaps[0].size).toBe(0);
+  });
+});
+
 describe('renderRipperPaperLoopResult', () => {
   it('contains REAL TRADING LOCKED and safety fields', async () => {
     const result = await runRipperPaperLoop({

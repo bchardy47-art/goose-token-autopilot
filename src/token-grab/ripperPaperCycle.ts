@@ -18,6 +18,8 @@ export interface RipperPaperCycleOptions {
   nowMs?: number;
   /** Session-level dedupe set — mutated in place; contracts processed this cycle are added */
   seenContracts?: Set<string>;
+  /** Session-level first-seen map — key → earliest discoveredAt ISO; mutated in place */
+  firstSeenMap?: Map<string, string>;
 }
 
 export interface RipperPaperCycleResult {
@@ -173,6 +175,43 @@ export async function runRipperPaperCycle(
       feedOutputPath,
       ...safetyFields,
     };
+  }
+
+  // ── Step 2c: anchor discoveredAt to first-seen time ───────────────────────
+  // When --refresh-source rewrites run files, each new dex-day-watch run
+  // stamps fresh observedAt values, resetting discoveredAt to ~now. Without
+  // anchoring, a candidate that was TOO_EARLY last cycle looks TOO_EARLY again
+  // after the refresh even though real elapsed time has accumulated. We pin
+  // discoveredAt to the EARLIEST value recorded for each candidate key so age
+  // grows correctly across cycles.
+  if (options.firstSeenMap && effectiveSignals.length > 0) {
+    let anyNormalized = false;
+    const normalizedSignals = effectiveSignals.map(s => {
+      const key      = signalKey(s);
+      const existing = options.firstSeenMap!.get(key);
+      if (existing) {
+        if (s.discoveredAt !== existing) {
+          anyNormalized = true;
+          return { ...s, discoveredAt: existing };
+        }
+        return s;
+      }
+      options.firstSeenMap!.set(key, s.discoveredAt);
+      return s;
+    });
+
+    if (anyNormalized) {
+      effectiveSignals = normalizedSignals;
+      try {
+        fs.writeFileSync(
+          feedOutputPath,
+          JSON.stringify({ signals: normalizedSignals }, null, 2),
+          'utf-8',
+        );
+      } catch {
+        // non-fatal: age may not normalize correctly this cycle
+      }
+    }
   }
 
   // ── Step 3: live-fixture-capture with BubbleMaps enrichment ──────────────

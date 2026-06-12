@@ -33,7 +33,7 @@ export interface RipperPaperLoopOptions {
   /** Called after each successful cycle completes (used for inline printing) */
   onCycleComplete?: (cycleResult: RipperPaperCycleResult, cycleNumber: number, sourceRefresh?: SourceRefreshResult) => void;
   /** Overrides the cycle runner — for testing error paths only */
-  _runCycle?: (options: { runsDir: string; cyclesDir: string; clusterRiskProvider?: ClusterRiskProvider; nowMs: number; seenContracts?: Set<string> }) => Promise<RipperPaperCycleResult>;
+  _runCycle?: (options: { runsDir: string; cyclesDir: string; clusterRiskProvider?: ClusterRiskProvider; nowMs: number; seenContracts?: Set<string>; firstSeenMap?: Map<string, string> }) => Promise<RipperPaperCycleResult>;
   /** Source refresh function — injected; required when refreshSource=true */
   _refreshSource?: () => Promise<SourceRefreshResult>;
 }
@@ -86,6 +86,7 @@ export async function runRipperPaperLoop(
 
   const sessionStartedAt = new Date(getNowMs()).toISOString();
   const seenContracts    = new Set<string>();
+  const firstSeenMap     = new Map<string, string>();
 
   let cyclesAttempted   = 0;
   let cyclesCompleted   = 0;
@@ -132,6 +133,7 @@ export async function runRipperPaperLoop(
         clusterRiskProvider: options.clusterRiskProvider,
         nowMs:               getNowMs(),
         seenContracts,
+        firstSeenMap,
       });
     } catch (err) {
       errors.push({
