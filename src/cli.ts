@@ -174,6 +174,7 @@ import { runBubbleMapsObservationReport, renderBubbleMapsObservationReport } fro
 import { createClusterRiskProvider } from './token-grab/clusterRiskProvider';
 import { runRipperPaperCycle, renderRipperPaperCycleResult, renderRipperPaperCycleUsage } from './token-grab/ripperPaperCycle';
 import { runRipperPaperLoop, renderLoopCycleLine, renderRipperPaperLoopResult, renderRipperPaperLoopUsage } from './token-grab/ripperPaperLoop';
+import { runRipperNearMissReport as runCycleNearMissReport, renderRipperNearMissReport as renderCycleNearMissReport, renderRipperNearMissReportUsage } from './token-grab/ripperNearMissReport';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -2812,6 +2813,31 @@ async function main(): Promise<void> {
           },
         });
         console.log(renderRipperPaperLoopResult(rplResult, rplMaxCycles));
+        break;
+      }
+
+      case 'token:ripper-near-miss-report': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderRipperNearMissReportUsage());
+          break;
+        }
+        // Collect all paths after --input until the next --flag (supports shell glob expansion)
+        const rnmrInputPaths: string[] = [];
+        const rnmrFlagIdx = process.argv.indexOf('--input');
+        if (rnmrFlagIdx !== -1) {
+          for (let i = rnmrFlagIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rnmrInputPaths.push(process.argv[i]);
+          }
+        }
+        if (rnmrInputPaths.length === 0) {
+          console.error('[token:ripper-near-miss-report] No --input files specified.');
+          console.error(`  Usage: npm run token:ripper-near-miss-report -- --input data/token-grab/ripper/cycles/cycle-*.jsonl`);
+          process.exit(1);
+        }
+        const rnmrTopN = parseNumberArg('--top-n', 20, { integer: true, min: 1 });
+        const rnmrResult = runCycleNearMissReport({ inputPaths: rnmrInputPaths, topN: rnmrTopN });
+        console.log(renderCycleNearMissReport(rnmrResult));
         break;
       }
 

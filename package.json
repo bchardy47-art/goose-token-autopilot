@@ -102,6 +102,7 @@
     "token:fresh-pool-feed": "tsx src/cli.ts token:fresh-pool-feed",
     "token:ripper-paper-cycle": "tsx src/cli.ts token:ripper-paper-cycle",
     "token:ripper-paper-loop": "tsx src/cli.ts token:ripper-paper-loop",
+    "token:ripper-near-miss-report": "tsx src/cli.ts token:ripper-near-miss-report",
     "token:prime-gate-audit": "tsx src/cli.ts token:prime-gate-audit",
     "token:holder-risk-audit": "tsx src/cli.ts token:holder-risk-audit",
     "token:fixture-holder-enrich": "tsx src/cli.ts token:fixture-holder-enrich",
