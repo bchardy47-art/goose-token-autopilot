@@ -173,6 +173,7 @@ import { runClusterRiskAudit, renderClusterRiskAuditReport } from './token-grab/
 import { runBubbleMapsObservationReport, renderBubbleMapsObservationReport } from './token-grab/bubbleMapsObservationReport';
 import { createClusterRiskProvider } from './token-grab/clusterRiskProvider';
 import { runRipperPaperCycle, renderRipperPaperCycleResult, renderRipperPaperCycleUsage } from './token-grab/ripperPaperCycle';
+import { runRipperPaperLoop, renderLoopCycleLine, renderRipperPaperLoopResult, renderRipperPaperLoopUsage } from './token-grab/ripperPaperLoop';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -2745,6 +2746,46 @@ async function main(): Promise<void> {
           clusterRiskProvider: rpcClusterProvider,
         });
         console.log(renderRipperPaperCycleResult(rpcResult));
+        break;
+      }
+
+      case 'token:ripper-paper-loop': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderRipperPaperLoopUsage());
+          break;
+        }
+        const rplRunsDir   = getArgValue('--runs-dir')          ?? 'data/token-grab/dex-watch-runs';
+        const rplCyclesDir = getArgValue('--cycles-dir')        ?? 'data/token-grab/ripper/cycles';
+        const rplStopFile  = getArgValue('--stop-file');
+        const rplInterval  = parseNumberArg('--interval-seconds', 180, { min: 1 });
+        const rplMaxCycles = parseNumberArg('--max-cycles',       10,  { min: 1 });
+
+        const { provider: rplClusterProvider, configNote: rplClusterNote } =
+          createClusterRiskProvider();
+        if (rplClusterNote) console.warn(`[cluster-risk] ${rplClusterNote}`);
+
+        console.log('');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('  TOKEN GRAB — RIPPER PAPER LOOP');
+        console.log('  [REAL TRADING LOCKED — PAPER ONLY — READ ONLY]');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log(`  max cycles     : ${rplMaxCycles}`);
+        console.log(`  interval       : ${rplInterval}s`);
+        if (rplStopFile) console.log(`  stop file      : ${rplStopFile}`);
+        console.log('');
+
+        const rplResult = await runRipperPaperLoop({
+          runsDir:             rplRunsDir,
+          cyclesDir:           rplCyclesDir,
+          clusterRiskProvider: rplClusterProvider,
+          intervalSeconds:     rplInterval,
+          maxCycles:           rplMaxCycles,
+          stopFilePath:        rplStopFile ?? undefined,
+          onCycleComplete: (cycleResult, cycleNumber) => {
+            console.log(renderLoopCycleLine(cycleResult, cycleNumber, rplMaxCycles));
+          },
+        });
+        console.log(renderRipperPaperLoopResult(rplResult, rplMaxCycles));
         break;
       }
 
