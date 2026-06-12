@@ -59,6 +59,7 @@ export interface RipperInput {
   freezeAuthorityStatus?: FreezeAuthorityStatus;
   holderConcentrationStatus?: HolderConcentrationStatus;
   topHolderPercent?: number;
+  clusterRisk?: ClusterRisk; // from BubbleMaps enrichment; defensive only — never approves, only blocks/downgrades
 }
 
 export interface RipperSignal {
@@ -213,6 +214,7 @@ export function scoreLiquidityProfile(
 export function scoreHolderCluster(
   holderConcentrationStatus: HolderConcentrationStatus | undefined,
   topHolderPercent: number | undefined,
+  clusterRiskOverride?: ClusterRisk,
 ): HolderClusterProfile {
   const concentrationNotes: string[] = [];
   let holderRisk: HolderRisk = 'UNKNOWN';
@@ -244,8 +246,9 @@ export function scoreHolderCluster(
     }
   }
 
-  // Cluster risk: UNKNOWN in V1 — BubbleMaps integration not yet connected.
-  return { holderRisk, clusterRisk: 'UNKNOWN', concentrationNotes };
+  // Use override when real cluster data is available; default UNKNOWN when not provided.
+  const clusterRisk: ClusterRisk = clusterRiskOverride ?? 'UNKNOWN';
+  return { holderRisk, clusterRisk, concentrationNotes };
 }
 
 export function scoreBotRisk(
@@ -296,7 +299,7 @@ export function scoreRipper(
 
   const launchAgeBucket  = classifyLaunchAge(ageMinutes, config);
   const liquidityProfile = scoreLiquidityProfile(input.liquidityChangePct, input.volumeLiquidityRatio);
-  const holderCluster    = scoreHolderCluster(input.holderConcentrationStatus, input.topHolderPercent);
+  const holderCluster    = scoreHolderCluster(input.holderConcentrationStatus, input.topHolderPercent, input.clusterRisk);
   const botRiskProfile   = scoreBotRisk(input.volumeLiquidityRatio, input.liquidityChangePct, input.priceChangePct);
 
   let score = 50;
@@ -447,6 +450,9 @@ export function checkPaperBuyGate(
   }
   if (signal.holderCluster.clusterRisk === 'RISKY') {
     blockers.push('cluster risk RISKY — buy blocked');
+  }
+  if (signal.holderCluster.clusterRisk === 'WATCH') {
+    blockers.push('cluster risk WATCH — buy downgraded to review');
   }
   if (signal.botRiskProfile.botRisk === 'RISKY') {
     blockers.push('bot/pump risk RISKY — buy blocked');

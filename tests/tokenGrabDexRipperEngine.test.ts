@@ -109,9 +109,16 @@ describe('scoreHolderCluster', () => {
     const r = scoreHolderCluster(undefined, undefined);
     expect(r.holderRisk).toBe('UNKNOWN');
   });
-  it('clusterRisk is always UNKNOWN in V1', () => {
+  it('clusterRisk defaults to UNKNOWN when no override provided', () => {
     const r = scoreHolderCluster('CLEAN', 3);
     expect(r.clusterRisk).toBe('UNKNOWN');
+  });
+
+  it('clusterRisk override is used when provided', () => {
+    expect(scoreHolderCluster('CLEAN', 3, 'CLEAN').clusterRisk).toBe('CLEAN');
+    expect(scoreHolderCluster('CLEAN', 3, 'WATCH').clusterRisk).toBe('WATCH');
+    expect(scoreHolderCluster('CLEAN', 3, 'RISKY').clusterRisk).toBe('RISKY');
+    expect(scoreHolderCluster('CLEAN', 3, 'UNKNOWN').clusterRisk).toBe('UNKNOWN');
   });
 });
 
@@ -728,5 +735,88 @@ describe('holder gate — safety', () => {
     const cleanSignal = scoreRipper(primeInput({ holderConcentrationStatus: 'CLEAN' }), cfg, NOW_MS);
     expect(checkPaperBuyGate(riskySignal, cfg).decision).toBe('BUY_REJECTED');
     expect(checkPaperBuyGate(cleanSignal, cfg).decision).toBe('BUY_APPROVED_PAPER');
+  });
+});
+
+// ── clusterRisk gate — RISKY/WATCH/CLEAN/UNKNOWN ──────────────────────────────
+
+describe('clusterRisk gate — RISKY blocks entry and gate', () => {
+  it('RISKY → PAPER_BUY_BLOCKED entry decision', () => {
+    const signal = scoreRipper(primeInput({ clusterRisk: 'RISKY' }), cfg, NOW_MS);
+    expect(signal.holderCluster.clusterRisk).toBe('RISKY');
+    expect(signal.entryDecision).toBe('PAPER_BUY_BLOCKED');
+  });
+
+  it('RISKY → BUY_REJECTED with cluster-specific blocker', () => {
+    const signal = scoreRipper(primeInput({ clusterRisk: 'RISKY' }), cfg, NOW_MS);
+    const gate   = checkPaperBuyGate(signal, cfg);
+    expect(gate.decision).toBe('BUY_REJECTED');
+    expect(gate.blockers.some(b => b.includes('RISKY') && b.includes('cluster'))).toBe(true);
+  });
+
+  it('RISKY cannot become BUY_APPROVED_PAPER even with max price momentum', () => {
+    const signal = scoreRipper(primeInput({ clusterRisk: 'RISKY', priceChangePct: 80 }), cfg, NOW_MS);
+    expect(checkPaperBuyGate(signal, cfg).decision).toBe('BUY_REJECTED');
+  });
+});
+
+describe('clusterRisk gate — WATCH downgrades to review', () => {
+  it('WATCH → gate rejects with WATCH-specific blocker', () => {
+    const signal = scoreRipper(primeInput({ clusterRisk: 'WATCH' }), cfg, NOW_MS);
+    expect(signal.holderCluster.clusterRisk).toBe('WATCH');
+    const gate = checkPaperBuyGate(signal, cfg);
+    expect(gate.decision).toBe('BUY_REJECTED');
+    expect(gate.blockers.some(b => b.includes('WATCH') && b.includes('cluster'))).toBe(true);
+  });
+
+  it('WATCH does not set PAPER_BUY_BLOCKED entry (candidate is still recorded)', () => {
+    const signal = scoreRipper(primeInput({ clusterRisk: 'WATCH' }), cfg, NOW_MS);
+    // Entry decision stays READY_TO_SNIPE_PAPER — gate blocks it, not the entry scorer
+    expect(signal.entryDecision).toBe('READY_TO_SNIPE_PAPER');
+  });
+});
+
+describe('clusterRisk gate — CLEAN clears cluster blocker only', () => {
+  it('CLEAN clusterRisk produces no cluster-related blocker', () => {
+    const signal = scoreRipper(primeInput({ clusterRisk: 'CLEAN' }), cfg, NOW_MS);
+    const gate   = checkPaperBuyGate(signal, cfg);
+    expect(gate.blockers.every(b => !b.toLowerCase().includes('cluster'))).toBe(true);
+  });
+
+  it('CLEAN clusterRisk with otherwise-clean prime-window signal → BUY_APPROVED_PAPER', () => {
+    const signal = scoreRipper(primeInput({ clusterRisk: 'CLEAN' }), cfg, NOW_MS);
+    const gate   = checkPaperBuyGate(signal, cfg);
+    expect(gate.decision).toBe('BUY_APPROVED_PAPER');
+  });
+
+  it('CLEAN clusterRisk does NOT auto-approve — still blocked by other gates (e.g. RISKY holder)', () => {
+    const signal = scoreRipper(
+      primeInput({ clusterRisk: 'CLEAN', holderConcentrationStatus: 'DANGER' }),
+      cfg, NOW_MS,
+    );
+    expect(checkPaperBuyGate(signal, cfg).decision).toBe('BUY_REJECTED');
+  });
+});
+
+describe('clusterRisk gate — UNKNOWN does not block paper recording', () => {
+  it('UNKNOWN → no cluster blocker in gate', () => {
+    const signal = scoreRipper(primeInput({ clusterRisk: 'UNKNOWN' }), cfg, NOW_MS);
+    const gate   = checkPaperBuyGate(signal, cfg);
+    expect(gate.blockers.every(b => !b.toLowerCase().includes('cluster'))).toBe(true);
+  });
+
+  it('UNKNOWN with otherwise-clean signal → BUY_APPROVED_PAPER (paper records candidate)', () => {
+    const signal = scoreRipper(primeInput({ clusterRisk: 'UNKNOWN' }), cfg, NOW_MS);
+    expect(checkPaperBuyGate(signal, cfg).decision).toBe('BUY_APPROVED_PAPER');
+  });
+
+  it('explicit UNKNOWN behaves identically to no clusterRisk provided', () => {
+    const withUnknown  = scoreRipper(primeInput({ clusterRisk: 'UNKNOWN' }), cfg, NOW_MS);
+    const withoutField = scoreRipper(primeInput(), cfg, NOW_MS);
+    expect(withUnknown.holderCluster.clusterRisk).toBe('UNKNOWN');
+    expect(withoutField.holderCluster.clusterRisk).toBe('UNKNOWN');
+    expect(checkPaperBuyGate(withUnknown, cfg).decision).toBe(
+      checkPaperBuyGate(withoutField, cfg).decision,
+    );
   });
 });
