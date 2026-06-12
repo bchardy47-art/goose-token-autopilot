@@ -370,13 +370,28 @@ describe('runFreshPoolFeed — all candidates too old', () => {
     expect(result.sourceUsed).toBeTruthy();
   });
 
-  it('does not write output file when all candidates too old', () => {
+  it('writes empty signals file when all candidates too old', () => {
     const runsDir = makeRunsDir({
       'run-20260610-100000.json': makeRunFile([makeOutcome({ observedAt: TWO_HR_AGO })]),
     });
     const out = path.join(tmpDir, 'out.json');
     runFreshPoolFeed({ runsDir, outputPath: out, maxAgeMinutes: 60, nowMs: NOW_MS });
-    expect(fs.existsSync(out)).toBe(false);
+    expect(fs.existsSync(out)).toBe(true);
+    const written = JSON.parse(fs.readFileSync(out, 'utf-8'));
+    expect(written.signals).toEqual([]);
+  });
+
+  it('writeVerified=true when all candidates too old', () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([makeOutcome({ observedAt: TWO_HR_AGO })]),
+    });
+    const result = runFreshPoolFeed({
+      runsDir,
+      outputPath: path.join(tmpDir, 'out.json'),
+      maxAgeMinutes: 60,
+      nowMs: NOW_MS,
+    });
+    expect(result.writeVerified).toBe(true);
   });
 
   it('nextStep hints at token:dex-day-watch when all too old', () => {
@@ -604,6 +619,48 @@ describe('runFreshPoolFeed — integration with live-fixture-capture', () => {
     const fixture = JSON.parse(lines[0]);
     expect(fixture.launchAgeBucket).toBe('PRIME_WINDOW');
     expect(fixture.realTradingLocked).toBe(true);
+  });
+
+  it('stale-only feed → empty output → capture reads 0 fixtures, not stale ones', async () => {
+    // Simulate the production failure: a stale ripper-ears-input.json already exists
+    // from a prior run, then fresh-pool-feed finds only stale candidates.
+    const feedOutputPath = path.join(tmpDir, 'ripper-ears-input.json');
+
+    // Seed the output path with a "stale" file from a prior run
+    const staleOutcome = makeOutcome({ observedAt: TWO_HR_AGO, contract: 'StaleToken999' });
+    const staleSignal  = dexWatchOutcomeToEarSignal(staleOutcome, NOW_ISO);
+    fs.mkdirSync(path.dirname(feedOutputPath), { recursive: true });
+    fs.writeFileSync(feedOutputPath, JSON.stringify({ signals: [staleSignal] }, null, 2));
+
+    // fresh-pool-feed: only stale candidate in the run file — 0 fresh signals
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([makeOutcome({ observedAt: TWO_HR_AGO })]),
+    });
+    const feedResult = runFreshPoolFeed({
+      runsDir,
+      outputPath: feedOutputPath,
+      nowMs: NOW_MS,
+    });
+    expect(feedResult.noFreshSignals).toBe(true);
+    expect(feedResult.signalsWritten).toBe(0);
+    expect(feedResult.writeVerified).toBe(true);
+
+    // The output file should now contain an empty signals array
+    const writtenFeed = JSON.parse(fs.readFileSync(feedOutputPath, 'utf-8'));
+    expect(writtenFeed.signals).toEqual([]);
+
+    // live-fixture-capture must read 0 signals, not the stale ones
+    const fixturesPath = path.join(tmpDir, 'live-fixtures.jsonl');
+    const captureResult = await runLiveFixtureCapture({
+      inputPath: feedOutputPath,
+      outputPath: fixturesPath,
+      format: 'ear-signals',
+      nowMs: NOW_MS,
+    });
+    expect(captureResult.inputMissing).toBe(false);
+    expect(captureResult.capturedCount).toBe(0);
+    expect(captureResult.fixtures).toHaveLength(0);
+    expect(fs.existsSync(fixturesPath)).toBe(false); // no fixtures appended → file not created
   });
 });
 
