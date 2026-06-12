@@ -314,11 +314,23 @@ export function runFreshPoolFeed(options: FreshPoolFeedOptions = {}): FreshPoolF
     skippedOldCount = allSignals.length - filteredSignals.length;
   }
 
-  // No fresh signals — do not write anything, guide user to run dex-day-watch
+  // No fresh signals — write an empty signals file so live-fixture-capture reads 0 signals
+  // instead of falling back to a stale file from a prior run.
   if (filteredSignals.length === 0) {
     const note = skippedOldCount > 0
       ? `all ${skippedOldCount} candidates from ${path.basename(runFilePath)} are older than ${maxAgeMinutes}m — run token:dex-day-watch for fresh data`
       : `no candidates in ${path.basename(runFilePath)}`;
+    allWarnings.unshift(note);
+
+    let writeVerified = false;
+    try {
+      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+      fs.writeFileSync(outputPath, JSON.stringify({ signals: [] }, null, 2), 'utf-8');
+      writeVerified = fs.existsSync(outputPath);
+    } catch (err) {
+      allWarnings.push(`write failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
     return {
       ...makeEmptyResult(outputPath),
       sourceUsed: runFilePath,
@@ -326,7 +338,8 @@ export function runFreshPoolFeed(options: FreshPoolFeedOptions = {}): FreshPoolF
       noFreshSignals: true,
       rawCandidatesRead,
       skippedOldCount,
-      warnings: [note, ...allWarnings],
+      writeVerified,
+      warnings: allWarnings,
     };
   }
 
