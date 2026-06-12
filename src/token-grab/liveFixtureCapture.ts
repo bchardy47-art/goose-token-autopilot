@@ -14,6 +14,7 @@ import {
   type RipperConfig,
 } from './dexRipperEngine';
 import { loadEarSignals, type EarsInputFormat } from './ripperEarsReport';
+import { type ClusterRiskProvider, type ClusterRiskResult } from './clusterRiskProvider';
 
 // ── Fixture shape ─────────────────────────────────────────────────────────────────────────
 
@@ -44,10 +45,33 @@ export function buildFixture(
   signal: RipperEarSignal,
   config: RipperConfig,
   nowMs: number,
+  clusterResult?: ClusterRiskResult,
 ): LiveRipperFixture {
   const contract   = getContractAddress(signal);
   const capturedAt = new Date(nowMs).toISOString();
-  const ripperInput = earSignalToRipperInput(signal);
+  const baseInput  = earSignalToRipperInput(signal);
+
+  // Inject cluster risk into scoring when enrichment is available
+  const ripperInput = baseInput && clusterResult
+    ? { ...baseInput, clusterRisk: clusterResult.clusterRisk }
+    : baseInput;
+
+  // Merge cluster metadata into raw so downstream audit tools (primeGateAudit, autonomyReadiness) can read it
+  const rawWithCluster: unknown = clusterResult
+    ? {
+        ...(typeof signal.raw === 'object' && signal.raw !== null
+          ? signal.raw as Record<string, unknown>
+          : {}),
+        clusterRisk:       clusterResult.clusterRisk,
+        clusterProvider:   clusterResult.clusterProvider,
+        clusterCheckedAt:  clusterResult.clusterCheckedAt,
+        clusterConfidence: clusterResult.clusterConfidence,
+        clusterNotes:      clusterResult.clusterNotes,
+        ...(clusterResult.clusterFetchError !== undefined
+          ? { clusterFetchError: clusterResult.clusterFetchError }
+          : {}),
+      }
+    : signal.raw;
 
   let ripperScore: number | undefined;
   let launchAgeBucket: string | undefined;
@@ -91,7 +115,7 @@ export function buildFixture(
     capturedAt,
     source: signal.source,
     sourceKind: signal.sourceKind,
-    raw: signal.raw,
+    raw: rawWithCluster,
     normalizedSignal: signal,
     ripperInput,
     ripperScore,
@@ -145,6 +169,7 @@ export interface CaptureOptions {
   reset?: boolean;
   config?: Partial<RipperConfig>;
   nowMs?: number;
+  clusterRiskProvider?: ClusterRiskProvider;
 }
 
 export interface CaptureResult {
@@ -161,7 +186,7 @@ export interface CaptureResult {
   readOnly: true;
 }
 
-export function runLiveFixtureCapture(options: CaptureOptions): CaptureResult {
+export async function runLiveFixtureCapture(options: CaptureOptions): Promise<CaptureResult> {
   const nowMs  = options.nowMs ?? Date.now();
   const nowIso = new Date(nowMs).toISOString();
   const config = { ...DEFAULT_RIPPER_CONFIG, ...(options.config ?? {}) };
@@ -192,11 +217,40 @@ export function runLiveFixtureCapture(options: CaptureOptions): CaptureResult {
     resetFixtureFile(options.outputPath);
   }
 
+  // Per-run cache: one BubbleMaps call per unique contract address
+  const clusterCache = new Map<string, ClusterRiskResult>();
+
   const fixtures: LiveRipperFixture[] = [];
   let skippedCount = 0;
 
   for (const signal of signals) {
-    const fixture = buildFixture(signal, config, nowMs);
+    let clusterResult: ClusterRiskResult | undefined;
+    if (options.clusterRiskProvider) {
+      const contract = getContractAddress(signal);
+      if (contract) {
+        const cached = clusterCache.get(contract);
+        if (cached) {
+          clusterResult = cached;
+        } else {
+          try {
+            clusterResult = await options.clusterRiskProvider.fetchClusterRisk(contract);
+          } catch (err) {
+            // Provider threw unexpectedly — degrade to UNKNOWN, never crash live capture
+            clusterResult = {
+              clusterRisk:       'UNKNOWN',
+              clusterProvider:   options.clusterRiskProvider.name,
+              clusterCheckedAt:  nowIso,
+              clusterConfidence: 'UNKNOWN',
+              clusterNotes:      ['CLUSTER_PROVIDER_UNAVAILABLE — provider threw unexpectedly'],
+              clusterFetchError: err instanceof Error ? err.message : 'unexpected provider error',
+            };
+          }
+          clusterCache.set(contract, clusterResult);
+        }
+      }
+    }
+
+    const fixture = buildFixture(signal, config, nowMs, clusterResult);
     if (fixture.ripperInput === null && !getContractAddress(signal)) {
       skippedCount += 1;
     }

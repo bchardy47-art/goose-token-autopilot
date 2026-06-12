@@ -170,6 +170,7 @@ import { runQuotePreviewAudit, renderQuotePreviewAuditReport } from './token-gra
 import { runAutonomyReadinessAudit, renderAutonomyReadinessAuditReport } from './token-grab/autonomyReadinessAudit';
 import { runFixtureClusterEnrich, renderFixtureClusterEnrichReport, renderFixtureClusterEnrichUsage } from './token-grab/fixtureClusterEnrich';
 import { runClusterRiskAudit, renderClusterRiskAuditReport } from './token-grab/clusterRiskAudit';
+import { createClusterRiskProvider } from './token-grab/clusterRiskProvider';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -2747,11 +2748,16 @@ async function main(): Promise<void> {
         const lfcReset   = process.argv.includes('--reset');
         const lfcDebug   = process.argv.includes('--debug');
 
-        const lfcResult = runLiveFixtureCapture({
+        const { provider: lfcClusterProvider, configNote: lfcClusterNote } =
+          createClusterRiskProvider();
+        if (lfcClusterNote) console.warn(`[cluster-risk] ${lfcClusterNote}`);
+
+        const lfcResult = await runLiveFixtureCapture({
           inputPath: lfcInput,
           outputPath: lfcOutput,
           format: lfcFormat,
           reset: lfcReset,
+          clusterRiskProvider: lfcClusterProvider,
         });
         console.log(renderCaptureResult(lfcResult, lfcDebug));
         break;

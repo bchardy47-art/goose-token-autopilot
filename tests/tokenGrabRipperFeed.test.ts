@@ -537,7 +537,7 @@ describe('runRipperFeed — source priority', () => {
 });
 
 describe('runRipperFeed — integration with live-fixture-capture', () => {
-  it('feed → capture → report end-to-end: fixture count > 0', () => {
+  it('feed → capture → report end-to-end: fixture count > 0', async () => {
     const dir     = makeSourceDir();
     const srcPath = writeWinnerCandidates(dir, [makeWinnerCandidate()]);
     const feedOutputPath   = path.join(tmpDir, 'ripper-ears-input.json');
@@ -554,7 +554,7 @@ describe('runRipperFeed — integration with live-fixture-capture', () => {
     expect(fs.existsSync(feedOutputPath)).toBe(true);
 
     // Step 2: live-fixture-capture reads ripper-ears-input.json (same path as feed output)
-    const captureResult = runLiveFixtureCapture({
+    const captureResult = await runLiveFixtureCapture({
       inputPath: feedOutputPath,
       outputPath: fixturesPath,
       format: 'ear-signals',

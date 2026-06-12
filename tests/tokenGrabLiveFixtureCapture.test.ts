@@ -252,8 +252,8 @@ describe('resetFixtureFile', () => {
 // ── runLiveFixtureCapture ─────────────────────────────────────────────────────
 
 describe('runLiveFixtureCapture', () => {
-  it('returns inputMissing=true when input file does not exist', () => {
-    const result = runLiveFixtureCapture({
+  it('returns inputMissing=true when input file does not exist', async () => {
+    const result = await runLiveFixtureCapture({
       inputPath: path.join(tmpDir, 'no-such-file.json'),
       outputPath: tmpJsonl(),
       format: 'ear-signals',
@@ -266,10 +266,10 @@ describe('runLiveFixtureCapture', () => {
     expect(result.readOnly).toBe(true);
   });
 
-  it('captures ear-signals from input file', () => {
+  it('captures ear-signals from input file', async () => {
     const input = tmpInput({ signals: [primePairSignal()] });
     const output = tmpJsonl();
-    const result = runLiveFixtureCapture({
+    const result = await runLiveFixtureCapture({
       inputPath: input,
       outputPath: output,
       format: 'ear-signals',
@@ -281,10 +281,10 @@ describe('runLiveFixtureCapture', () => {
     expect(readFixturesFromJsonl(output)).toHaveLength(1);
   });
 
-  it('captures dexscreener format', () => {
+  it('captures dexscreener format', async () => {
     const input = tmpInput(dexScreenerPayload(5 * 60_000)); // 5 min ago
     const output = tmpJsonl();
-    const result = runLiveFixtureCapture({
+    const result = await runLiveFixtureCapture({
       inputPath: input,
       outputPath: output,
       format: 'dexscreener',
@@ -294,28 +294,28 @@ describe('runLiveFixtureCapture', () => {
     expect(result.appendedCount).toBe(1);
   });
 
-  it('appends on successive calls without reset', () => {
+  it('appends on successive calls without reset', async () => {
     const input = tmpInput({ signals: [primePairSignal()] });
     const output = tmpJsonl();
     const opts: CaptureOptions = { inputPath: input, outputPath: output, format: 'ear-signals', nowMs: NOW_MS };
-    runLiveFixtureCapture(opts);
-    runLiveFixtureCapture(opts);
+    await runLiveFixtureCapture(opts);
+    await runLiveFixtureCapture(opts);
     expect(readFixturesFromJsonl(output)).toHaveLength(2);
   });
 
-  it('resets file when reset=true', () => {
+  it('resets file when reset=true', async () => {
     const input = tmpInput({ signals: [primePairSignal()] });
     const output = tmpJsonl();
     const opts: CaptureOptions = { inputPath: input, outputPath: output, format: 'ear-signals', nowMs: NOW_MS };
-    runLiveFixtureCapture(opts);
-    runLiveFixtureCapture({ ...opts, reset: true });
+    await runLiveFixtureCapture(opts);
+    await runLiveFixtureCapture({ ...opts, reset: true });
     // After reset run, only the 1 from the second call remains
     expect(readFixturesFromJsonl(output)).toHaveLength(1);
   });
 
-  it('all safety fields set on result', () => {
+  it('all safety fields set on result', async () => {
     const input = tmpInput({ signals: [primePairSignal()] });
-    const result = runLiveFixtureCapture({
+    const result = await runLiveFixtureCapture({
       inputPath: input,
       outputPath: tmpJsonl(),
       format: 'ear-signals',
@@ -327,10 +327,10 @@ describe('runLiveFixtureCapture', () => {
     expect(result.readOnly).toBe(true);
   });
 
-  it('handles signal with no contract as skipped but still writes', () => {
+  it('handles signal with no contract as skipped but still writes', async () => {
     const input = tmpInput({ signals: [noContractSignal()] });
     const output = tmpJsonl();
-    const result = runLiveFixtureCapture({
+    const result = await runLiveFixtureCapture({
       inputPath: input,
       outputPath: output,
       format: 'ear-signals',
@@ -341,14 +341,14 @@ describe('runLiveFixtureCapture', () => {
     expect(fixtures[0].buyGateDecision).toBe('BUY_REJECTED');
   });
 
-  it('captures multiple signals', () => {
+  it('captures multiple signals', async () => {
     const signals = [
       primePairSignal(),
       { ...primePairSignal(), id: 'signal-2', contract: 'ContractYYY', symbol: 'YYY' },
     ];
     const input = tmpInput({ signals });
     const output = tmpJsonl();
-    const result = runLiveFixtureCapture({
+    const result = await runLiveFixtureCapture({
       inputPath: input,
       outputPath: output,
       format: 'ear-signals',
@@ -379,10 +379,10 @@ describe('runLiveFixtureReport', () => {
     expect(result.newestCaptureAt).toBeNull();
   });
 
-  it('summarizes captured fixtures', () => {
+  it('summarizes captured fixtures', async () => {
     const input = tmpInput({ signals: [primePairSignal()] });
     const output = tmpJsonl();
-    runLiveFixtureCapture({ inputPath: input, outputPath: output, format: 'ear-signals', nowMs: NOW_MS });
+    await runLiveFixtureCapture({ inputPath: input, outputPath: output, format: 'ear-signals', nowMs: NOW_MS });
 
     const result = runLiveFixtureReport(output);
     expect(result.totalFixtures).toBe(1);
@@ -496,8 +496,8 @@ describe('runLiveFixtureAutopsy', () => {
 // ── renderers ─────────────────────────────────────────────────────────────────
 
 describe('renderCaptureResult', () => {
-  it('renders inputMissing state without crashing', () => {
-    const result = runLiveFixtureCapture({
+  it('renders inputMissing state without crashing', async () => {
+    const result = await runLiveFixtureCapture({
       inputPath: path.join(tmpDir, 'no-such.json'),
       outputPath: tmpJsonl(),
       format: 'ear-signals',
@@ -507,20 +507,20 @@ describe('renderCaptureResult', () => {
     expect(out).toContain('tradingExecuted=0');
   });
 
-  it('renders capture summary', () => {
+  it('renders capture summary', async () => {
     const input = tmpInput({ signals: [primePairSignal()] });
     const output = tmpJsonl();
-    const result = runLiveFixtureCapture({ inputPath: input, outputPath: output, format: 'ear-signals', nowMs: NOW_MS });
+    const result = await runLiveFixtureCapture({ inputPath: input, outputPath: output, format: 'ear-signals', nowMs: NOW_MS });
     const out = renderCaptureResult(result);
     expect(out).toContain('REAL TRADING LOCKED');
     expect(out).toContain('1 signals');
     expect(out).toContain('tradingExecuted=0');
   });
 
-  it('shows per-fixture debug info with debug=true', () => {
+  it('shows per-fixture debug info with debug=true', async () => {
     const input = tmpInput({ signals: [primePairSignal()] });
     const output = tmpJsonl();
-    const result = runLiveFixtureCapture({ inputPath: input, outputPath: output, format: 'ear-signals', nowMs: NOW_MS });
+    const result = await runLiveFixtureCapture({ inputPath: input, outputPath: output, format: 'ear-signals', nowMs: NOW_MS });
     const out = renderCaptureResult(result, true);
     expect(out).toContain('DEBUG');
   });
@@ -534,10 +534,10 @@ describe('renderFixtureReport', () => {
     expect(out).toContain('tradingExecuted=0');
   });
 
-  it('renders populated report', () => {
+  it('renders populated report', async () => {
     const input = tmpInput({ signals: [primePairSignal()] });
     const output = tmpJsonl();
-    runLiveFixtureCapture({ inputPath: input, outputPath: output, format: 'ear-signals', nowMs: NOW_MS });
+    await runLiveFixtureCapture({ inputPath: input, outputPath: output, format: 'ear-signals', nowMs: NOW_MS });
     const result = runLiveFixtureReport(output);
     const out = renderFixtureReport(result);
     expect(out).toContain('Total fixtures');
@@ -576,10 +576,10 @@ describe('safety — no live trading', () => {
     }
   });
 
-  it('every captured fixture has tradingExecuted=0 and realTradingLocked=true', () => {
+  it('every captured fixture has tradingExecuted=0 and realTradingLocked=true', async () => {
     const input = tmpInput({ signals: [primePairSignal()] });
     const output = tmpJsonl();
-    runLiveFixtureCapture({ inputPath: input, outputPath: output, format: 'ear-signals', nowMs: NOW_MS });
+    await runLiveFixtureCapture({ inputPath: input, outputPath: output, format: 'ear-signals', nowMs: NOW_MS });
     const fixtures = readFixturesFromJsonl(output);
     for (const f of fixtures) {
       expect(f.realTradingLocked).toBe(true);
@@ -588,8 +588,8 @@ describe('safety — no live trading', () => {
     }
   });
 
-  it('capture result always has tradingExecuted=0', () => {
-    const result = runLiveFixtureCapture({
+  it('capture result always has tradingExecuted=0', async () => {
+    const result = await runLiveFixtureCapture({
       inputPath: path.join(tmpDir, 'missing.json'),
       outputPath: tmpJsonl(),
       format: 'ear-signals',
@@ -610,5 +610,189 @@ describe('safety — no live trading', () => {
     const result = runLiveFixtureAutopsy(path.join(tmpDir, 'missing.jsonl'));
     expect(result.tradingExecuted).toBe(0);
     expect(result.noRealTradeSent).toBe(true);
+  });
+});
+
+// ── BubbleMaps cluster-risk injection ─────────────────────────────────────────
+
+import type { ClusterRiskProvider, ClusterRiskResult } from '../src/token-grab/clusterRiskProvider';
+
+function makeClusterProvider(clusterRisk: ClusterRiskResult['clusterRisk']): ClusterRiskProvider {
+  return {
+    name: 'mock-bubblemaps',
+    async fetchClusterRisk(_mint: string): Promise<ClusterRiskResult> {
+      return {
+        clusterRisk,
+        clusterProvider: 'mock-bubblemaps',
+        clusterCheckedAt: new Date(NOW_MS).toISOString(),
+        clusterConfidence: clusterRisk === 'CLEAN' ? 'HIGH' : 'MEDIUM',
+        clusterNotes: [`mock cluster result: ${clusterRisk}`],
+      };
+    },
+  };
+}
+
+function makeThrowingProvider(): ClusterRiskProvider {
+  return {
+    name: 'mock-failing',
+    async fetchClusterRisk(_mint: string): Promise<ClusterRiskResult> {
+      throw new Error('network timeout');
+    },
+  };
+}
+
+describe('buildFixture — cluster enrichment injection', () => {
+  it('RISKY clusterResult → scoreRipper sees RISKY → PAPER_BUY_BLOCKED entry', () => {
+    const signal = primePairSignal();
+    const riskyResult: ClusterRiskResult = {
+      clusterRisk: 'RISKY', clusterProvider: 'test', clusterCheckedAt: '',
+      clusterConfidence: 'HIGH', clusterNotes: [],
+    };
+    const fixture = buildFixture(signal, DEFAULT_RIPPER_CONFIG, NOW_MS, riskyResult);
+    expect(fixture.entryDecision).toBe('PAPER_BUY_BLOCKED');
+    expect(fixture.buyGateDecision).toBe('BUY_REJECTED');
+    expect(fixture.blockers.some(b => b.includes('RISKY') && b.includes('cluster'))).toBe(true);
+  });
+
+  it('WATCH clusterResult → gate rejects with WATCH blocker', () => {
+    const signal = primePairSignal();
+    const watchResult: ClusterRiskResult = {
+      clusterRisk: 'WATCH', clusterProvider: 'test', clusterCheckedAt: '',
+      clusterConfidence: 'MEDIUM', clusterNotes: [],
+    };
+    const fixture = buildFixture(signal, DEFAULT_RIPPER_CONFIG, NOW_MS, watchResult);
+    expect(fixture.buyGateDecision).toBe('BUY_REJECTED');
+    expect(fixture.blockers.some(b => b.includes('WATCH') && b.includes('cluster'))).toBe(true);
+  });
+
+  it('CLEAN clusterResult → no cluster blocker; gate may approve', () => {
+    const signal = primePairSignal();
+    const cleanResult: ClusterRiskResult = {
+      clusterRisk: 'CLEAN', clusterProvider: 'test', clusterCheckedAt: '',
+      clusterConfidence: 'HIGH', clusterNotes: [],
+    };
+    const fixture = buildFixture(signal, DEFAULT_RIPPER_CONFIG, NOW_MS, cleanResult);
+    expect(fixture.blockers.every(b => !b.toLowerCase().includes('cluster'))).toBe(true);
+  });
+
+  it('cluster metadata is stored in fixture.raw for downstream audit', () => {
+    const signal = primePairSignal();
+    const result: ClusterRiskResult = {
+      clusterRisk: 'WATCH', clusterProvider: 'bubblemaps',
+      clusterCheckedAt: '2026-01-01T00:00:00Z',
+      clusterConfidence: 'HIGH', clusterNotes: ['top cluster 30%'],
+    };
+    const fixture = buildFixture(signal, DEFAULT_RIPPER_CONFIG, NOW_MS, result);
+    const raw = fixture.raw as Record<string, unknown>;
+    expect(raw['clusterRisk']).toBe('WATCH');
+    expect(raw['clusterProvider']).toBe('bubblemaps');
+    expect(raw['clusterCheckedAt']).toBe('2026-01-01T00:00:00Z');
+  });
+
+  it('no clusterResult → clusterRisk stays UNKNOWN in fixture (backward compat)', () => {
+    const signal = primePairSignal();
+    const fixture = buildFixture(signal, DEFAULT_RIPPER_CONFIG, NOW_MS);
+    const raw = fixture.raw as Record<string, unknown> | undefined;
+    expect(raw?.['clusterRisk']).toBeUndefined();
+  });
+});
+
+describe('runLiveFixtureCapture — mocked cluster provider', () => {
+  it('RISKY mock provider → fixture is BUY_REJECTED with cluster blocker', async () => {
+    const input = tmpInput({ signals: [primePairSignal()] });
+    const output = tmpJsonl();
+    await runLiveFixtureCapture({
+      inputPath: input, outputPath: output,
+      format: 'ear-signals', nowMs: NOW_MS,
+      clusterRiskProvider: makeClusterProvider('RISKY'),
+    });
+    const [fixture] = readFixturesFromJsonl(output);
+    expect(fixture.buyGateDecision).toBe('BUY_REJECTED');
+    expect(fixture.blockers.some(b => b.includes('RISKY') && b.includes('cluster'))).toBe(true);
+    const raw = fixture.raw as Record<string, unknown>;
+    expect(raw['clusterRisk']).toBe('RISKY');
+    expect(raw['clusterProvider']).toBe('mock-bubblemaps');
+  });
+
+  it('WATCH mock provider → fixture is BUY_REJECTED with WATCH cluster blocker', async () => {
+    const input = tmpInput({ signals: [primePairSignal()] });
+    const output = tmpJsonl();
+    await runLiveFixtureCapture({
+      inputPath: input, outputPath: output,
+      format: 'ear-signals', nowMs: NOW_MS,
+      clusterRiskProvider: makeClusterProvider('WATCH'),
+    });
+    const [fixture] = readFixturesFromJsonl(output);
+    expect(fixture.buyGateDecision).toBe('BUY_REJECTED');
+    expect(fixture.blockers.some(b => b.includes('WATCH') && b.includes('cluster'))).toBe(true);
+  });
+
+  it('CLEAN mock provider → no cluster blocker in fixture', async () => {
+    const input = tmpInput({ signals: [primePairSignal()] });
+    const output = tmpJsonl();
+    await runLiveFixtureCapture({
+      inputPath: input, outputPath: output,
+      format: 'ear-signals', nowMs: NOW_MS,
+      clusterRiskProvider: makeClusterProvider('CLEAN'),
+    });
+    const [fixture] = readFixturesFromJsonl(output);
+    expect(fixture.blockers.every(b => !b.toLowerCase().includes('cluster'))).toBe(true);
+  });
+
+  it('provider failure/throw → UNKNOWN, fixture does not crash', async () => {
+    const input = tmpInput({ signals: [primePairSignal()] });
+    const output = tmpJsonl();
+    await runLiveFixtureCapture({
+      inputPath: input, outputPath: output,
+      format: 'ear-signals', nowMs: NOW_MS,
+      clusterRiskProvider: makeThrowingProvider(),
+    });
+    const [fixture] = readFixturesFromJsonl(output);
+    const raw = fixture.raw as Record<string, unknown>;
+    expect(raw['clusterRisk']).toBe('UNKNOWN');
+    expect(raw['clusterFetchError']).toContain('network timeout');
+    // UNKNOWN must not add a cluster-specific buy blocker
+    expect(fixture.blockers.every(b => !b.toLowerCase().includes('cluster'))).toBe(true);
+  });
+
+  it('no provider → backward-compatible, no cluster metadata in raw', async () => {
+    const input = tmpInput({ signals: [primePairSignal()] });
+    const output = tmpJsonl();
+    await runLiveFixtureCapture({
+      inputPath: input, outputPath: output,
+      format: 'ear-signals', nowMs: NOW_MS,
+      // no clusterRiskProvider
+    });
+    const [fixture] = readFixturesFromJsonl(output);
+    const raw = fixture.raw as Record<string, unknown> | undefined;
+    expect(raw?.['clusterRisk']).toBeUndefined();
+  });
+
+  it('per-run cache: same contract called twice → provider called once', async () => {
+    let callCount = 0;
+    const countingProvider: ClusterRiskProvider = {
+      name: 'counting',
+      async fetchClusterRisk(_mint: string): Promise<ClusterRiskResult> {
+        callCount++;
+        return {
+          clusterRisk: 'CLEAN', clusterProvider: 'counting',
+          clusterCheckedAt: '', clusterConfidence: 'HIGH', clusterNotes: [],
+        };
+      },
+    };
+    const contract = 'So11111111111111111111111111111111111111112';
+    const signals = [
+      { ...primePairSignal(), id: 'sig-a', contract },
+      { ...primePairSignal(), id: 'sig-b', contract }, // same contract
+    ];
+    const input = tmpInput({ signals });
+    const output = tmpJsonl();
+    await runLiveFixtureCapture({
+      inputPath: input, outputPath: output,
+      format: 'ear-signals', nowMs: NOW_MS,
+      clusterRiskProvider: countingProvider,
+    });
+    expect(callCount).toBe(1); // cached after first call
+    expect(readFixturesFromJsonl(output)).toHaveLength(2);
   });
 });
