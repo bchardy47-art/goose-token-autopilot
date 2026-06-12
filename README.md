@@ -153,8 +153,37 @@ V1.3 keeps optional Solana read-only safety enrichment:
 - freeze authority status
 - holder concentration heuristic
 - quote availability heuristic
+- BubbleMaps cluster risk for Token Grab live fixture capture
 
 Unknown safety-critical fields remain unsafe for autopilot.
+
+### BubbleMaps env setup for Token Grab
+
+BubbleMaps cluster enrichment is optional and read-only.
+
+Use these repo-root `.env` values:
+
+```bash
+BUBBLEMAPS_API_URL=https://api.bubblemaps.io/v0
+BUBBLEMAPS_API_KEY=your_key_here
+```
+
+Notes:
+- the URL must include `/v0`
+- the API key is sent with the `X-ApiKey` header
+- without these env vars, the provider falls back to offline mode and cluster results stay `UNKNOWN`
+- real trading remains locked (`realTradingLocked: true`, `tradingExecuted: 0`)
+
+Relevant commands:
+- `npm run token:live-fixture-capture`
+- `npm run token:fixture-cluster-enrich`
+- `npm run token:cluster-risk-audit`
+
+Successful proof result example:
+- `clusterProvider=bubblemaps`
+- `clusterRisk=CLEAN`
+- `clusterNotes=["bubbleMapsScore 83.2"]`
+- `clusterFetchError=no`
 
 ## Important limitations
 
