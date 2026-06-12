@@ -499,25 +499,26 @@ describe('renderLoopCycleLine', () => {
 
 function makeFakeCycleResult(overrides: Partial<RipperPaperCycleResult> = {}): RipperPaperCycleResult {
   return {
-    cycleStartedAt:      new Date(BASE_MS).toISOString(),
-    cycleSlug:           '2026-06-12-000000',
-    feedSignalsWritten:  0,
-    feedSkippedOldCount: 0,
-    captureSkipped:      true,
-    captureSkipReason:   'no candidates in run file',
-    fixturesCaptured:    0,
-    clusterRiskCounts:   { CLEAN: 0, WATCH: 0, RISKY: 0, UNKNOWN: 0 },
-    bubblemapsProviderCount: 0,
-    buyApprovedPaper:    0,
-    buyRejected:         0,
-    seenSkippedCount:    0,
-    outputPath:          null,
-    feedOutputPath:      '/tmp/feed.json',
-    realTradingLocked:   true,
-    tradingExecuted:     0,
-    noRealTradeSent:     true,
-    paperOnly:           true,
-    readOnly:            true,
+    cycleStartedAt:           new Date(BASE_MS).toISOString(),
+    cycleSlug:                '2026-06-12-000000',
+    feedSignalsWritten:       0,
+    feedSkippedOldCount:      0,
+    captureSkipped:           true,
+    captureSkipReason:        'no candidates in run file',
+    fixturesCaptured:         0,
+    clusterRiskCounts:        { CLEAN: 0, WATCH: 0, RISKY: 0, UNKNOWN: 0 },
+    bubblemapsProviderCount:  0,
+    buyApprovedPaper:         0,
+    buyRejected:              0,
+    seenSkippedCount:         0,
+    tooEarlyRecheckableCount: 0,
+    outputPath:               null,
+    feedOutputPath:           '/tmp/feed.json',
+    realTradingLocked:        true,
+    tradingExecuted:          0,
+    noRealTradeSent:          true,
+    paperOnly:                true,
+    readOnly:                 true,
     ...overrides,
   };
 }
@@ -742,6 +743,21 @@ describe('renderLoopCycleLine — refresh and dup tags', () => {
     const line = renderLoopCycleLine(makeFakeCycleResult({ seenSkippedCount: 0 }), 1, 5);
     expect(line).not.toContain('dup=');
   });
+
+  it('includes recheck=N when tooEarlyRecheckableCount > 0', () => {
+    const line = renderLoopCycleLine(
+      makeFakeCycleResult({ tooEarlyRecheckableCount: 5, captureSkipped: false,
+        fixturesCaptured: 5, buyApprovedPaper: 0, buyRejected: 5,
+        clusterRiskCounts: { CLEAN: 0, WATCH: 0, RISKY: 0, UNKNOWN: 5 } }),
+      1, 5,
+    );
+    expect(line).toContain('recheck=5');
+  });
+
+  it('does not include recheck= when tooEarlyRecheckableCount is 0', () => {
+    const line = renderLoopCycleLine(makeFakeCycleResult({ tooEarlyRecheckableCount: 0 }), 1, 5);
+    expect(line).not.toContain('recheck=');
+  });
 });
 
 describe('renderRipperPaperLoopResult', () => {
@@ -804,6 +820,31 @@ describe('renderRipperPaperLoopResult', () => {
     const out = renderRipperPaperLoopResult(result, 2);
     expect(out).toContain('error');
     expect(out).toContain('Errors:');
+  });
+
+  it('shows Too-early recheck line in session summary', async () => {
+    const result = await runRipperPaperLoop({
+      runsDir:    path.join(tmpDir, 'no-such-dir'),
+      cyclesDir:  path.join(tmpDir, 'cycles'),
+      maxCycles:  1,
+      sleep:      noSleep,
+      getNowMs:   makeClockFn(),
+      _runCycle:  async () => makeFakeCycleResult({ tooEarlyRecheckableCount: 3 }),
+    });
+    const out = renderRipperPaperLoopResult(result, 1);
+    expect(out).toContain('Too-early recheck');
+  });
+
+  it('totalTooEarlyRecheckable accumulates across cycles', async () => {
+    const result = await runRipperPaperLoop({
+      runsDir:    path.join(tmpDir, 'no-such-dir'),
+      cyclesDir:  path.join(tmpDir, 'cycles'),
+      maxCycles:  3,
+      sleep:      noSleep,
+      getNowMs:   makeClockFn(),
+      _runCycle:  async () => makeFakeCycleResult({ tooEarlyRecheckableCount: 2 }),
+    });
+    expect(result.totalTooEarlyRecheckable).toBe(6); // 3 cycles × 2 each
   });
 
   it('shows Seen/deduped line in session summary', async () => {
