@@ -516,6 +516,159 @@ describe('runRipperPaperCycle — recheck-aware dedupe', () => {
   });
 });
 
+// ── firstSeen timestamp anchoring ─────────────────────────────────────────────
+
+describe('runRipperPaperCycle — firstSeen timestamp anchoring', () => {
+  const CYCLE2_MS    = NOW_MS + 7 * 60_000;
+  const REFRESH_ISO  = new Date(CYCLE2_MS - 60_000).toISOString(); // 1 min before cycle 2
+
+  it('records new candidate discoveredAt in firstSeenMap', async () => {
+    const contract     = 'AnchorNewToken';
+    const firstSeenMap = new Map<string, string>();
+    const runsDir      = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([
+        makeOutcome({ contract, observedAt: EIGHT_MIN_AGO }),
+      ]),
+    });
+
+    await runRipperPaperCycle({
+      runsDir,
+      cyclesDir: path.join(tmpDir, 'cycles'),
+      nowMs: NOW_MS,
+      clusterRiskProvider: offlineClusterRiskProvider,
+      firstSeenMap,
+    });
+
+    expect(firstSeenMap.get(contract)).toBe(EIGHT_MIN_AGO);
+  });
+
+  it('TOO_EARLY candidate ages into PRIME_WINDOW when discoveredAt anchored to firstSeenAt', async () => {
+    const contract      = 'AgeAnchorToken';
+    const firstSeenMap  = new Map<string, string>();
+    const seenContracts = new Set<string>();
+    const cyclesDir     = path.join(tmpDir, 'cycles');
+
+    // Cycle 1: 1 min old → TOO_EARLY — records original discoveredAt in firstSeenMap
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([
+        makeOutcome({ contract, observedAt: ONE_MIN_AGO }),
+      ]),
+    });
+    const r1 = await runRipperPaperCycle({
+      runsDir, cyclesDir,
+      nowMs: NOW_MS,
+      clusterRiskProvider: offlineClusterRiskProvider,
+      seenContracts,
+      firstSeenMap,
+    });
+    expect(r1.tooEarlyRecheckableCount).toBe(1);
+    expect(firstSeenMap.get(contract)).toBe(ONE_MIN_AGO);
+
+    // Simulate source refresh: new run file stamps fresh observedAt (1 min before cycle 2)
+    fs.writeFileSync(
+      path.join(runsDir, 'run-20260610-100007.json'),
+      JSON.stringify(makeRunFile([makeOutcome({ contract, observedAt: REFRESH_ISO })])),
+    );
+
+    // Cycle 2 at NOW_MS+7min: without anchoring, raw discoveredAt = REFRESH_ISO → age=1m → TOO_EARLY
+    // With anchoring, discoveredAt = ONE_MIN_AGO → age=8m → PRIME_WINDOW
+    const r2 = await runRipperPaperCycle({
+      runsDir, cyclesDir,
+      nowMs: CYCLE2_MS,
+      clusterRiskProvider: offlineClusterRiskProvider,
+      seenContracts,
+      firstSeenMap,
+    });
+
+    expect(r2.tooEarlyRecheckableCount).toBe(0);
+    expect(r2.fixturesCaptured).toBe(1);
+  });
+
+  it('new candidate in second cycle gets its own fresh firstSeenAt', async () => {
+    const contractA    = 'AnchoredToken';
+    const contractB    = 'BrandNewToken';
+    const firstSeenMap = new Map<string, string>();
+    const seenContracts = new Set<string>();
+    const cyclesDir    = path.join(tmpDir, 'cycles');
+
+    // Cycle 1: only contractA (TOO_EARLY)
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([
+        makeOutcome({ contract: contractA, observedAt: ONE_MIN_AGO }),
+      ]),
+    });
+    await runRipperPaperCycle({
+      runsDir, cyclesDir,
+      nowMs: NOW_MS,
+      clusterRiskProvider: offlineClusterRiskProvider,
+      seenContracts,
+      firstSeenMap,
+    });
+
+    // Cycle 2: contractA (refreshed) + contractB (brand new, also 1 min old)
+    const contractBDiscoveredAt = new Date(CYCLE2_MS - 60_000).toISOString();
+    fs.writeFileSync(
+      path.join(runsDir, 'run-20260610-100007.json'),
+      JSON.stringify(makeRunFile([
+        makeOutcome({ contract: contractA, observedAt: REFRESH_ISO }),
+        makeOutcome({ contract: contractB, observedAt: contractBDiscoveredAt }),
+      ])),
+    );
+    await runRipperPaperCycle({
+      runsDir, cyclesDir,
+      nowMs: CYCLE2_MS,
+      clusterRiskProvider: offlineClusterRiskProvider,
+      seenContracts,
+      firstSeenMap,
+    });
+
+    // contractA anchored to its original first-seen discoveredAt
+    expect(firstSeenMap.get(contractA)).toBe(ONE_MIN_AGO);
+    // contractB was first seen in cycle 2 — stores its own fresh discoveredAt
+    expect(firstSeenMap.get(contractB)).toBe(contractBDiscoveredAt);
+  });
+
+  it('does not alter discoveredAt when firstSeenMap not provided', async () => {
+    const contract = 'NoMapToken';
+    const runsDir  = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([
+        makeOutcome({ contract, observedAt: EIGHT_MIN_AGO }),
+      ]),
+    });
+
+    const result = await runRipperPaperCycle({
+      runsDir,
+      cyclesDir: path.join(tmpDir, 'cycles'),
+      nowMs: NOW_MS,
+      clusterRiskProvider: offlineClusterRiskProvider,
+      // no firstSeenMap
+    });
+
+    expect(result.fixturesCaptured).toBe(1);
+  });
+
+  it('safety fields remain true with firstSeenMap', async () => {
+    const firstSeenMap = new Map<string, string>();
+    const runsDir      = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([
+        makeOutcome({ observedAt: EIGHT_MIN_AGO }),
+      ]),
+    });
+    const result = await runRipperPaperCycle({
+      runsDir,
+      cyclesDir: path.join(tmpDir, 'cycles'),
+      nowMs: NOW_MS,
+      clusterRiskProvider: offlineClusterRiskProvider,
+      firstSeenMap,
+    });
+    expect(result.realTradingLocked).toBe(true);
+    expect(result.tradingExecuted).toBe(0);
+    expect(result.noRealTradeSent).toBe(true);
+    expect(result.paperOnly).toBe(true);
+    expect(result.readOnly).toBe(true);
+  });
+});
+
 // ── renderer ──────────────────────────────────────────────────────────────────
 
 describe('renderRipperPaperCycleResult', () => {
