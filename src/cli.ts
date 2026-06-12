@@ -172,6 +172,7 @@ import { runFixtureClusterEnrich, renderFixtureClusterEnrichReport, renderFixtur
 import { runClusterRiskAudit, renderClusterRiskAuditReport } from './token-grab/clusterRiskAudit';
 import { runBubbleMapsObservationReport, renderBubbleMapsObservationReport } from './token-grab/bubbleMapsObservationReport';
 import { createClusterRiskProvider } from './token-grab/clusterRiskProvider';
+import { runRipperPaperCycle, renderRipperPaperCycleResult, renderRipperPaperCycleUsage } from './token-grab/ripperPaperCycle';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -2723,6 +2724,27 @@ async function main(): Promise<void> {
           includeOld: fpfIncludeOld,
         });
         console.log(renderFreshPoolFeedResult(fpfResult, fpfDebug));
+        break;
+      }
+
+      case 'token:ripper-paper-cycle': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderRipperPaperCycleUsage());
+          break;
+        }
+        const rpcRunsDir   = getArgValue('--runs-dir')   ?? 'data/token-grab/dex-watch-runs';
+        const rpcCyclesDir = getArgValue('--cycles-dir') ?? 'data/token-grab/ripper/cycles';
+
+        const { provider: rpcClusterProvider, configNote: rpcClusterNote } =
+          createClusterRiskProvider();
+        if (rpcClusterNote) console.warn(`[cluster-risk] ${rpcClusterNote}`);
+
+        const rpcResult = await runRipperPaperCycle({
+          runsDir:             rpcRunsDir,
+          cyclesDir:           rpcCyclesDir,
+          clusterRiskProvider: rpcClusterProvider,
+        });
+        console.log(renderRipperPaperCycleResult(rpcResult));
         break;
       }
 
