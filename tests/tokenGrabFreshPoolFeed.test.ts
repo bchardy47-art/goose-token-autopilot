@@ -554,7 +554,7 @@ describe('freshPoolFeed freshness metrics', () => {
 // ── integration: fresh-pool-feed → live-fixture-capture ──────────────────────
 
 describe('runFreshPoolFeed — integration with live-fixture-capture', () => {
-  it('fresh-pool-feed → capture → report: fixture count > 0', () => {
+  it('fresh-pool-feed → capture → report: fixture count > 0', async () => {
     const runsDir = makeRunsDir({
       'run-20260610-100000.json': makeRunFile([makeOutcome({ observedAt: EIGHT_MIN_AGO })]),
     });
@@ -572,7 +572,7 @@ describe('runFreshPoolFeed — integration with live-fixture-capture', () => {
     expect(fs.existsSync(feedOutputPath)).toBe(true);
 
     // Step 2: live-fixture-capture reads the output
-    const captureResult = runLiveFixtureCapture({
+    const captureResult = await runLiveFixtureCapture({
       inputPath: feedOutputPath,
       outputPath: fixturesPath,
       format: 'ear-signals',
@@ -584,7 +584,7 @@ describe('runFreshPoolFeed — integration with live-fixture-capture', () => {
     expect(fs.existsSync(fixturesPath)).toBe(true);
   });
 
-  it('fresh signal in prime window scores as PRIME_WINDOW', () => {
+  it('fresh signal in prime window scores as PRIME_WINDOW', async () => {
     // 8 minutes ago → PRIME_WINDOW (2–20m)
     const runsDir = makeRunsDir({
       'run-20260610-100000.json': makeRunFile([makeOutcome({ observedAt: EIGHT_MIN_AGO })]),
@@ -593,7 +593,7 @@ describe('runFreshPoolFeed — integration with live-fixture-capture', () => {
     const fixturesPath   = path.join(tmpDir, 'live-fixtures.jsonl');
 
     runFreshPoolFeed({ runsDir, outputPath: feedOutputPath, nowMs: NOW_MS });
-    runLiveFixtureCapture({
+    await runLiveFixtureCapture({
       inputPath: feedOutputPath,
       outputPath: fixturesPath,
       format: 'ear-signals',
