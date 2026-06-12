@@ -177,6 +177,7 @@ import { runRipperPaperLoop, renderLoopCycleLine, renderRipperPaperLoopResult, r
 import { runRipperNearMissReport as runCycleNearMissReport, renderRipperNearMissReport as renderCycleNearMissReport, renderRipperNearMissReportUsage } from './token-grab/ripperNearMissReport';
 import { runRipperApprovedOutcomes, renderRipperApprovedOutcomes, renderRipperApprovedOutcomesUsage } from './token-grab/ripperApprovedOutcomes';
 import { runRipperApprovedAutopsy, renderRipperApprovedAutopsy } from './token-grab/ripperApprovedAutopsy';
+import { runRipperEntrySim, renderRipperEntrySim } from './token-grab/ripperEntrySim';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3159,6 +3160,41 @@ async function main(): Promise<void> {
         }
         const raaResult = runRipperApprovedAutopsy({ inputPaths: raaPaths });
         console.log(renderRipperApprovedAutopsy(raaResult));
+        break;
+      }
+
+      case 'token:ripper-entry-sim': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log('token:ripper-entry-sim — simulate stricter/delayed entry rules against ripper cycle artifacts');
+          console.log('Usage: npm run token:ripper-entry-sim -- --input <cycle-jsonl...> [--outcomes <outcome-json...>]');
+          break;
+        }
+        const resPaths: string[] = [];
+        const resInputIdx = process.argv.indexOf('--input');
+        if (resInputIdx !== -1) {
+          for (let i = resInputIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            resPaths.push(process.argv[i]);
+          }
+        }
+        if (resPaths.length === 0) {
+          console.error('[token:ripper-entry-sim] No --input cycle files specified.');
+          console.error('  Usage: npm run token:ripper-entry-sim -- --input data/token-grab/ripper/cycles/cycle-*.jsonl');
+          process.exit(1);
+        }
+        const resOutcomePaths: string[] = [];
+        const resOutcomeIdx = process.argv.indexOf('--outcomes');
+        if (resOutcomeIdx !== -1) {
+          for (let i = resOutcomeIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            resOutcomePaths.push(process.argv[i]);
+          }
+        }
+        const resResult = runRipperEntrySim({
+          inputPaths:   resPaths,
+          outcomePaths: resOutcomePaths.length > 0 ? resOutcomePaths : undefined,
+        });
+        console.log(renderRipperEntrySim(resResult));
         break;
       }
 
