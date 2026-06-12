@@ -6,7 +6,9 @@ import type { RipperEarSignal } from './ripperEars';
 
 const DEFAULT_RUNS_DIR    = 'data/token-grab/dex-watch-runs';
 const DEFAULT_OUTPUT_PATH = 'data/token-grab/ripper/ripper-ears-input.json';
-const DEFAULT_MAX_AGE_MIN = 60;
+// Matches DEFAULT_RIPPER_CONFIG.primeWindowMaxMinutes — signals older than this will score as
+// LATE or DEAD in the ripper, so pre-filter them here before enrichment/scoring.
+const DEFAULT_MAX_AGE_MIN = 20;
 
 const NEXT_STEP_LINES = [
   '  Run a fresh watch cycle to generate new pool data:',
@@ -466,7 +468,7 @@ Usage:
 Options:
   --runs-dir <path>         watch run directory (default: data/token-grab/dex-watch-runs)
   --output <path>           output path (default: data/token-grab/ripper/ripper-ears-input.json)
-  --max-age-minutes <n>     only include pools ≤ n minutes old (default: 60)
+  --max-age-minutes <n>     only include pools ≤ n minutes old (default: 20)
   --include-old             bypass age filter, include all candidates
   --debug                   print per-signal details
   --help                    show this message
@@ -474,8 +476,7 @@ Options:
 Age classification:
   0–2m    TOO_EARLY (ripper will not buy, but captures the signal)
   2–20m   PRIME_WINDOW (ripper target zone)
-  20–60m  LATE (may still act)
-  >60m    DEAD_WINDOW (filtered out by default)
+  >20m    LATE/DEAD — filtered out by default (matches ripper prime window)
 
 If no fresh source exists:
   Run: npm run token:dex-day-watch

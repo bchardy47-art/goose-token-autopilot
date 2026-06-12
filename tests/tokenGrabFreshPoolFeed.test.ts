@@ -661,6 +661,111 @@ describe('renderFreshPoolFeedResult', () => {
   });
 });
 
+// ── prime window prefilter — default maxAgeMinutes=20 ────────────────────────
+
+describe('runFreshPoolFeed — prime window prefilter (default maxAgeMinutes=20)', () => {
+  it('filters LATE signal (30m ago) without explicit maxAgeMinutes', () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([makeOutcome({ observedAt: THIRTY_MIN_AGO })]),
+    });
+    const result = runFreshPoolFeed({
+      runsDir,
+      outputPath: path.join(tmpDir, 'out.json'),
+      nowMs: NOW_MS,
+    });
+    expect(result.noFreshSignals).toBe(true);
+    expect(result.signalsWritten).toBe(0);
+    expect(result.skippedOldCount).toBe(1);
+  });
+
+  it('filters 2h-old signal without explicit maxAgeMinutes', () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([makeOutcome({ observedAt: TWO_HR_AGO })]),
+    });
+    const result = runFreshPoolFeed({
+      runsDir,
+      outputPath: path.join(tmpDir, 'out.json'),
+      nowMs: NOW_MS,
+    });
+    expect(result.noFreshSignals).toBe(true);
+    expect(result.skippedOldCount).toBe(1);
+  });
+
+  it('passes PRIME_WINDOW signal (8m ago) through default filter', () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([makeOutcome({ observedAt: EIGHT_MIN_AGO })]),
+    });
+    const result = runFreshPoolFeed({
+      runsDir,
+      outputPath: path.join(tmpDir, 'out.json'),
+      nowMs: NOW_MS,
+    });
+    expect(result.signalsWritten).toBe(1);
+    expect(result.skippedOldCount).toBe(0);
+  });
+
+  it('keeps PRIME_WINDOW signals and drops LATE signals using default filter', () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([
+        makeOutcome({ observedAt: EIGHT_MIN_AGO,  contract: 'PrimeToken111' }),
+        makeOutcome({ observedAt: THIRTY_MIN_AGO, contract: 'LateToken222' }),
+        makeOutcome({ observedAt: TWO_HR_AGO,     contract: 'DeadToken333' }),
+      ]),
+    });
+    const result = runFreshPoolFeed({
+      runsDir,
+      outputPath: path.join(tmpDir, 'out.json'),
+      nowMs: NOW_MS,
+    });
+    expect(result.signalsWritten).toBe(1);
+    expect(result.skippedOldCount).toBe(2);
+    expect(result.signals[0].contract).toBe('PrimeToken111');
+  });
+
+  it('skippedOldCount is visible in renderer output', () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([
+        makeOutcome({ observedAt: EIGHT_MIN_AGO,  contract: 'PrimeToken111' }),
+        makeOutcome({ observedAt: THIRTY_MIN_AGO, contract: 'LateToken222' }),
+      ]),
+    });
+    const out = path.join(tmpDir, 'out.json');
+    const result = runFreshPoolFeed({ runsDir, outputPath: out, nowMs: NOW_MS });
+    const rendered = renderFreshPoolFeedResult(result);
+    expect(rendered).toContain('Skipped (old)  : 1');
+    expect(rendered).toContain('Signals written: 1');
+  });
+
+  it('missing observedAt falls back to now and is treated as fresh (age ≈ 0)', () => {
+    const outcome = { ...makeOutcome(), entry: undefined };
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([outcome as any]),
+    });
+    const result = runFreshPoolFeed({
+      runsDir,
+      outputPath: path.join(tmpDir, 'out.json'),
+      nowMs: NOW_MS,
+    });
+    // Falls back to nowIso in dexWatchOutcomeToEarSignal → age ≈ 0 → passes default 20m filter
+    expect(result.signalsWritten).toBe(1);
+    expect(result.signals[0].warnings.some((w: string) => w.includes('observedAt missing'))).toBe(true);
+  });
+
+  it('--include-old bypasses the prime window prefilter', () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([makeOutcome({ observedAt: THIRTY_MIN_AGO })]),
+    });
+    const result = runFreshPoolFeed({
+      runsDir,
+      outputPath: path.join(tmpDir, 'out.json'),
+      includeOld: true,
+      nowMs: NOW_MS,
+    });
+    expect(result.signalsWritten).toBe(1);
+    expect(result.skippedOldCount).toBe(0);
+  });
+});
+
 // ── ageMinutes helper ─────────────────────────────────────────────────────────
 
 describe('ageMinutes', () => {
