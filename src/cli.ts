@@ -170,6 +170,7 @@ import { runQuotePreviewAudit, renderQuotePreviewAuditReport } from './token-gra
 import { runAutonomyReadinessAudit, renderAutonomyReadinessAuditReport } from './token-grab/autonomyReadinessAudit';
 import { runFixtureClusterEnrich, renderFixtureClusterEnrichReport, renderFixtureClusterEnrichUsage } from './token-grab/fixtureClusterEnrich';
 import { runClusterRiskAudit, renderClusterRiskAuditReport } from './token-grab/clusterRiskAudit';
+import { runBubbleMapsObservationReport, renderBubbleMapsObservationReport } from './token-grab/bubbleMapsObservationReport';
 import { createClusterRiskProvider } from './token-grab/clusterRiskProvider';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
@@ -2914,6 +2915,17 @@ async function main(): Promise<void> {
         const craInput  = getArgValue('--input') ?? 'data/token-grab/ripper/live-fixtures.jsonl';
         const craResult = runClusterRiskAudit({ inputPath: craInput });
         console.log(renderClusterRiskAuditReport(craResult));
+        break;
+      }
+
+      case 'token:bubblemaps-observation-report': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log('token:bubblemaps-observation-report — summarize BubbleMaps cluster outcomes from live fixtures');
+          break;
+        }
+        const bmorInput = getArgValue('--input') ?? 'data/token-grab/ripper/live-fixtures.jsonl';
+        const bmorResult = runBubbleMapsObservationReport({ inputPath: bmorInput });
+        console.log(renderBubbleMapsObservationReport(bmorResult));
         break;
       }
 

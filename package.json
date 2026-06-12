@@ -106,6 +106,7 @@
     "token:autonomy-readiness-audit": "tsx src/cli.ts token:autonomy-readiness-audit",
     "token:fixture-cluster-enrich": "tsx src/cli.ts token:fixture-cluster-enrich",
     "token:cluster-risk-audit": "tsx src/cli.ts token:cluster-risk-audit",
+    "token:bubblemaps-observation-report": "tsx src/cli.ts token:bubblemaps-observation-report",
     "token:outcome-tracker": "tsx src/cli.ts token:outcome-tracker",
     "token:outcome-autopsy": "tsx src/cli.ts token:outcome-autopsy",
     "token:outcome-tracker-v2": "tsx src/cli.ts token:outcome-tracker-v2",
