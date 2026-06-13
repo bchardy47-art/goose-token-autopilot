@@ -104,6 +104,7 @@
     "token:ripper-paper-loop": "tsx src/cli.ts token:ripper-paper-loop",
     "token:ripper-near-miss-report": "tsx src/cli.ts token:ripper-near-miss-report",
     "token:ripper-approved-outcomes": "tsx src/cli.ts token:ripper-approved-outcomes",
+    "token:ripper-delayed-watch": "tsx src/cli.ts token:ripper-delayed-watch",
     "token:ripper-approved-autopsy": "tsx src/cli.ts token:ripper-approved-autopsy",
     "token:ripper-entry-sim": "tsx src/cli.ts token:ripper-entry-sim",
     "token:prime-gate-audit": "tsx src/cli.ts token:prime-gate-audit",
