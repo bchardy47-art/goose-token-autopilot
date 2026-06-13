@@ -179,6 +179,7 @@ import { runRipperApprovedOutcomes, renderRipperApprovedOutcomes, renderRipperAp
 import { runRipperApprovedAutopsy, renderRipperApprovedAutopsy } from './token-grab/ripperApprovedAutopsy';
 import { runRipperEntrySim, renderRipperEntrySim } from './token-grab/ripperEntrySim';
 import { runRipperDelayedWatch, renderRipperDelayedWatch } from './token-grab/ripperDelayedWatch';
+import { runRipperApprovedObservationAutopsy, renderRipperApprovedObservationAutopsy } from './token-grab/ripperApprovedObservationAutopsy';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3255,6 +3256,45 @@ async function main(): Promise<void> {
           delayTargetMinutes: rdwDelay,
         });
         console.log(renderRipperDelayedWatch(rdwResult));
+        break;
+      }
+
+      case 'token:ripper-approved-observation-autopsy': {
+        const raoaApprovalsIdx = process.argv.indexOf('--approvals');
+        const raoaApprovalPaths: string[] = [];
+        if (raoaApprovalsIdx !== -1) {
+          for (let i = raoaApprovalsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            raoaApprovalPaths.push(process.argv[i]);
+          }
+        }
+        const raoaObsIdx = process.argv.indexOf('--observations');
+        const raoaObsPaths: string[] = [];
+        if (raoaObsIdx !== -1) {
+          for (let i = raoaObsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            raoaObsPaths.push(process.argv[i]);
+          }
+        }
+        const raoaOutcomesIdx = process.argv.indexOf('--outcomes');
+        const raoaOutcomePaths: string[] = [];
+        if (raoaOutcomesIdx !== -1) {
+          for (let i = raoaOutcomesIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            raoaOutcomePaths.push(process.argv[i]);
+          }
+        }
+        if (raoaApprovalPaths.length === 0) {
+          console.error('[token:ripper-approved-observation-autopsy] No --approvals files specified.');
+          console.error('  Usage: npm run token:ripper-approved-observation-autopsy -- --approvals data/token-grab/ripper/cycles/cycle-*.jsonl --observations data/token-grab/ripper/observations/obs-*.jsonl --outcomes data/token-grab/ripper/outcomes/ripper-approved-outcomes-*.json');
+          process.exit(1);
+        }
+        const raoaResult = runRipperApprovedObservationAutopsy({
+          approvalPaths:    raoaApprovalPaths,
+          observationPaths: raoaObsPaths,
+          outcomePaths:     raoaOutcomePaths,
+        });
+        console.log(renderRipperApprovedObservationAutopsy(raoaResult));
         break;
       }
 
