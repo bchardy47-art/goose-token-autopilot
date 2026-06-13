@@ -56,6 +56,27 @@ export interface ComboLeader {
   winRate:     number | null;
 }
 
+export interface FullComboWatchlistSummary {
+  totalCount:         number;
+  pricedCount:        number;
+  pendingCount:       number;
+  winners:            number;
+  losers:             number;
+  winRate:            number | null;
+  avgPct:             number | null;
+  medianPct:          number | null;
+  worstLoss:          number | null;
+  oldestPendingAgeMs: number | null;
+  newestPendingAgeMs: number | null;
+}
+
+export interface FullComboWatchlist {
+  policyId:    string;
+  description: string;
+  candidates:  ComboCandidate[];
+  summary:     FullComboWatchlistSummary;
+}
+
 export interface RipperShadowComboReportOptions {
   approvalPaths: string[];
   outcomePaths:  string[];
@@ -76,6 +97,7 @@ export interface RipperShadowComboReportResult {
   allStats:                ComboPolicyStats;
   policyStats:             ComboPolicyStats[];
   currentLeader:           ComboLeader | null;
+  fullComboWatchlist:      FullComboWatchlist;
   realTradingLocked:       true;
   tradingExecuted:         0;
   noRealTradeSent:         true;
@@ -84,6 +106,8 @@ export interface RipperShadowComboReportResult {
 }
 
 // ── Policy definitions ────────────────────────────────────────────────────────
+
+export const FULL_COMBO_POLICY_ID = 'price_gt_0_25_and_liq_30k_and_vol_20k';
 
 export const COMBO_POLICIES: ComboPolicyDef[] = [
   {
@@ -344,6 +368,48 @@ export function runRipperShadowComboReport(
     }
   }
 
+  // ── Step 6: Build full combo watchlist ────────────────────────────────────
+  const fullComboPolicyDef = COMBO_POLICIES.find(p => p.id === FULL_COMBO_POLICY_ID)!;
+  const fullComboCands     = allCandidates.filter(c => fullComboPolicyDef.evaluate(c));
+
+  // Sort: PENDING_PRICE first (newest approvedAt first), then priced (newest approvedAt first)
+  fullComboCands.sort((a, b) => {
+    const aPending = a.classification === 'PENDING_PRICE';
+    const bPending = b.classification === 'PENDING_PRICE';
+    if (aPending !== bPending) return aPending ? -1 : 1;
+    return b.approvedAt.localeCompare(a.approvedAt);
+  });
+
+  const fcPriced   = fullComboCands.filter(c => c.outcomePctChange != null);
+  const fcPending  = fullComboCands.filter(c => c.outcomePctChange == null);
+  const fcWinners  = fcPriced.filter(c => c.classification === 'WINNER');
+  const fcLosers   = fcPriced.filter(c => c.classification === 'LOSER');
+  const fcOutcomes = fcPriced.map(c => c.outcomePctChange as number);
+  const fcWorstLoss = fcOutcomes.length > 0 ? Math.min(...fcOutcomes) : null;
+
+  const pendingAges = fcPending
+    .map(c => { const ms = nowMs - Date.parse(c.approvedAt); return Number.isFinite(ms) ? ms : null; })
+    .filter((v): v is number => v != null);
+
+  const fullComboWatchlist: FullComboWatchlist = {
+    policyId:    FULL_COMBO_POLICY_ID,
+    description: fullComboPolicyDef.description,
+    candidates:  fullComboCands,
+    summary: {
+      totalCount:         fullComboCands.length,
+      pricedCount:        fcPriced.length,
+      pendingCount:       fcPending.length,
+      winners:            fcWinners.length,
+      losers:             fcLosers.length,
+      winRate:            fcPriced.length > 0 ? (fcWinners.length / fcPriced.length) * 100 : null,
+      avgPct:             avgOf(fcOutcomes),
+      medianPct:          medianOf(fcOutcomes),
+      worstLoss:          fcWorstLoss,
+      oldestPendingAgeMs: pendingAges.length > 0 ? Math.max(...pendingAges) : null,
+      newestPendingAgeMs: pendingAges.length > 0 ? Math.min(...pendingAges) : null,
+    },
+  };
+
   return {
     generatedAt,
     approvalFilesRead,
@@ -358,6 +424,7 @@ export function runRipperShadowComboReport(
     allStats,
     policyStats,
     currentLeader,
+    fullComboWatchlist,
     realTradingLocked: true,
     tradingExecuted:   0,
     noRealTradeSent:   true,
@@ -388,6 +455,66 @@ function fmtClass(c: ComboCandidateClassification): string {
   if (c === 'WINNER') return 'WINNER ';
   if (c === 'LOSER')  return 'LOSER  ';
   return 'PENDING';
+}
+
+function fmtAge(ms: number): string {
+  if (ms < 0) return '0m';
+  const totalMin = Math.floor(ms / 60_000);
+  const days  = Math.floor(totalMin / 1440);
+  const hours = Math.floor((totalMin % 1440) / 60);
+  const mins  = totalMin % 60;
+  if (days > 0)  return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return `${mins}m`;
+}
+
+function renderFullComboWatchlist(
+  wl:          FullComboWatchlist,
+  generatedAt: string,
+): string[] {
+  const lines: string[] = [];
+  const nowMs = Date.parse(generatedAt);
+  const s     = wl.summary;
+
+  lines.push(`  Watchlist policy : ${wl.policyId}`);
+  lines.push(`  Description      : ${wl.description}`);
+  lines.push('');
+  lines.push(`  Total: ${s.totalCount}   Priced: ${s.pricedCount}   Pending: ${s.pendingCount}`);
+  lines.push(`  Winners: ${s.winners}   Losers: ${s.losers}   Win rate: ${fmtRate(s.winRate)}`);
+  if (s.avgPct    != null) lines.push(`  Avg outcome : ${fmtPct(s.avgPct)}`);
+  if (s.medianPct != null) lines.push(`  Median      : ${fmtPct(s.medianPct)}`);
+  if (s.worstLoss != null) lines.push(`  Worst loss  : ${fmtPct(s.worstLoss)}`);
+  if (s.oldestPendingAgeMs != null) lines.push(`  Oldest pending: ${fmtAge(s.oldestPendingAgeMs)} ago`);
+  if (s.newestPendingAgeMs != null) lines.push(`  Newest pending: ${fmtAge(s.newestPendingAgeMs)} ago`);
+  lines.push('');
+
+  if (wl.candidates.length === 0) {
+    lines.push('  (no candidates pass the full combo policy)');
+    return lines;
+  }
+
+  lines.push('  class    age          outcome  pricePct  liqUsd         volUsd         approvedAt           sym/addr');
+  let hasRepeated = false;
+  for (const c of wl.candidates) {
+    const cls   = fmtClass(c.classification);
+    const ageMs = nowMs - Date.parse(c.approvedAt);
+    const age   = Number.isFinite(ageMs) ? fmtAge(ageMs).padEnd(12) : '?'.padEnd(12);
+    const out   = fmtPct(c.outcomePctChange).padStart(8);
+    const prc   = c.approvalPriceChangePct != null
+      ? `${c.approvalPriceChangePct >= 0 ? '+' : ''}${c.approvalPriceChangePct.toFixed(2)}%`.padEnd(9)
+      : '     n/a ';
+    const liq   = fmtUsd(c.liquidityUsd).padEnd(14);
+    const vol   = fmtUsd(c.volumeUsd).padEnd(14);
+    const ts    = c.approvedAt.slice(0, 19).replace('T', ' ');
+    const lbl   = c.symbol ? `$${c.symbol}` : c.contractKeyShort;
+    const rep   = c.repeatedContract ? ' [*]' : '';
+    if (c.repeatedContract) hasRepeated = true;
+    lines.push(`  ${cls} ${age} ${out}  ${prc}  ${liq}  ${vol}  ${ts}  ${lbl}${rep}`);
+  }
+  if (hasRepeated) {
+    lines.push('  [*] Repeated contract: all instances share the same latest outcome (outcomes keyed by contractKey).');
+  }
+  return lines;
 }
 
 function renderPolicyCandidateTable(stats: ComboPolicyStats): string[] {
@@ -548,6 +675,14 @@ export function renderRipperShadowComboReport(
     lines.push('');
     lines.push('  ⚠ This is exploratory only. Do NOT use as a buy signal or gate.');
   }
+  lines.push('');
+
+  // ── Full combo watchlist (always shown) ───────────────────────────────────
+  lines.push(`  ${SEP2}`);
+  lines.push('  FULL COMBO WATCHLIST');
+  lines.push(`  ${SEP2}`);
+  lines.push('');
+  for (const l of renderFullComboWatchlist(result.fullComboWatchlist, result.generatedAt)) lines.push(l);
   lines.push('');
 
   // ── Do Not Apply Yet (always shown) ───────────────────────────────────────

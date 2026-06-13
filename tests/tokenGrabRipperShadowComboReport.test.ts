@@ -6,6 +6,7 @@ import {
   runRipperShadowComboReport,
   renderRipperShadowComboReport,
   COMBO_POLICIES,
+  FULL_COMBO_POLICY_ID,
   type ComboCandidate,
 } from '../src/token-grab/ripperShadowComboReport';
 
@@ -761,5 +762,247 @@ describe('renderRipperShadowComboReport', () => {
   it('returns a non-empty string', () => {
     const result = runRipperShadowComboReport({ approvalPaths: [], outcomePaths: [] });
     expect(renderRipperShadowComboReport(result).trim().length).toBeGreaterThan(0);
+  });
+
+  it('renders FULL COMBO WATCHLIST section', () => {
+    const result = runRipperShadowComboReport({ approvalPaths: [], outcomePaths: [] });
+    expect(renderRipperShadowComboReport(result)).toContain('FULL COMBO WATCHLIST');
+  });
+
+  it('includes pending full-combo candidate in watchlist output', () => {
+    const p = writeApprovalJsonl('c.jsonl', [
+      makeApprovalFixture({ contract: CONTRACT_A, symbol: 'PEND', priceChangePct: 1.0, liquidityUsd: 50_000, volumeUsd: 25_000 }),
+    ]);
+    const result = runRipperShadowComboReport({ approvalPaths: [p], outcomePaths: [] });
+    const text = renderRipperShadowComboReport(result);
+    expect(text).toContain('FULL COMBO WATCHLIST');
+    expect(text).toContain('PENDING');
+    expect(text).toContain('$PEND');
+  });
+
+  it('includes priced full-combo candidate in watchlist output', () => {
+    const p  = writeApprovalJsonl('c.jsonl', [
+      makeApprovalFixture({ contract: CONTRACT_A, symbol: 'WIN', priceChangePct: 1.0, liquidityUsd: 50_000, volumeUsd: 25_000 }),
+    ]);
+    const oc = writeOutcomeJson('out.json', makeOutcomeFile([{ contractKey: CONTRACT_A, pctChangeFromEntry: 40 }]));
+    const result = runRipperShadowComboReport({ approvalPaths: [p], outcomePaths: [oc] });
+    const text = renderRipperShadowComboReport(result);
+    expect(text).toContain('WINNER');
+    expect(text).toContain('$WIN');
+  });
+
+  it('shows candidate pricePct, liqUsd, volUsd fields in watchlist output', () => {
+    const p = writeApprovalJsonl('c.jsonl', [
+      makeApprovalFixture({ contract: CONTRACT_A, symbol: 'AAA', priceChangePct: 2.5, liquidityUsd: 45_000, volumeUsd: 22_000 }),
+    ]);
+    const result = runRipperShadowComboReport({ approvalPaths: [p], outcomePaths: [] });
+    const text = renderRipperShadowComboReport(result);
+    expect(text).toContain('+2.50%');
+    expect(text).toContain('$45,000');
+    expect(text).toContain('$22,000');
+  });
+
+  it('shows repeated contract marker [*] in watchlist when contract is repeated', () => {
+    const earlier = new Date(BASE_MS - 60_000).toISOString();
+    const p = writeApprovalJsonl('c.jsonl', [
+      makeApprovalFixture({ contract: CONTRACT_A, symbol: 'REP', capturedAt: BASE_ISO,  priceChangePct: 1.0, liquidityUsd: 50_000, volumeUsd: 25_000 }),
+      makeApprovalFixture({ contract: CONTRACT_A, symbol: 'REP', capturedAt: earlier,   priceChangePct: 1.0, liquidityUsd: 50_000, volumeUsd: 25_000 }),
+    ]);
+    const result = runRipperShadowComboReport({ approvalPaths: [p], outcomePaths: [] });
+    expect(renderRipperShadowComboReport(result)).toContain('[*]');
+  });
+});
+
+// ── Full combo watchlist data tests ────────────────────────────────────────────
+
+describe('runRipperShadowComboReport — fullComboWatchlist', () => {
+  it('policyId is the full combo policy', () => {
+    const result = runRipperShadowComboReport({ approvalPaths: [], outcomePaths: [] });
+    expect(result.fullComboWatchlist.policyId).toBe(FULL_COMBO_POLICY_ID);
+  });
+
+  it('contains only candidates that pass all three conditions', () => {
+    const { approvalPath, outcomePath } = buildStandardDataset(tmpDir);
+    const result = runRipperShadowComboReport({ approvalPaths: [approvalPath], outcomePaths: [outcomePath] });
+    const wl = result.fullComboWatchlist;
+    // Standard dataset: A(price=5.0,liq=120k,vol=60k) and C(price=0.5,liq=40k,vol=25k) pass D
+    // D(price=0.1) fails price. B(liq=5k) fails liq. E(vol=5k) fails vol.
+    expect(wl.summary.totalCount).toBe(2);
+    expect(wl.candidates.map(c => c.symbol).sort()).toEqual(['AAA', 'CCC'].sort());
+  });
+
+  it('summary counts priced and pending correctly', () => {
+    const p = writeApprovalJsonl('c.jsonl', [
+      makeApprovalFixture({ contract: CONTRACT_A, priceChangePct: 1.0, liquidityUsd: 50_000, volumeUsd: 25_000 }),
+      makeApprovalFixture({ contract: CONTRACT_B, priceChangePct: 0.5, liquidityUsd: 35_000, volumeUsd: 21_000 }),
+    ]);
+    const oc = writeOutcomeJson('out.json', makeOutcomeFile([
+      { contractKey: CONTRACT_A, pctChangeFromEntry: 30 },
+    ]));
+    const result = runRipperShadowComboReport({ approvalPaths: [p], outcomePaths: [oc] });
+    const s = result.fullComboWatchlist.summary;
+    expect(s.totalCount).toBe(2);
+    expect(s.pricedCount).toBe(1);
+    expect(s.pendingCount).toBe(1);
+  });
+
+  it('summary computes winners, losers, winRate', () => {
+    const p = writeApprovalJsonl('c.jsonl', [
+      makeApprovalFixture({ contract: CONTRACT_A, priceChangePct: 1.0, liquidityUsd: 50_000, volumeUsd: 25_000 }),
+      makeApprovalFixture({ contract: CONTRACT_B, priceChangePct: 0.5, liquidityUsd: 35_000, volumeUsd: 21_000 }),
+      makeApprovalFixture({ contract: CONTRACT_C, priceChangePct: 0.8, liquidityUsd: 40_000, volumeUsd: 30_000 }),
+    ]);
+    const oc = writeOutcomeJson('out.json', makeOutcomeFile([
+      { contractKey: CONTRACT_A, pctChangeFromEntry:  40 },
+      { contractKey: CONTRACT_B, pctChangeFromEntry: -20 },
+      { contractKey: CONTRACT_C, pctChangeFromEntry:  60 },
+    ]));
+    const result = runRipperShadowComboReport({ approvalPaths: [p], outcomePaths: [oc] });
+    const s = result.fullComboWatchlist.summary;
+    expect(s.winners).toBe(2);
+    expect(s.losers).toBe(1);
+    expect(s.winRate).toBeCloseTo(66.67, 1);
+  });
+
+  it('summary computes avgPct, medianPct, worstLoss', () => {
+    const p = writeApprovalJsonl('c.jsonl', [
+      makeApprovalFixture({ contract: CONTRACT_A, priceChangePct: 1.0, liquidityUsd: 50_000, volumeUsd: 25_000 }),
+      makeApprovalFixture({ contract: CONTRACT_B, priceChangePct: 0.5, liquidityUsd: 35_000, volumeUsd: 21_000 }),
+      makeApprovalFixture({ contract: CONTRACT_C, priceChangePct: 0.8, liquidityUsd: 40_000, volumeUsd: 30_000 }),
+    ]);
+    const oc = writeOutcomeJson('out.json', makeOutcomeFile([
+      { contractKey: CONTRACT_A, pctChangeFromEntry:  40 },
+      { contractKey: CONTRACT_B, pctChangeFromEntry: -20 },
+      { contractKey: CONTRACT_C, pctChangeFromEntry:  10 },
+    ]));
+    const result = runRipperShadowComboReport({ approvalPaths: [p], outcomePaths: [oc] });
+    const s = result.fullComboWatchlist.summary;
+    expect(s.avgPct).toBeCloseTo((40 - 20 + 10) / 3, 3);
+    expect(s.medianPct).toBeCloseTo(10, 3);   // sorted: -20, 10, 40 → 10
+    expect(s.worstLoss).toBeCloseTo(-20, 3);
+  });
+
+  it('summary winRate is null when no priced candidates', () => {
+    const p = writeApprovalJsonl('c.jsonl', [
+      makeApprovalFixture({ contract: CONTRACT_A, priceChangePct: 1.0, liquidityUsd: 50_000, volumeUsd: 25_000 }),
+    ]);
+    const result = runRipperShadowComboReport({ approvalPaths: [p], outcomePaths: [] });
+    expect(result.fullComboWatchlist.summary.winRate).toBeNull();
+  });
+
+  it('summary worstLoss is null when no priced candidates', () => {
+    const p = writeApprovalJsonl('c.jsonl', [
+      makeApprovalFixture({ contract: CONTRACT_A, priceChangePct: 1.0, liquidityUsd: 50_000, volumeUsd: 25_000 }),
+    ]);
+    const result = runRipperShadowComboReport({ approvalPaths: [p], outcomePaths: [] });
+    expect(result.fullComboWatchlist.summary.worstLoss).toBeNull();
+  });
+
+  it('sorts pending candidates first, newest approvedAt first', () => {
+    const t1 = new Date(BASE_MS - 120_000).toISOString();  // oldest pending
+    const t2 = new Date(BASE_MS -  60_000).toISOString();  // newer pending
+    const t3 = new Date(BASE_MS - 180_000).toISOString();  // priced (older than both pending)
+    const p  = writeApprovalJsonl('c.jsonl', [
+      makeApprovalFixture({ contract: CONTRACT_A, capturedAt: t1, priceChangePct: 1.0, liquidityUsd: 50_000, volumeUsd: 25_000 }),
+      makeApprovalFixture({ contract: CONTRACT_B, capturedAt: t2, priceChangePct: 0.5, liquidityUsd: 35_000, volumeUsd: 21_000 }),
+      makeApprovalFixture({ contract: CONTRACT_C, capturedAt: t3, priceChangePct: 0.8, liquidityUsd: 40_000, volumeUsd: 30_000 }),
+    ]);
+    const oc = writeOutcomeJson('out.json', makeOutcomeFile([
+      { contractKey: CONTRACT_C, pctChangeFromEntry: 30 },
+    ]));
+    const result = runRipperShadowComboReport({ approvalPaths: [p], outcomePaths: [oc] });
+    const wl = result.fullComboWatchlist;
+    // Expected order: B (pending, newer t2), A (pending, older t1), C (priced)
+    expect(wl.candidates[0].contractKey).toBe(CONTRACT_B);  // newest pending first
+    expect(wl.candidates[1].contractKey).toBe(CONTRACT_A);  // older pending
+    expect(wl.candidates[2].contractKey).toBe(CONTRACT_C);  // priced last
+  });
+
+  it('sorts priced candidates by newest approvedAt first within priced group', () => {
+    const t1 = new Date(BASE_MS - 120_000).toISOString();
+    const t2 = new Date(BASE_MS -  60_000).toISOString();
+    const p  = writeApprovalJsonl('c.jsonl', [
+      makeApprovalFixture({ contract: CONTRACT_A, capturedAt: t1, priceChangePct: 1.0, liquidityUsd: 50_000, volumeUsd: 25_000 }),
+      makeApprovalFixture({ contract: CONTRACT_B, capturedAt: t2, priceChangePct: 0.5, liquidityUsd: 35_000, volumeUsd: 21_000 }),
+    ]);
+    const oc = writeOutcomeJson('out.json', makeOutcomeFile([
+      { contractKey: CONTRACT_A, pctChangeFromEntry:  20 },
+      { contractKey: CONTRACT_B, pctChangeFromEntry: -10 },
+    ]));
+    const result = runRipperShadowComboReport({ approvalPaths: [p], outcomePaths: [oc] });
+    // Both priced; B (t2 = newer) should come before A (t1 = older)
+    expect(result.fullComboWatchlist.candidates[0].contractKey).toBe(CONTRACT_B);
+    expect(result.fullComboWatchlist.candidates[1].contractKey).toBe(CONTRACT_A);
+  });
+
+  it('computes oldestPendingAgeMs and newestPendingAgeMs relative to nowMs', () => {
+    const old = new Date(BASE_MS - 7_200_000).toISOString(); // 2h ago
+    const new_ = new Date(BASE_MS -   600_000).toISOString(); // 10m ago
+    const p = writeApprovalJsonl('c.jsonl', [
+      makeApprovalFixture({ contract: CONTRACT_A, capturedAt: old,  priceChangePct: 1.0, liquidityUsd: 50_000, volumeUsd: 25_000 }),
+      makeApprovalFixture({ contract: CONTRACT_B, capturedAt: new_, priceChangePct: 0.5, liquidityUsd: 35_000, volumeUsd: 21_000 }),
+    ]);
+    const result = runRipperShadowComboReport({ approvalPaths: [p], outcomePaths: [], nowMs: BASE_MS });
+    const s = result.fullComboWatchlist.summary;
+    expect(s.oldestPendingAgeMs).toBeCloseTo(7_200_000, -3);
+    expect(s.newestPendingAgeMs).toBeCloseTo(  600_000, -3);
+  });
+
+  it('oldestPendingAgeMs and newestPendingAgeMs are null when no pending candidates', () => {
+    const p  = writeApprovalJsonl('c.jsonl', [
+      makeApprovalFixture({ contract: CONTRACT_A, priceChangePct: 1.0, liquidityUsd: 50_000, volumeUsd: 25_000 }),
+    ]);
+    const oc = writeOutcomeJson('out.json', makeOutcomeFile([
+      { contractKey: CONTRACT_A, pctChangeFromEntry: 10 },
+    ]));
+    const result = runRipperShadowComboReport({ approvalPaths: [p], outcomePaths: [oc] });
+    expect(result.fullComboWatchlist.summary.oldestPendingAgeMs).toBeNull();
+    expect(result.fullComboWatchlist.summary.newestPendingAgeMs).toBeNull();
+  });
+
+  it('shows age in watchlist output for pending candidates', () => {
+    const approvedAt = new Date(BASE_MS - 3_600_000).toISOString(); // 1h ago
+    const p = writeApprovalJsonl('c.jsonl', [
+      makeApprovalFixture({ contract: CONTRACT_A, capturedAt: approvedAt, priceChangePct: 1.0, liquidityUsd: 50_000, volumeUsd: 25_000 }),
+    ]);
+    const result = runRipperShadowComboReport({ approvalPaths: [p], outcomePaths: [], nowMs: BASE_MS });
+    const text = renderRipperShadowComboReport(result);
+    expect(text).toContain('1h 0m');  // age should appear in the row
+  });
+
+  it('shows outcome pct in watchlist output for priced candidates', () => {
+    const p  = writeApprovalJsonl('c.jsonl', [
+      makeApprovalFixture({ contract: CONTRACT_A, symbol: 'WIN', priceChangePct: 1.0, liquidityUsd: 50_000, volumeUsd: 25_000 }),
+    ]);
+    const oc = writeOutcomeJson('out.json', makeOutcomeFile([
+      { contractKey: CONTRACT_A, pctChangeFromEntry: 42.5 },
+    ]));
+    const result = runRipperShadowComboReport({ approvalPaths: [p], outcomePaths: [oc] });
+    const text = renderRipperShadowComboReport(result);
+    expect(text).toContain('+42.5%');
+  });
+
+  it('safety footer still present after adding watchlist', () => {
+    const result = runRipperShadowComboReport({ approvalPaths: [], outcomePaths: [] });
+    const text = renderRipperShadowComboReport(result);
+    expect(text).toContain('realTradingLocked=true');
+    expect(text).toContain('tradingExecuted=0');
+    expect(text).toContain('paperOnly=true');
+  });
+
+  it('no full combo candidates when watchlist is empty', () => {
+    const result = runRipperShadowComboReport({ approvalPaths: [], outcomePaths: [] });
+    expect(result.fullComboWatchlist.summary.totalCount).toBe(0);
+    expect(renderRipperShadowComboReport(result)).toContain('no candidates pass the full combo policy');
+  });
+
+  it('does not include non-passing candidates in watchlist', () => {
+    // only price > 0.25, but liq too low — should NOT appear in watchlist
+    const p = writeApprovalJsonl('c.jsonl', [
+      makeApprovalFixture({ contract: CONTRACT_A, symbol: 'LOW', priceChangePct: 1.0, liquidityUsd: 5_000, volumeUsd: 25_000 }),
+    ]);
+    const result = runRipperShadowComboReport({ approvalPaths: [p], outcomePaths: [] });
+    expect(result.fullComboWatchlist.summary.totalCount).toBe(0);
+    expect(result.fullComboWatchlist.candidates).toHaveLength(0);
   });
 });
