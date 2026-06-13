@@ -6,8 +6,9 @@ import { runLiveFixtureCapture, type LiveRipperFixture } from './liveFixtureCapt
 import type { ClusterRiskProvider } from './clusterRiskProvider';
 import type { RipperEarSignal } from './ripperEars';
 
-const DEFAULT_RUNS_DIR   = 'data/token-grab/dex-watch-runs';
-const DEFAULT_CYCLES_DIR = 'data/token-grab/ripper/cycles';
+const DEFAULT_RUNS_DIR         = 'data/token-grab/dex-watch-runs';
+const DEFAULT_CYCLES_DIR       = 'data/token-grab/ripper/cycles';
+const DEFAULT_OBSERVATIONS_DIR = 'data/token-grab/ripper/observations';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -20,6 +21,10 @@ export interface RipperPaperCycleOptions {
   seenContracts?: Set<string>;
   /** Session-level first-seen map — key → earliest discoveredAt ISO; mutated in place */
   firstSeenMap?: Map<string, string>;
+  /** Approved contracts from this session — key → original approvedAt ISO; mutated in place */
+  approvedContracts?: Map<string, string>;
+  /** Directory for post-approval observation artifacts (default: data/token-grab/ripper/observations) */
+  observationsDir?: string;
 }
 
 export interface RipperPaperCycleResult {
@@ -39,6 +44,10 @@ export interface RipperPaperCycleResult {
   tooEarlyRecheckableCount: number;
   outputPath: string | null;
   feedOutputPath: string;
+  /** Post-approval observation fixtures captured this cycle (read-only, no new buy approvals) */
+  postApprovalObservedCount: number;
+  /** Path to observation JSONL artifact (null if no observations this cycle) */
+  observationOutputPath: string | null;
   realTradingLocked: true;
   tradingExecuted: 0;
   noRealTradeSent: true;
@@ -134,19 +143,32 @@ export async function runRipperPaperCycle(
       tooEarlyRecheckableCount: 0,
       outputPath:          null,
       feedOutputPath,
+      postApprovalObservedCount: 0,
+      observationOutputPath:     null,
       ...safetyFields,
     };
   }
 
-  // ── Step 2b: session dedupe — filter signals already seen this session ────
+  // ── Step 2b: session dedupe — separate new signals from observation candidates ──
   let effectiveSignals = feedResult.signals;
+  let toObserve: RipperEarSignal[] = [];
   let seenSkippedCount = 0;
 
   if (options.seenContracts && options.seenContracts.size > 0) {
-    const newSignals = feedResult.signals.filter(s => !options.seenContracts!.has(signalKey(s)));
-    seenSkippedCount = feedResult.signals.length - newSignals.length;
-
-    if (seenSkippedCount > 0) {
+    const newSignals: RipperEarSignal[] = [];
+    for (const s of feedResult.signals) {
+      const key = signalKey(s);
+      if (options.seenContracts.has(key)) {
+        if (options.approvedContracts?.has(key)) {
+          toObserve.push(s);
+        } else {
+          seenSkippedCount++;
+        }
+      } else {
+        newSignals.push(s);
+      }
+    }
+    if (seenSkippedCount > 0 || toObserve.length > 0) {
       effectiveSignals = newSignals;
       try {
         fs.writeFileSync(feedOutputPath, JSON.stringify({ signals: newSignals }, null, 2), 'utf-8');
@@ -156,7 +178,8 @@ export async function runRipperPaperCycle(
     }
   }
 
-  if (effectiveSignals.length === 0) {
+  // Early-exit only when there is nothing to process at all (neither new signals nor observations)
+  if (effectiveSignals.length === 0 && toObserve.length === 0) {
     return {
       cycleStartedAt,
       cycleSlug,
@@ -173,6 +196,8 @@ export async function runRipperPaperCycle(
       tooEarlyRecheckableCount: 0,
       outputPath:          null,
       feedOutputPath,
+      postApprovalObservedCount: 0,
+      observationOutputPath:     null,
       ...safetyFields,
     };
   }
@@ -184,45 +209,62 @@ export async function runRipperPaperCycle(
   // after the refresh even though real elapsed time has accumulated. We pin
   // discoveredAt to the EARLIEST value recorded for each candidate key so age
   // grows correctly across cycles.
-  if (options.firstSeenMap && effectiveSignals.length > 0) {
-    let anyNormalized = false;
-    const normalizedSignals = effectiveSignals.map(s => {
-      const key      = signalKey(s);
-      const existing = options.firstSeenMap!.get(key);
-      if (existing) {
-        if (s.discoveredAt !== existing) {
-          anyNormalized = true;
-          return { ...s, discoveredAt: existing };
+  if (options.firstSeenMap) {
+    if (effectiveSignals.length > 0) {
+      let anyNormalized = false;
+      const normalizedSignals = effectiveSignals.map(s => {
+        const key      = signalKey(s);
+        const existing = options.firstSeenMap!.get(key);
+        if (existing) {
+          if (s.discoveredAt !== existing) {
+            anyNormalized = true;
+            return { ...s, discoveredAt: existing };
+          }
+          return s;
         }
+        options.firstSeenMap!.set(key, s.discoveredAt);
         return s;
-      }
-      options.firstSeenMap!.set(key, s.discoveredAt);
-      return s;
-    });
+      });
 
-    if (anyNormalized) {
-      effectiveSignals = normalizedSignals;
-      try {
-        fs.writeFileSync(
-          feedOutputPath,
-          JSON.stringify({ signals: normalizedSignals }, null, 2),
-          'utf-8',
-        );
-      } catch {
-        // non-fatal: age may not normalize correctly this cycle
+      if (anyNormalized) {
+        effectiveSignals = normalizedSignals;
+        try {
+          fs.writeFileSync(
+            feedOutputPath,
+            JSON.stringify({ signals: normalizedSignals }, null, 2),
+            'utf-8',
+          );
+        } catch {
+          // non-fatal: age may not normalize correctly this cycle
+        }
       }
+    }
+
+    if (toObserve.length > 0) {
+      toObserve = toObserve.map(s => {
+        const key      = signalKey(s);
+        const existing = options.firstSeenMap!.get(key);
+        return existing && s.discoveredAt !== existing ? { ...s, discoveredAt: existing } : s;
+      });
     }
   }
 
-  // ── Step 3: live-fixture-capture with BubbleMaps enrichment ──────────────
-  const captureResult = await runLiveFixtureCapture({
-    inputPath:           feedOutputPath,
-    outputPath:          fixtureOutputPath,
-    format:              'ear-signals',
-    reset:               true,
-    clusterRiskProvider: options.clusterRiskProvider,
-    nowMs,
-  });
+  // ── Step 3: live-fixture-capture (new signals only) ───────────────────────
+  const captureSkipped = effectiveSignals.length === 0;
+  const captureSkipReason = captureSkipped
+    ? `all ${seenSkippedCount} signals already seen in this session`
+    : undefined;
+
+  const captureResult = captureSkipped
+    ? { capturedCount: 0, fixtures: [] as LiveRipperFixture[] }
+    : await runLiveFixtureCapture({
+        inputPath:           feedOutputPath,
+        outputPath:          fixtureOutputPath,
+        format:              'ear-signals',
+        reset:               true,
+        clusterRiskProvider: options.clusterRiskProvider,
+        nowMs,
+      });
 
   // ── Step 4: aggregate counts from fixtures ────────────────────────────────
   const clusterRiskCounts: Record<ClusterRisk, number> = { CLEAN: 0, WATCH: 0, RISKY: 0, UNKNOWN: 0 };
@@ -252,12 +294,65 @@ export async function runRipperPaperCycle(
     tooEarlyRecheckableCount = captureResult.fixtures.filter(isRecheckableTooEarly).length;
   }
 
+  // Record newly approved contracts so they can be re-observed in later cycles
+  if (options.approvedContracts) {
+    for (const f of captureResult.fixtures) {
+      if (f.buyGateDecision === 'BUY_APPROVED_PAPER') {
+        options.approvedContracts.set(signalKey(f.normalizedSignal), f.capturedAt);
+      }
+    }
+  }
+
+  // ── Step 5: post-approval observations (read-only, no new approvals) ──────
+  let postApprovalObservedCount = 0;
+  let observationOutputPath: string | null = null;
+
+  if (toObserve.length > 0) {
+    const obsDir        = options.observationsDir ?? DEFAULT_OBSERVATIONS_DIR;
+    const obsFeedPath   = path.join(obsDir, `obs-${cycleSlug}-feed.json`);
+    const obsOutputPath = path.join(obsDir, `obs-${cycleSlug}.jsonl`);
+
+    try {
+      fs.mkdirSync(obsDir, { recursive: true });
+      fs.writeFileSync(obsFeedPath, JSON.stringify({ signals: toObserve }, null, 2), 'utf-8');
+
+      const obsCaptureResult = await runLiveFixtureCapture({
+        inputPath:           obsFeedPath,
+        outputPath:          obsOutputPath,
+        format:              'ear-signals',
+        reset:               true,
+        clusterRiskProvider: undefined,   // no new BubbleMaps calls for observations
+        nowMs,
+      });
+
+      if (obsCaptureResult.capturedCount > 0) {
+        const annotated = obsCaptureResult.fixtures.map(f => {
+          const key = signalKey(f.normalizedSignal);
+          const originalApprovedAt = options.approvedContracts?.get(key);
+          return { ...f, postApprovalObservation: true as const, originalApprovedAt };
+        });
+
+        fs.writeFileSync(
+          obsOutputPath,
+          annotated.map(f => JSON.stringify(f)).join('\n') + '\n',
+          'utf-8',
+        );
+
+        postApprovalObservedCount = annotated.length;
+        observationOutputPath     = obsOutputPath;
+      }
+    } catch {
+      // non-fatal: observation failure must not disrupt the main cycle result
+    }
+  }
+
   return {
     cycleStartedAt,
     cycleSlug,
     feedSignalsWritten:  feedResult.signalsWritten,
     feedSkippedOldCount: feedResult.skippedOldCount,
-    captureSkipped:      false,
+    captureSkipped,
+    captureSkipReason,
     fixturesCaptured:    captureResult.capturedCount,
     clusterRiskCounts,
     bubblemapsProviderCount,
@@ -267,6 +362,8 @@ export async function runRipperPaperCycle(
     tooEarlyRecheckableCount,
     outputPath:    captureResult.capturedCount > 0 ? fixtureOutputPath : null,
     feedOutputPath,
+    postApprovalObservedCount,
+    observationOutputPath,
     ...safetyFields,
   };
 }
@@ -318,6 +415,14 @@ export function renderRipperPaperCycleResult(result: RipperPaperCycleResult): st
       lines.push('  (no fixtures written — 0 captured)');
     }
     lines.push(`  Feed output    : ${result.feedOutputPath}`);
+  }
+
+  if (result.postApprovalObservedCount > 0) {
+    lines.push('');
+    lines.push(`  Post-approval obs: ${result.postApprovalObservedCount}`);
+    if (result.observationOutputPath) {
+      lines.push(`    artifact: ${result.observationOutputPath}`);
+    }
   }
 
   lines.push('');

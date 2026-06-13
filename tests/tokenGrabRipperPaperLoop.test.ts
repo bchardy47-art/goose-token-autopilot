@@ -499,26 +499,28 @@ describe('renderLoopCycleLine', () => {
 
 function makeFakeCycleResult(overrides: Partial<RipperPaperCycleResult> = {}): RipperPaperCycleResult {
   return {
-    cycleStartedAt:           new Date(BASE_MS).toISOString(),
-    cycleSlug:                '2026-06-12-000000',
-    feedSignalsWritten:       0,
-    feedSkippedOldCount:      0,
-    captureSkipped:           true,
-    captureSkipReason:        'no candidates in run file',
-    fixturesCaptured:         0,
-    clusterRiskCounts:        { CLEAN: 0, WATCH: 0, RISKY: 0, UNKNOWN: 0 },
-    bubblemapsProviderCount:  0,
-    buyApprovedPaper:         0,
-    buyRejected:              0,
-    seenSkippedCount:         0,
-    tooEarlyRecheckableCount: 0,
-    outputPath:               null,
-    feedOutputPath:           '/tmp/feed.json',
-    realTradingLocked:        true,
-    tradingExecuted:          0,
-    noRealTradeSent:          true,
-    paperOnly:                true,
-    readOnly:                 true,
+    cycleStartedAt:              new Date(BASE_MS).toISOString(),
+    cycleSlug:                   '2026-06-12-000000',
+    feedSignalsWritten:          0,
+    feedSkippedOldCount:         0,
+    captureSkipped:              true,
+    captureSkipReason:           'no candidates in run file',
+    fixturesCaptured:            0,
+    clusterRiskCounts:           { CLEAN: 0, WATCH: 0, RISKY: 0, UNKNOWN: 0 },
+    bubblemapsProviderCount:     0,
+    buyApprovedPaper:            0,
+    buyRejected:                 0,
+    seenSkippedCount:            0,
+    tooEarlyRecheckableCount:    0,
+    outputPath:                  null,
+    feedOutputPath:              '/tmp/feed.json',
+    postApprovalObservedCount:   0,
+    observationOutputPath:       null,
+    realTradingLocked:           true,
+    tradingExecuted:             0,
+    noRealTradeSent:             true,
+    paperOnly:                   true,
+    readOnly:                    true,
     ...overrides,
   };
 }
@@ -631,7 +633,7 @@ describe('runRipperPaperLoop — source refresh', () => {
 // ── session dedupe ────────────────────────────────────────────────────────────
 
 describe('runRipperPaperLoop — session dedupe', () => {
-  it('second cycle skips contracts seen in first cycle', async () => {
+  it('second cycle skips or re-observes contracts seen in first cycle', async () => {
     const runsDir = makeRunsDir({
       'run-20260610-100000.json': makeRunFile([makeOutcome({ contract: 'TokenAAA' })]),
     });
@@ -646,8 +648,10 @@ describe('runRipperPaperLoop — session dedupe', () => {
     });
 
     expect(result.cycles[0].result.seenSkippedCount).toBe(0);
-    expect(result.cycles[1].result.seenSkippedCount).toBeGreaterThan(0);
-    expect(result.totalSeenSkipped).toBeGreaterThan(0);
+    // Approved candidates go to post-approval observation; rejected go to seenSkipped
+    const c2 = result.cycles[1].result;
+    expect(c2.seenSkippedCount + c2.postApprovalObservedCount).toBeGreaterThan(0);
+    expect(result.totalSeenSkipped + result.totalPostApprovalObserved).toBeGreaterThan(0);
   });
 
   it('totalSeenSkipped equals sum of seenSkippedCount across cycles', async () => {
@@ -800,6 +804,111 @@ describe('runRipperPaperLoop — firstSeen map passthrough', () => {
     });
 
     expect(receivedMaps[0].size).toBe(0);
+  });
+});
+
+// ── post-approval observations ────────────────────────────────────────────────
+
+describe('runRipperPaperLoop — post-approval observations', () => {
+  it('passes the same approvedContracts instance to every cycle', async () => {
+    const received: Array<Map<string, string> | undefined> = [];
+
+    await runRipperPaperLoop({
+      runsDir:   path.join(tmpDir, 'any'),
+      cyclesDir: path.join(tmpDir, 'cycles'),
+      maxCycles: 3,
+      sleep:     noSleep,
+      getNowMs:  makeClockFn(),
+      _runCycle: async (opts) => {
+        received.push(opts.approvedContracts);
+        return makeFakeCycleResult();
+      },
+    });
+
+    expect(received).toHaveLength(3);
+    expect(received.every(m => m instanceof Map)).toBe(true);
+    expect(received[0]).toBe(received[1]);
+    expect(received[1]).toBe(received[2]);
+  });
+
+  it('approvedContracts starts empty at session start', async () => {
+    let seen: Map<string, string> | undefined;
+
+    await runRipperPaperLoop({
+      runsDir:   path.join(tmpDir, 'any'),
+      cyclesDir: path.join(tmpDir, 'cycles'),
+      maxCycles: 1,
+      sleep:     noSleep,
+      getNowMs:  makeClockFn(),
+      _runCycle: async (opts) => {
+        seen = opts.approvedContracts;
+        return makeFakeCycleResult();
+      },
+    });
+
+    expect(seen?.size).toBe(0);
+  });
+
+  it('totalPostApprovalObserved accumulates postApprovalObservedCount across cycles', async () => {
+    let callCount = 0;
+
+    const result = await runRipperPaperLoop({
+      runsDir:   path.join(tmpDir, 'any'),
+      cyclesDir: path.join(tmpDir, 'cycles'),
+      maxCycles: 3,
+      sleep:     noSleep,
+      getNowMs:  makeClockFn(),
+      _runCycle: async () => {
+        callCount++;
+        return makeFakeCycleResult({ postApprovalObservedCount: callCount === 1 ? 0 : 2 });
+      },
+    });
+
+    expect(result.totalPostApprovalObserved).toBe(4); // 0 + 2 + 2
+  });
+
+  it('totalPostApprovalObserved is 0 when no observations occur', async () => {
+    const result = await runRipperPaperLoop({
+      runsDir:   path.join(tmpDir, 'any'),
+      cyclesDir: path.join(tmpDir, 'cycles'),
+      maxCycles: 2,
+      sleep:     noSleep,
+      getNowMs:  makeClockFn(),
+      _runCycle: async () => makeFakeCycleResult(),
+    });
+
+    expect(result.totalPostApprovalObserved).toBe(0);
+  });
+
+  it('session summary includes Post-approval obs line', async () => {
+    const result = await runRipperPaperLoop({
+      runsDir:   path.join(tmpDir, 'any'),
+      cyclesDir: path.join(tmpDir, 'cycles'),
+      maxCycles: 1,
+      sleep:     noSleep,
+      getNowMs:  makeClockFn(),
+      _runCycle: async () => makeFakeCycleResult({ postApprovalObservedCount: 3 }),
+    });
+
+    const out = renderRipperPaperLoopResult(result, 1);
+    expect(out).toContain('Post-approval obs');
+  });
+
+  it('safety fields remain true when observations are running', async () => {
+    const result = await runRipperPaperLoop({
+      runsDir:   path.join(tmpDir, 'any'),
+      cyclesDir: path.join(tmpDir, 'cycles'),
+      maxCycles: 1,
+      sleep:     noSleep,
+      getNowMs:  makeClockFn(),
+      _runCycle: async () => makeFakeCycleResult({ postApprovalObservedCount: 5 }),
+    });
+
+    expect(result.realTradingLocked).toBe(true);
+    expect(result.tradingExecuted).toBe(0);
+    expect(result.noRealTradeSent).toBe(true);
+    expect(result.paperOnly).toBe(true);
+    expect(result.readOnly).toBe(true);
   });
 });
 
