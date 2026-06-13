@@ -11,16 +11,18 @@ export type ShadowPortfolioGroup = 'ALL' | 'PASS' | 'FAIL' | 'MISSING';
 export type EntryClassification  = 'WINNER' | 'LOSER' | 'PENDING_PRICE';
 
 export interface PortfolioCandidate {
-  contractKey:       string;
-  contractKeyShort:  string;
-  symbol?:           string;
-  sourceFile:        string;
-  approvedAt:        string;
-  shadowPolicyId:    string;
-  shadowPolicyPass:  boolean | null;
-  shadowPolicyValue: number | null;
-  outcomePctChange:  number | null;
-  classification:    EntryClassification;
+  contractKey:         string;
+  contractKeyShort:    string;
+  symbol?:             string;
+  sourceFile:          string;
+  approvedAt:          string;
+  approvalInstanceKey: string;
+  repeatedContract:    boolean;
+  shadowPolicyId:      string;
+  shadowPolicyPass:    boolean | null;
+  shadowPolicyValue:   number | null;
+  outcomePctChange:    number | null;
+  classification:      EntryClassification;
 }
 
 export interface PortfolioGroupStats {
@@ -61,21 +63,25 @@ export interface RipperShadowPortfolioReportOptions {
 }
 
 export interface RipperShadowPortfolioReportResult {
-  generatedAt:          string;
-  approvalFilesRead:    number;
-  approvalFilesMissing: number;
-  outcomeFilesRead:     number;
-  outcomeFilesMissing:  number;
-  approvalsRead:        number;
-  outcomesRead:         number;
-  totalCandidates:      number;
-  groups:               Record<ShadowPortfolioGroup, PortfolioGroupStats>;
-  policyRead:           PolicyReadComparison;
-  realTradingLocked:    true;
-  tradingExecuted:      0;
-  noRealTradeSent:      true;
-  paperOnly:            true;
-  readOnly:             true;
+  generatedAt:             string;
+  approvalFilesRead:       number;
+  approvalFilesMissing:    number;
+  outcomeFilesRead:        number;
+  outcomeFilesMissing:     number;
+  approvalsRead:           number;
+  approvalInstancesLoaded: number;
+  exactDuplicatesSkipped:  number;
+  uniqueContracts:         number;
+  repeatedContractsCount:  number;
+  outcomesRead:            number;
+  totalCandidates:         number;
+  groups:                  Record<ShadowPortfolioGroup, PortfolioGroupStats>;
+  policyRead:              PolicyReadComparison;
+  realTradingLocked:       true;
+  tradingExecuted:         0;
+  noRealTradeSent:         true;
+  paperOnly:               true;
+  readOnly:                true;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -175,16 +181,20 @@ export function runRipperShadowPortfolioReport(
   const nowMs       = options.nowMs ?? Date.now();
   const generatedAt = new Date(nowMs).toISOString();
 
-  // ── Step 1: Read approval fixtures (earliest capturedAt per contractKey) ───
+  // ── Step 1: Read approval fixtures (dedup only exact duplicates) ──────────
   let approvalFilesRead    = 0;
   let approvalFilesMissing = 0;
   let approvalsRead        = 0;
+  let exactDuplicatesSkipped = 0;
 
-  interface ApprovalEntry {
-    fixture:    ReturnType<typeof readFixturesFromJsonl>[number];
-    sourceFile: string;
+  interface InstanceEntry {
+    fixture:     ReturnType<typeof readFixturesFromJsonl>[number];
+    sourceFile:  string;
+    instanceKey: string;
+    contractKey: string;
   }
-  const approvalMap = new Map<string, ApprovalEntry>();
+  const instanceKeySet = new Set<string>();
+  const instances: InstanceEntry[] = [];
 
   for (const p of options.approvalPaths) {
     if (!fs.existsSync(p)) { approvalFilesMissing++; continue; }
@@ -192,13 +202,23 @@ export function runRipperShadowPortfolioReport(
     for (const f of readFixturesFromJsonl(p)) {
       if (f.buyGateDecision !== 'BUY_APPROVED_PAPER') continue;
       approvalsRead++;
-      const key = signalKey(f.normalizedSignal);
-      const ex  = approvalMap.get(key);
-      if (!ex || f.capturedAt < ex.fixture.capturedAt) {
-        approvalMap.set(key, { fixture: f, sourceFile: p });
+      const contractKey = signalKey(f.normalizedSignal);
+      const instanceKey = `${contractKey}::${f.capturedAt}`;
+      if (instanceKeySet.has(instanceKey)) {
+        exactDuplicatesSkipped++;
+      } else {
+        instanceKeySet.add(instanceKey);
+        instances.push({ fixture: f, sourceFile: p, instanceKey, contractKey });
       }
     }
   }
+
+  const contractKeyCounts = new Map<string, number>();
+  for (const inst of instances) {
+    contractKeyCounts.set(inst.contractKey, (contractKeyCounts.get(inst.contractKey) ?? 0) + 1);
+  }
+  const uniqueContracts        = contractKeyCounts.size;
+  const repeatedContractsCount = [...contractKeyCounts.values()].filter(n => n > 1).length;
 
   // ── Step 2: Read outcome data (latest checkpointAt per contractKey) ────────
   let outcomeFilesRead    = 0;
@@ -232,22 +252,24 @@ export function runRipperShadowPortfolioReport(
   // ── Step 3: Build per-candidate records ────────────────────────────────────
   const all: PortfolioCandidate[] = [];
 
-  for (const [key, { fixture: f, sourceFile }] of approvalMap) {
-    const out             = outcomeMap.get(key);
+  for (const { fixture: f, sourceFile, instanceKey, contractKey: key } of instances) {
+    const out              = outcomeMap.get(key);
     const outcomePctChange = out?.pctChangeFromEntry ?? null;
     const shadowPolicyPass = f.shadowPolicyPass ?? null;
 
     all.push({
-      contractKey:       key,
-      contractKeyShort:  shortKey(key),
-      symbol:            f.normalizedSignal.symbol,
+      contractKey:         key,
+      contractKeyShort:    shortKey(key),
+      symbol:              f.normalizedSignal.symbol,
       sourceFile,
-      approvedAt:        f.capturedAt,
-      shadowPolicyId:    f.shadowPolicyId ?? SHADOW_POLICY_PRICE_GT_0_25,
+      approvedAt:          f.capturedAt,
+      approvalInstanceKey: instanceKey,
+      repeatedContract:    (contractKeyCounts.get(key) ?? 1) > 1,
+      shadowPolicyId:      f.shadowPolicyId ?? SHADOW_POLICY_PRICE_GT_0_25,
       shadowPolicyPass,
-      shadowPolicyValue: f.shadowPolicyValue ?? null,
+      shadowPolicyValue:   f.shadowPolicyValue ?? null,
       outcomePctChange,
-      classification:    classify(outcomePctChange),
+      classification:      classify(outcomePctChange),
     });
   }
 
@@ -303,6 +325,10 @@ export function runRipperShadowPortfolioReport(
     outcomeFilesRead,
     outcomeFilesMissing,
     approvalsRead,
+    approvalInstancesLoaded: approvalsRead,
+    exactDuplicatesSkipped,
+    uniqueContracts,
+    repeatedContractsCount,
     outcomesRead,
     totalCandidates: all.length,
     groups,
@@ -396,7 +422,13 @@ export function renderRipperShadowPortfolioReport(
   lines.push('  Inputs:');
   lines.push(`    Approval files  : ${result.approvalFilesRead}${result.approvalFilesMissing > 0 ? ` (${result.approvalFilesMissing} missing)` : ''}`);
   lines.push(`    Outcome files   : ${result.outcomeFilesRead}${result.outcomeFilesMissing > 0 ? ` (${result.outcomeFilesMissing} missing)` : ''}`);
-  lines.push(`    Approvals loaded: ${result.approvalsRead} → ${result.totalCandidates} unique`);
+  {
+    const dupNote  = result.exactDuplicatesSkipped > 0 ? ` (${result.exactDuplicatesSkipped} exact dup${result.exactDuplicatesSkipped === 1 ? '' : 's'} skipped)` : '';
+    const instWord = result.totalCandidates === 1 ? 'instance' : 'instances';
+    lines.push(`    Approvals loaded: ${result.approvalInstancesLoaded} → ${result.totalCandidates} ${instWord}${dupNote}`);
+    const repNote  = result.repeatedContractsCount > 0 ? ` (${result.repeatedContractsCount} repeated [*])` : '';
+    lines.push(`    Unique contracts: ${result.uniqueContracts}${repNote}`);
+  }
   lines.push('');
 
   if (result.totalCandidates === 0) {
@@ -408,6 +440,7 @@ export function renderRipperShadowPortfolioReport(
     lines.push(`  ${SEP2}`);
     lines.push('');
     lines.push('  shadow    class    outcome  priceVal  approvedAt           sym/addr');
+    let hasRepeated = false;
     for (const c of result.groups['ALL'].candidates) {
       const grp   = groupLabel(c.shadowPolicyPass === true ? 'PASS' : c.shadowPolicyPass === false ? 'FAIL' : 'MISSING').trim().padEnd(7);
       const cls   = fmtClass(c.classification);
@@ -417,7 +450,12 @@ export function renderRipperShadowPortfolioReport(
         : '(missing)';
       const ts    = c.approvedAt.slice(0, 19).replace('T', ' ');
       const label = c.symbol ? `$${c.symbol}` : c.contractKeyShort;
-      lines.push(`  ${grp} ${cls} ${out}  ${val}  ${ts}  ${label}`);
+      const rep   = c.repeatedContract ? ' [*]' : '';
+      if (c.repeatedContract) hasRepeated = true;
+      lines.push(`  ${grp} ${cls} ${out}  ${val}  ${ts}  ${label}${rep}`);
+    }
+    if (hasRepeated) {
+      lines.push('  [*] Contract approved in multiple sessions. All instances share the same latest outcome (outcomes are keyed by contractKey).');
     }
     lines.push('');
 

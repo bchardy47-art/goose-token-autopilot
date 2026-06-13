@@ -166,16 +166,94 @@ describe('runRipperShadowPortfolioReport — data loading', () => {
     expect(findCand(result, CONTRACT_B)).toBeNull();
   });
 
-  it('deduplicates by contractKey keeping earliest capturedAt', () => {
+  it('creates separate instances for same contract approved at different times', () => {
     const earlier = new Date(BASE_MS - 60_000).toISOString();
     const p = writeApprovalJsonl('c.jsonl', [
       makeApprovalFixture({ contract: CONTRACT_A, capturedAt: BASE_ISO, shadowPolicyPass: true,  shadowPolicyId: SHADOW_POLICY_PRICE_GT_0_25 }),
-      makeApprovalFixture({ contract: CONTRACT_A, capturedAt: earlier, shadowPolicyPass: false, shadowPolicyId: SHADOW_POLICY_PRICE_GT_0_25 }),
+      makeApprovalFixture({ contract: CONTRACT_A, capturedAt: earlier,  shadowPolicyPass: false, shadowPolicyId: SHADOW_POLICY_PRICE_GT_0_25 }),
+    ]);
+    const result = runRipperShadowPortfolioReport({ approvalPaths: [p], outcomePaths: [] });
+    expect(result.totalCandidates).toBe(2);
+    const cands = result.groups['ALL'].candidates.filter(c => c.contractKey === CONTRACT_A);
+    expect(cands).toHaveLength(2);
+    expect(cands.map(c => c.shadowPolicyPass).sort()).toEqual([false, true]);
+  });
+
+  it('skips exact duplicates (same contractKey + same capturedAt)', () => {
+    const p = writeApprovalJsonl('c.jsonl', [
+      makeApprovalFixture({ contract: CONTRACT_A, capturedAt: BASE_ISO, shadowPolicyPass: true, shadowPolicyId: SHADOW_POLICY_PRICE_GT_0_25 }),
+      makeApprovalFixture({ contract: CONTRACT_A, capturedAt: BASE_ISO, shadowPolicyPass: true, shadowPolicyId: SHADOW_POLICY_PRICE_GT_0_25 }),
     ]);
     const result = runRipperShadowPortfolioReport({ approvalPaths: [p], outcomePaths: [] });
     expect(result.totalCandidates).toBe(1);
-    // earlier capturedAt → shadowPolicyPass = false → FAIL group
-    expect(findCand(result, CONTRACT_A)?.shadowPolicyPass).toBe(false);
+    expect(result.exactDuplicatesSkipped).toBe(1);
+  });
+
+  it('marks repeatedContract=true when same contractKey appears in multiple instances', () => {
+    const earlier = new Date(BASE_MS - 60_000).toISOString();
+    const p = writeApprovalJsonl('c.jsonl', [
+      makeApprovalFixture({ contract: CONTRACT_A, capturedAt: BASE_ISO }),
+      makeApprovalFixture({ contract: CONTRACT_A, capturedAt: earlier }),
+      makeApprovalFixture({ contract: CONTRACT_B }),
+    ]);
+    const result = runRipperShadowPortfolioReport({ approvalPaths: [p], outcomePaths: [] });
+    const aInstances = result.groups['ALL'].candidates.filter(c => c.contractKey === CONTRACT_A);
+    const bInstances = result.groups['ALL'].candidates.filter(c => c.contractKey === CONTRACT_B);
+    expect(aInstances).toHaveLength(2);
+    expect(aInstances.every(c => c.repeatedContract)).toBe(true);
+    expect(bInstances).toHaveLength(1);
+    expect(bInstances[0].repeatedContract).toBe(false);
+  });
+
+  it('sets approvalInstanceKey as contractKey::capturedAt', () => {
+    const p = writeApprovalJsonl('c.jsonl', [
+      makeApprovalFixture({ contract: CONTRACT_A, capturedAt: BASE_ISO }),
+    ]);
+    const result = runRipperShadowPortfolioReport({ approvalPaths: [p], outcomePaths: [] });
+    expect(findCand(result, CONTRACT_A)?.approvalInstanceKey).toBe(`${CONTRACT_A}::${BASE_ISO}`);
+  });
+
+  it('reports approvalInstancesLoaded, uniqueContracts, repeatedContractsCount, exactDuplicatesSkipped', () => {
+    const earlier = new Date(BASE_MS - 60_000).toISOString();
+    const p = writeApprovalJsonl('c.jsonl', [
+      makeApprovalFixture({ contract: CONTRACT_A, capturedAt: BASE_ISO }),   // instance 1
+      makeApprovalFixture({ contract: CONTRACT_A, capturedAt: earlier }),    // instance 2
+      makeApprovalFixture({ contract: CONTRACT_A, capturedAt: BASE_ISO }),   // exact dup of instance 1
+      makeApprovalFixture({ contract: CONTRACT_B }),                          // unique
+    ]);
+    const result = runRipperShadowPortfolioReport({ approvalPaths: [p], outcomePaths: [] });
+    expect(result.approvalInstancesLoaded).toBe(4);
+    expect(result.exactDuplicatesSkipped).toBe(1);
+    expect(result.totalCandidates).toBe(3);
+    expect(result.uniqueContracts).toBe(2);
+    expect(result.repeatedContractsCount).toBe(1);
+  });
+
+  it('applies same outcome to all instances of the same contract', () => {
+    const earlier = new Date(BASE_MS - 60_000).toISOString();
+    const p = writeApprovalJsonl('c.jsonl', [
+      makeApprovalFixture({ contract: CONTRACT_A, capturedAt: BASE_ISO }),
+      makeApprovalFixture({ contract: CONTRACT_A, capturedAt: earlier }),
+    ]);
+    const oc = writeOutcomeJson('out.json', makeOutcomeFile([
+      { contractKey: CONTRACT_A, pctChangeFromEntry: 42.0 },
+    ]));
+    const result = runRipperShadowPortfolioReport({ approvalPaths: [p], outcomePaths: [oc] });
+    const cands = result.groups['ALL'].candidates.filter(c => c.contractKey === CONTRACT_A);
+    expect(cands).toHaveLength(2);
+    expect(cands[0].outcomePctChange).toBe(42.0);
+    expect(cands[1].outcomePctChange).toBe(42.0);
+  });
+
+  it('groups each instance by its own shadowPolicyPass', () => {
+    const earlier = new Date(BASE_MS - 60_000).toISOString();
+    const p = writeApprovalJsonl('c.jsonl', [
+      makeApprovalFixture({ contract: CONTRACT_A, capturedAt: BASE_ISO, shadowPolicyPass: true,  shadowPolicyId: SHADOW_POLICY_PRICE_GT_0_25 }),
+      makeApprovalFixture({ contract: CONTRACT_A, capturedAt: earlier,  shadowPolicyPass: false, shadowPolicyId: SHADOW_POLICY_PRICE_GT_0_25 }),
+    ]);
+    const result = runRipperShadowPortfolioReport({ approvalPaths: [p], outcomePaths: [] });
+    expect(result.groups['PASS'].count).toBe(1);
+    expect(result.groups['FAIL'].count).toBe(1);
   });
 
   it('tracks sourceFile on each candidate', () => {
@@ -652,5 +730,34 @@ describe('renderRipperShadowPortfolioReport', () => {
     const result = runRipperShadowPortfolioReport({ approvalPaths: [], outcomePaths: [] });
     const text   = renderRipperShadowPortfolioReport(result);
     expect(text.trim().length).toBeGreaterThan(0);
+  });
+
+  it('includes repeated contract warning when same contract has multiple instances', () => {
+    const earlier = new Date(BASE_MS - 60_000).toISOString();
+    const p = writeApprovalJsonl('c.jsonl', [
+      makeApprovalFixture({ contract: CONTRACT_A, symbol: 'REPEAT', capturedAt: BASE_ISO }),
+      makeApprovalFixture({ contract: CONTRACT_A, symbol: 'REPEAT', capturedAt: earlier }),
+    ]);
+    const result = runRipperShadowPortfolioReport({ approvalPaths: [p], outcomePaths: [] });
+    const text   = renderRipperShadowPortfolioReport(result);
+    expect(text).toContain('[*]');
+  });
+
+  it('does not include repeated contract warning when all contracts appear once', () => {
+    const { approvalPath, outcomePath } = buildStandardDataset(tmpDir);
+    const result = runRipperShadowPortfolioReport({
+      approvalPaths: [approvalPath], outcomePaths: [outcomePath],
+    });
+    const text = renderRipperShadowPortfolioReport(result);
+    expect(text).not.toContain('[*]');
+  });
+
+  it('shows unique contracts count in header', () => {
+    const { approvalPath, outcomePath } = buildStandardDataset(tmpDir);
+    const result = runRipperShadowPortfolioReport({
+      approvalPaths: [approvalPath], outcomePaths: [outcomePath],
+    });
+    const text = renderRipperShadowPortfolioReport(result);
+    expect(text).toContain('Unique contracts');
   });
 });
