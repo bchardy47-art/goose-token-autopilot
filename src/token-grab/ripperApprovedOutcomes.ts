@@ -1,7 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { readFixturesFromJsonl, type LiveRipperFixture } from './liveFixtureCapture';
-import type { RipperEarSignal } from './ripperEars';
+import { readFixturesFromJsonl } from './liveFixtureCapture';
 
 // ── Price provider ─────────────────────────────────────────────────────────────
 
@@ -16,11 +15,8 @@ export interface RipperApprovedOutcomesOptions {
   inputPaths: string[];
   outPath: string;
   nowMs?: number;
-  /** When set, triggers live price fetch and labels the checkpoint (e.g. "now", "4h") */
   checkpointLabel?: string;
-  /** Injected price provider — for tests. Also triggers price fetch when provided. */
   _priceProvider?: RipperPriceProvider;
-  /** Delay between price fetches in ms (default: 300; set to 0 in tests) */
   delayBetweenFetchesMs?: number;
 }
 
@@ -36,7 +32,6 @@ export interface ApprovedCandidate {
   entryPriceUsd: number | null;
   priceChangePct?: number;
   sourceArtifact: string;
-  // Checkpoint fields — populated during price fetch phase
   currentPriceUsd: number | null;
   pctChangeFromEntry: number | null;
   multipleFromEntry: number | null;
@@ -60,6 +55,7 @@ export interface RipperApprovedOutcomesResult {
   approvedTotal: number;
   uniqueApproved: number;
   duplicatesSkipped: number;
+  malformedSkipped: number;
   priceDataAvailable: boolean;
   priceTrackingNote: string;
   checkpointLabel?: string;
@@ -112,7 +108,6 @@ async function defaultPriceProvider(
   contractKey: string,
   opts?: { poolAddress?: string },
 ): Promise<{ priceUsd: number | null; note?: string }> {
-  // Token endpoint first (mint address → token price)
   try {
     const url = `${GECKO_BASE}/networks/solana/tokens/${contractKey}`;
     const res = await geckoFetch(url, GECKO_TIMEOUT);
@@ -127,7 +122,6 @@ async function defaultPriceProvider(
     return { priceUsd: null, note: `fetch error: ${(e as Error).message}` };
   }
 
-  // Pool endpoint fallback
   if (opts?.poolAddress) {
     try {
       const url = `${GECKO_BASE}/networks/solana/pools/${opts.poolAddress}`;
@@ -149,38 +143,60 @@ async function defaultPriceProvider(
 
 // ── Extraction helpers ────────────────────────────────────────────────────────
 
-function contractKey(s: RipperEarSignal): string {
-  return s.contract ?? s.tokenAddress ?? s.poolAddress ?? s.id;
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null ? value as Record<string, unknown> : null;
 }
 
-function getClusterRisk(f: LiveRipperFixture): string {
-  const raw = f.raw as Record<string, unknown> | undefined;
+function getString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+function getNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function contractKeyFromSignal(signal: Record<string, unknown>): string | null {
+  return getString(signal['contract'])
+    ?? getString(signal['tokenAddress'])
+    ?? getString(signal['poolAddress'])
+    ?? getString(signal['id'])
+    ?? null;
+}
+
+function getClusterRisk(fixture: Record<string, unknown>): string {
+  const raw = asRecord(fixture['raw']);
   const v   = raw?.['clusterRisk'];
   if (v === 'CLEAN' || v === 'WATCH' || v === 'RISKY') return v;
   return 'UNKNOWN';
 }
 
-function getEntryPriceUsd(f: LiveRipperFixture): number | null {
-  const raw   = f.normalizedSignal.raw as Record<string, unknown> | undefined;
-  const entry = raw?.['entry'] as Record<string, unknown> | undefined;
-  const price = entry?.['priceUsd'];
-  return typeof price === 'number' ? price : null;
+function getEntryPriceUsd(signal: Record<string, unknown>): number | null {
+  const raw   = asRecord(signal['raw']);
+  const entry = asRecord(raw?.['entry']);
+  return getNumber(entry?.['priceUsd']);
 }
 
-function toCandidate(f: LiveRipperFixture, artifactPath: string): ApprovedCandidate {
+function toCandidate(
+  fixture: Record<string, unknown>,
+  signal: Record<string, unknown>,
+  artifactPath: string,
+): ApprovedCandidate | null {
+  const key = contractKeyFromSignal(signal);
+  if (!key) return null;
+
   return {
-    contractKey:       contractKey(f.normalizedSignal),
-    poolAddress:       f.normalizedSignal.poolAddress,
-    symbol:            f.normalizedSignal.symbol,
-    approvedAt:        f.capturedAt,
-    discoveredAt:      f.normalizedSignal.discoveredAt || f.normalizedSignal.observedAt,
-    score:             f.ripperScore,
-    ageMinutes:        f.ageMinutes,
-    clusterRisk:       getClusterRisk(f),
-    entryPriceUsd:     getEntryPriceUsd(f),
-    priceChangePct:    f.normalizedSignal.priceChangePct,
-    sourceArtifact:    artifactPath,
-    currentPriceUsd:   null,
+    contractKey:        key,
+    poolAddress:        getString(signal['poolAddress']),
+    symbol:             getString(signal['symbol']),
+    approvedAt:         getString(fixture['capturedAt']) ?? '',
+    discoveredAt:       getString(signal['discoveredAt']) ?? getString(signal['observedAt']),
+    score:              getNumber(fixture['ripperScore']) ?? undefined,
+    ageMinutes:         getNumber(fixture['ageMinutes']) ?? undefined,
+    clusterRisk:        getClusterRisk(fixture),
+    entryPriceUsd:      getEntryPriceUsd(signal),
+    priceChangePct:     getNumber(signal['priceChangePct']) ?? undefined,
+    sourceArtifact:     artifactPath,
+    currentPriceUsd:    null,
     pctChangeFromEntry: null,
     multipleFromEntry:  null,
   };
@@ -193,43 +209,62 @@ export async function runRipperApprovedOutcomes(
 ): Promise<RipperApprovedOutcomesResult> {
   const nowMs       = options.nowMs ?? Date.now();
   const generatedAt = new Date(nowMs).toISOString();
+  const inputPaths  = Array.isArray(options.inputPaths) ? options.inputPaths : [];
 
-  // ── Extraction phase ──────────────────────────────────────────────────────
   let filesRead         = 0;
   let filesMissing      = 0;
   let fixturesScanned   = 0;
   let approvedTotal     = 0;
   let duplicatesSkipped = 0;
+  let malformedSkipped  = 0;
 
-  const seen:       Set<string>         = new Set();
+  const seen: Set<string> = new Set();
   const candidates: ApprovedCandidate[] = [];
 
-  for (const inputPath of options.inputPaths) {
+  for (const inputPath of inputPaths) {
     if (!fs.existsSync(inputPath)) {
       filesMissing += 1;
       continue;
     }
     filesRead += 1;
-    const fixtures = readFixturesFromJsonl(inputPath);
+    const fixtures = readFixturesFromJsonl(inputPath) as unknown as unknown[];
     fixturesScanned += fixtures.length;
 
-    for (const f of fixtures) {
-      if (f.buyGateDecision !== 'BUY_APPROVED_PAPER') continue;
+    for (const fixtureValue of fixtures) {
+      const fixture = asRecord(fixtureValue);
+      if (!fixture) {
+        malformedSkipped += 1;
+        continue;
+      }
+      if (fixture['postApprovalObservation'] === true) continue;
+      if (fixture['buyGateDecision'] !== 'BUY_APPROVED_PAPER') continue;
+
+      const signal = asRecord(fixture['normalizedSignal']);
+      if (!signal) {
+        approvedTotal += 1;
+        malformedSkipped += 1;
+        continue;
+      }
+
       approvedTotal += 1;
 
-      const key = contractKey(f.normalizedSignal);
-      if (seen.has(key)) {
+      const candidate = toCandidate(fixture, signal, inputPath);
+      if (!candidate) {
+        malformedSkipped += 1;
+        continue;
+      }
+
+      if (seen.has(candidate.contractKey)) {
         duplicatesSkipped += 1;
         continue;
       }
-      seen.add(key);
-      candidates.push(toCandidate(f, inputPath));
+      seen.add(candidate.contractKey);
+      candidates.push(candidate);
     }
   }
 
   candidates.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
 
-  // ── Price checkpoint phase ────────────────────────────────────────────────
   const doFetch      = options._priceProvider !== undefined || options.checkpointLabel !== undefined;
   const priceProvider: RipperPriceProvider | null =
     doFetch ? (options._priceProvider ?? defaultPriceProvider) : null;
@@ -260,16 +295,15 @@ export async function runRipperApprovedOutcomes(
     }
   }
 
-  // ── Aggregate checkpoint stats ────────────────────────────────────────────
-  const withPrice       = candidates.filter(c => c.pctChangeFromEntry != null);
-  const winners         = withPrice.filter(c => (c.pctChangeFromEntry ?? 0) > 0);
-  const losers          = withPrice.filter(c => (c.pctChangeFromEntry ?? 0) <= 0);
-  const avgPct          = withPrice.length > 0
-    ? withPrice.reduce((s, c) => s + c.pctChangeFromEntry!, 0) / withPrice.length
+  const withPrice = candidates.filter(c => c.pctChangeFromEntry != null);
+  const winners   = withPrice.filter(c => (c.pctChangeFromEntry ?? 0) > 0);
+  const losers    = withPrice.filter(c => (c.pctChangeFromEntry ?? 0) <= 0);
+  const avgPct    = withPrice.length > 0
+    ? withPrice.reduce((s, c) => s + (c.pctChangeFromEntry ?? 0), 0) / withPrice.length
     : null;
-  const sorted          = [...withPrice].sort((a, b) => b.pctChangeFromEntry! - a.pctChangeFromEntry!);
-  const best            = sorted[0];
-  const worst           = sorted[sorted.length - 1];
+  const sorted    = [...withPrice].sort((a, b) => (b.pctChangeFromEntry ?? 0) - (a.pctChangeFromEntry ?? 0));
+  const best      = sorted[0];
+  const worst     = sorted.length > 0 ? sorted[sorted.length - 1] : undefined;
 
   const priceDataAvailable = withPrice.length > 0;
   const priceTrackingNote  = doFetch
@@ -280,40 +314,41 @@ export async function runRipperApprovedOutcomes(
 
   const result: RipperApprovedOutcomesResult = {
     generatedAt,
-    outPath:              options.outPath,
+    outPath:               options.outPath,
     filesRead,
     filesMissing,
     fixturesScanned,
     approvedTotal,
-    uniqueApproved:       candidates.length,
+    uniqueApproved:        candidates.length,
     duplicatesSkipped,
+    malformedSkipped,
     priceDataAvailable,
     priceTrackingNote,
-    checkpointLabel:      options.checkpointLabel,
+    checkpointLabel:       options.checkpointLabel,
     checkpointAt,
-    candidatesWithPrice:  withPrice.length,
+    candidatesWithPrice:   withPrice.length,
     priceUnavailableCount: doFetch ? candidates.filter(c => c.currentPriceUsd == null).length : 0,
-    winnersCount:         winners.length,
-    losersCount:          losers.length,
-    averagePctChange:     avgPct,
-    bestCandidate:        best ? {
-      contractKey:       best.contractKey,
-      symbol:            best.symbol,
-      pctChangeFromEntry: best.pctChangeFromEntry!,
-      multipleFromEntry:  best.multipleFromEntry!,
+    winnersCount:          winners.length,
+    losersCount:           losers.length,
+    averagePctChange:      avgPct,
+    bestCandidate:         best ? {
+      contractKey:        best.contractKey,
+      symbol:             best.symbol,
+      pctChangeFromEntry: best.pctChangeFromEntry ?? 0,
+      multipleFromEntry:  best.multipleFromEntry ?? 0,
     } : undefined,
-    worstCandidate:       worst && worst !== best ? {
-      contractKey:       worst.contractKey,
-      symbol:            worst.symbol,
-      pctChangeFromEntry: worst.pctChangeFromEntry!,
-      multipleFromEntry:  worst.multipleFromEntry!,
+    worstCandidate:        worst && worst !== best ? {
+      contractKey:        worst.contractKey,
+      symbol:             worst.symbol,
+      pctChangeFromEntry: worst.pctChangeFromEntry ?? 0,
+      multipleFromEntry:  worst.multipleFromEntry ?? 0,
     } : undefined,
     candidates,
-    realTradingLocked:   true,
-    tradingExecuted:     0,
-    noRealTradeSent:     true,
-    paperOnly:           true,
-    readOnly:            true,
+    realTradingLocked:    true,
+    tradingExecuted:      0,
+    noRealTradeSent:      true,
+    paperOnly:            true,
+    readOnly:             true,
   };
 
   const outDir = path.dirname(options.outPath);
@@ -368,6 +403,9 @@ export function renderRipperApprovedOutcomes(result: RipperApprovedOutcomesResul
   lines.push(`  Unique approved : ${result.uniqueApproved}`);
   if (result.duplicatesSkipped > 0) {
     lines.push(`  Duplicates skip : ${result.duplicatesSkipped}`);
+  }
+  if (result.malformedSkipped > 0) {
+    lines.push(`  Malformed skip  : ${result.malformedSkipped}`);
   }
   lines.push('');
 
@@ -431,7 +469,7 @@ export function renderRipperApprovedOutcomes(result: RipperApprovedOutcomesResul
   lines.push('');
   lines.push(`  Output          : ${result.outPath}`);
   lines.push('');
-  lines.push(`  realTradingLocked=true  tradingExecuted=0  paperOnly=true  readOnly=true`);
+  lines.push('  realTradingLocked=true  tradingExecuted=0  paperOnly=true  readOnly=true');
   lines.push(SEP);
   lines.push('');
   return lines.join('\n');

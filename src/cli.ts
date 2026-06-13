@@ -3159,7 +3159,12 @@ async function main(): Promise<void> {
           process.exit(1);
         }
         const raoOut = getArgValue('--out') ?? 'data/token-grab/ripper/outcomes/ripper-approved-outcomes.json';
-        const raoResult = runRipperApprovedOutcomes({ inputPaths: raoPaths, outPath: raoOut });
+        const raoCheckpointLabel = getArgValue('--checkpoint-label');
+        const raoResult = await runRipperApprovedOutcomes({
+          inputPaths: raoPaths,
+          outPath: raoOut,
+          checkpointLabel: raoCheckpointLabel,
+        });
         console.log(renderRipperApprovedOutcomes(raoResult));
         break;
       }
