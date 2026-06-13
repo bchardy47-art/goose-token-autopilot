@@ -178,6 +178,7 @@ import { runRipperNearMissReport as runCycleNearMissReport, renderRipperNearMiss
 import { runRipperApprovedOutcomes, renderRipperApprovedOutcomes, renderRipperApprovedOutcomesUsage } from './token-grab/ripperApprovedOutcomes';
 import { runRipperApprovedAutopsy, renderRipperApprovedAutopsy } from './token-grab/ripperApprovedAutopsy';
 import { runRipperEntrySim, renderRipperEntrySim } from './token-grab/ripperEntrySim';
+import { runRipperDelayedWatch, renderRipperDelayedWatch } from './token-grab/ripperDelayedWatch';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3139,6 +3140,30 @@ async function main(): Promise<void> {
         break;
       }
 
+      case 'token:ripper-approved-outcomes': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderRipperApprovedOutcomesUsage());
+          break;
+        }
+        const raoPaths: string[] = [];
+        const raoFlagIdx = process.argv.indexOf('--input');
+        if (raoFlagIdx !== -1) {
+          for (let i = raoFlagIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            raoPaths.push(process.argv[i]);
+          }
+        }
+        if (raoPaths.length === 0) {
+          console.error('[token:ripper-approved-outcomes] No --input files specified.');
+          console.error('  Usage: npm run token:ripper-approved-outcomes -- --input data/token-grab/ripper/cycles/cycle-*.jsonl');
+          process.exit(1);
+        }
+        const raoOut = getArgValue('--out') ?? 'data/token-grab/ripper/outcomes/ripper-approved-outcomes.json';
+        const raoResult = runRipperApprovedOutcomes({ inputPaths: raoPaths, outPath: raoOut });
+        console.log(renderRipperApprovedOutcomes(raoResult));
+        break;
+      }
+
       case 'token:ripper-approved-autopsy': {
         if (process.argv.includes('--help') || process.argv.includes('-h')) {
           console.log('token:ripper-approved-autopsy — compare approved ripper candidates across saved outcome checkpoint JSON files');
@@ -3195,6 +3220,36 @@ async function main(): Promise<void> {
           outcomePaths: resOutcomePaths.length > 0 ? resOutcomePaths : undefined,
         });
         console.log(renderRipperEntrySim(resResult));
+        break;
+      }
+
+      case 'token:ripper-delayed-watch': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log('token:ripper-delayed-watch — record approved candidates that would be delayed under a stricter age rule');
+          console.log('Usage: npm run token:ripper-delayed-watch -- --input <cycle-jsonl...> --delay-minutes <n> --out <path>');
+          break;
+        }
+        const rdwPaths: string[] = [];
+        const rdwInputIdx = process.argv.indexOf('--input');
+        if (rdwInputIdx !== -1) {
+          for (let i = rdwInputIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rdwPaths.push(process.argv[i]);
+          }
+        }
+        if (rdwPaths.length === 0) {
+          console.error('[token:ripper-delayed-watch] No --input cycle files specified.');
+          console.error('  Usage: npm run token:ripper-delayed-watch -- --input data/token-grab/ripper/cycles/cycle-*.jsonl --delay-minutes 5');
+          process.exit(1);
+        }
+        const rdwDelay = parseNumberArg('--delay-minutes', 5, { min: 0 });
+        const rdwOut   = getArgValue('--out') ?? 'data/token-grab/ripper/delayed-watch/watch.json';
+        const rdwResult = runRipperDelayedWatch({
+          inputPaths:         rdwPaths,
+          outPath:            rdwOut,
+          delayTargetMinutes: rdwDelay,
+        });
+        console.log(renderRipperDelayedWatch(rdwResult));
         break;
       }
 
