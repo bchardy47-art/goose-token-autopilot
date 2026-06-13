@@ -724,3 +724,199 @@ describe('renderRipperPaperCycleResult', () => {
     expect(out).toContain(new Date(NOW_MS).toISOString());
   });
 });
+
+// ── post-approval observations ────────────────────────────────────────────────
+
+describe('runRipperPaperCycle — post-approval observations', () => {
+  const CONTRACT = 'TokenAAA111222333444555666777888999000111';
+
+  it('routes approved candidate to observation path when in both seenContracts and approvedContracts', async () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([makeOutcome({ observedAt: EIGHT_MIN_AGO })]),
+    });
+    const seenContracts     = new Set([CONTRACT]);
+    const approvedContracts = new Map([[CONTRACT, EIGHT_MIN_AGO]]);
+
+    const result = await runRipperPaperCycle({
+      runsDir,
+      cyclesDir:           path.join(tmpDir, 'cycles'),
+      clusterRiskProvider: offlineClusterRiskProvider,
+      nowMs:               NOW_MS,
+      seenContracts,
+      approvedContracts,
+      observationsDir:     path.join(tmpDir, 'observations'),
+    });
+
+    expect(result.postApprovalObservedCount).toBe(1);
+    expect(result.observationOutputPath).not.toBeNull();
+    expect(result.fixturesCaptured).toBe(0);  // no new main-capture signals
+  });
+
+  it('observation artifact contains postApprovalObservation=true', async () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([makeOutcome({ observedAt: EIGHT_MIN_AGO })]),
+    });
+    const seenContracts     = new Set([CONTRACT]);
+    const approvedContracts = new Map([[CONTRACT, EIGHT_MIN_AGO]]);
+
+    const result = await runRipperPaperCycle({
+      runsDir,
+      cyclesDir:           path.join(tmpDir, 'cycles'),
+      clusterRiskProvider: offlineClusterRiskProvider,
+      nowMs:               NOW_MS,
+      seenContracts,
+      approvedContracts,
+      observationsDir:     path.join(tmpDir, 'observations'),
+    });
+
+    expect(result.observationOutputPath).not.toBeNull();
+    const raw     = fs.readFileSync(result.observationOutputPath!, 'utf-8');
+    const fixture = JSON.parse(raw.trim().split('\n')[0]);
+    expect(fixture.postApprovalObservation).toBe(true);
+  });
+
+  it('observation artifact preserves originalApprovedAt from approvedContracts', async () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([makeOutcome({ observedAt: EIGHT_MIN_AGO })]),
+    });
+    const approvedAt        = EIGHT_MIN_AGO;
+    const seenContracts     = new Set([CONTRACT]);
+    const approvedContracts = new Map([[CONTRACT, approvedAt]]);
+
+    const result = await runRipperPaperCycle({
+      runsDir,
+      cyclesDir:           path.join(tmpDir, 'cycles'),
+      clusterRiskProvider: offlineClusterRiskProvider,
+      nowMs:               NOW_MS,
+      seenContracts,
+      approvedContracts,
+      observationsDir:     path.join(tmpDir, 'observations'),
+    });
+
+    const raw     = fs.readFileSync(result.observationOutputPath!, 'utf-8');
+    const fixture = JSON.parse(raw.trim().split('\n')[0]);
+    expect(fixture.originalApprovedAt).toBe(approvedAt);
+  });
+
+  it('buyApprovedPaper is not incremented for observation candidates', async () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([makeOutcome({ observedAt: EIGHT_MIN_AGO })]),
+    });
+    const seenContracts     = new Set([CONTRACT]);
+    const approvedContracts = new Map([[CONTRACT, EIGHT_MIN_AGO]]);
+
+    const result = await runRipperPaperCycle({
+      runsDir,
+      cyclesDir:           path.join(tmpDir, 'cycles'),
+      clusterRiskProvider: offlineClusterRiskProvider,
+      nowMs:               NOW_MS,
+      seenContracts,
+      approvedContracts,
+      observationsDir:     path.join(tmpDir, 'observations'),
+    });
+
+    expect(result.buyApprovedPaper).toBe(0);
+    expect(result.postApprovalObservedCount).toBeGreaterThan(0);
+  });
+
+  it('seen-but-not-approved candidate is still skipped (not routed to observations)', async () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([makeOutcome({ observedAt: EIGHT_MIN_AGO })]),
+    });
+    const seenContracts = new Set([CONTRACT]);
+    // approvedContracts NOT provided — signal is seen but not approved
+
+    const result = await runRipperPaperCycle({
+      runsDir,
+      cyclesDir:           path.join(tmpDir, 'cycles'),
+      clusterRiskProvider: offlineClusterRiskProvider,
+      nowMs:               NOW_MS,
+      seenContracts,
+      observationsDir:     path.join(tmpDir, 'observations'),
+    });
+
+    expect(result.postApprovalObservedCount).toBe(0);
+    expect(result.seenSkippedCount).toBe(1);
+  });
+
+  it('approvedContracts is populated with newly approved contracts after main capture', async () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([makeOutcome({ observedAt: EIGHT_MIN_AGO })]),
+    });
+    const approvedContracts = new Map<string, string>();
+    const seenContracts     = new Set<string>();
+
+    const result = await runRipperPaperCycle({
+      runsDir,
+      cyclesDir:           path.join(tmpDir, 'cycles'),
+      clusterRiskProvider: offlineClusterRiskProvider,
+      nowMs:               NOW_MS,
+      seenContracts,
+      approvedContracts,
+    });
+
+    // Whatever was approved in the main capture should be in approvedContracts
+    expect(approvedContracts.size).toBe(result.buyApprovedPaper);
+  });
+
+  it('returns postApprovalObservedCount=0 and observationOutputPath=null when no approvedContracts provided', async () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([makeOutcome({ observedAt: EIGHT_MIN_AGO })]),
+    });
+
+    const result = await runRipperPaperCycle({
+      runsDir,
+      cyclesDir:           path.join(tmpDir, 'cycles'),
+      clusterRiskProvider: offlineClusterRiskProvider,
+      nowMs:               NOW_MS,
+    });
+
+    expect(result.postApprovalObservedCount).toBe(0);
+    expect(result.observationOutputPath).toBeNull();
+  });
+
+  it('safety fields remain true during observation cycle', async () => {
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([makeOutcome({ observedAt: EIGHT_MIN_AGO })]),
+    });
+    const seenContracts     = new Set([CONTRACT]);
+    const approvedContracts = new Map([[CONTRACT, EIGHT_MIN_AGO]]);
+
+    const result = await runRipperPaperCycle({
+      runsDir,
+      cyclesDir:           path.join(tmpDir, 'cycles'),
+      clusterRiskProvider: offlineClusterRiskProvider,
+      nowMs:               NOW_MS,
+      seenContracts,
+      approvedContracts,
+      observationsDir:     path.join(tmpDir, 'observations'),
+    });
+
+    expect(result.realTradingLocked).toBe(true);
+    expect(result.tradingExecuted).toBe(0);
+    expect(result.noRealTradeSent).toBe(true);
+    expect(result.paperOnly).toBe(true);
+    expect(result.readOnly).toBe(true);
+  });
+
+  it('early-return paths include postApprovalObservedCount=0 and observationOutputPath=null', async () => {
+    // Source missing early return
+    const r1 = await runRipperPaperCycle({
+      runsDir:   path.join(tmpDir, 'no-such-dir'),
+      cyclesDir: path.join(tmpDir, 'cycles'),
+      nowMs:     NOW_MS,
+    });
+    expect(r1.postApprovalObservedCount).toBe(0);
+    expect(r1.observationOutputPath).toBeNull();
+
+    // All stale early return
+    const runsDir = makeRunsDir({
+      'run-20260610-100000.json': makeRunFile([makeOutcome({ observedAt: TWO_HR_AGO })]),
+    });
+    const r2 = await runRipperPaperCycle({
+      runsDir, cyclesDir: path.join(tmpDir, 'cycles'), nowMs: NOW_MS,
+    });
+    expect(r2.postApprovalObservedCount).toBe(0);
+    expect(r2.observationOutputPath).toBeNull();
+  });
+});

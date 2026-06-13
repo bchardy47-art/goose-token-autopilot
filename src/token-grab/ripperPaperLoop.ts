@@ -26,6 +26,8 @@ export interface RipperPaperLoopOptions {
   stopFilePath?: string;
   /** When true, call _refreshSource before each cycle to update dex-watch run files */
   refreshSource?: boolean;
+  /** Directory for post-approval observation artifacts */
+  observationsDir?: string;
   /** Injected for testing — defaults to Date.now */
   getNowMs?: () => number;
   /** Injected for testing — defaults to setTimeout-based sleep */
@@ -33,7 +35,7 @@ export interface RipperPaperLoopOptions {
   /** Called after each successful cycle completes (used for inline printing) */
   onCycleComplete?: (cycleResult: RipperPaperCycleResult, cycleNumber: number, sourceRefresh?: SourceRefreshResult) => void;
   /** Overrides the cycle runner — for testing error paths only */
-  _runCycle?: (options: { runsDir: string; cyclesDir: string; clusterRiskProvider?: ClusterRiskProvider; nowMs: number; seenContracts?: Set<string>; firstSeenMap?: Map<string, string> }) => Promise<RipperPaperCycleResult>;
+  _runCycle?: (options: { runsDir: string; cyclesDir: string; clusterRiskProvider?: ClusterRiskProvider; nowMs: number; seenContracts?: Set<string>; firstSeenMap?: Map<string, string>; approvedContracts?: Map<string, string>; observationsDir?: string }) => Promise<RipperPaperCycleResult>;
   /** Source refresh function — injected; required when refreshSource=true */
   _refreshSource?: () => Promise<SourceRefreshResult>;
 }
@@ -63,6 +65,8 @@ export interface RipperPaperLoopResult {
   totalSeenSkipped: number;
   /** Total TOO_EARLY fixtures not permanently deduped — eligible for recheck next cycle */
   totalTooEarlyRecheckable: number;
+  /** Total post-approval observation fixtures across all cycles (read-only, no new buy approvals) */
+  totalPostApprovalObserved: number;
   errors: RipperPaperLoopError[];
   cycles: RipperPaperLoopCycleSummary[];
   realTradingLocked: true;
@@ -84,9 +88,10 @@ export async function runRipperPaperLoop(
   const sleep           = options.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
   const runCycle        = options._runCycle ?? runRipperPaperCycle;
 
-  const sessionStartedAt = new Date(getNowMs()).toISOString();
-  const seenContracts    = new Set<string>();
-  const firstSeenMap     = new Map<string, string>();
+  const sessionStartedAt  = new Date(getNowMs()).toISOString();
+  const seenContracts     = new Set<string>();
+  const firstSeenMap      = new Map<string, string>();
+  const approvedContracts = new Map<string, string>();
 
   let cyclesAttempted   = 0;
   let cyclesCompleted   = 0;
@@ -94,7 +99,8 @@ export async function runRipperPaperLoop(
   let totalPaperApprovals = 0;
   let totalRejected     = 0;
   let totalSeenSkipped  = 0;
-  let totalTooEarlyRecheckable = 0;
+  let totalTooEarlyRecheckable   = 0;
+  let totalPostApprovalObserved  = 0;
   let stoppedByFile     = false;
   let stoppedByError    = false;
   const errors: RipperPaperLoopError[] = [];
@@ -134,6 +140,8 @@ export async function runRipperPaperLoop(
         nowMs:               getNowMs(),
         seenContracts,
         firstSeenMap,
+        approvedContracts,
+        observationsDir:     options.observationsDir,
       });
     } catch (err) {
       errors.push({
@@ -145,12 +153,13 @@ export async function runRipperPaperLoop(
     }
 
     cycles.push({ cycleNumber, result: cycleResult, sourceRefresh });
-    cyclesCompleted      += 1;
-    totalFixtures             += cycleResult.fixturesCaptured;
-    totalPaperApprovals       += cycleResult.buyApprovedPaper;
-    totalRejected             += cycleResult.buyRejected;
-    totalSeenSkipped          += cycleResult.seenSkippedCount;
-    totalTooEarlyRecheckable  += cycleResult.tooEarlyRecheckableCount;
+    cyclesCompleted              += 1;
+    totalFixtures                += cycleResult.fixturesCaptured;
+    totalPaperApprovals          += cycleResult.buyApprovedPaper;
+    totalRejected                += cycleResult.buyRejected;
+    totalSeenSkipped             += cycleResult.seenSkippedCount;
+    totalTooEarlyRecheckable     += cycleResult.tooEarlyRecheckableCount;
+    totalPostApprovalObserved    += cycleResult.postApprovalObservedCount;
 
     options.onCycleComplete?.(cycleResult, cycleNumber, sourceRefresh);
 
@@ -181,6 +190,7 @@ export async function runRipperPaperLoop(
     totalRejected,
     totalSeenSkipped,
     totalTooEarlyRecheckable,
+    totalPostApprovalObserved,
     errors,
     cycles,
     realTradingLocked: true,
@@ -250,6 +260,7 @@ export function renderRipperPaperLoopResult(
   lines.push(`  Total rejected  : ${result.totalRejected}`);
   lines.push(`  Seen/deduped    : ${result.totalSeenSkipped}`);
   lines.push(`  Too-early recheck: ${result.totalTooEarlyRecheckable}`);
+  lines.push(`  Post-approval obs: ${result.totalPostApprovalObserved}`);
   lines.push('');
 
   const stopReason = result.stoppedByFile
