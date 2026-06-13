@@ -39,6 +39,10 @@ export interface RipperPaperCycleResult {
   bubblemapsProviderCount: number;
   buyApprovedPaper: number;
   buyRejected: number;
+  /** Shadow policy counts across approved fixtures (shadow-only, does not affect gates) */
+  shadowPolicyPass?:    number;
+  shadowPolicyFail?:    number;
+  shadowPolicyMissing?: number;
   seenSkippedCount: number;
   /** Fixtures that were TOO_EARLY and not added to seenContracts — will be rechecked next cycle */
   tooEarlyRecheckableCount: number;
@@ -271,12 +275,21 @@ export async function runRipperPaperCycle(
   let bubblemapsProviderCount = 0;
   let buyApprovedPaper        = 0;
   let buyRejected             = 0;
+  let shadowPolicyPass        = 0;
+  let shadowPolicyFail        = 0;
+  let shadowPolicyMissing     = 0;
 
   for (const f of captureResult.fixtures) {
     clusterRiskCounts[getClusterRisk(f)] += 1;
     if (isBubblemapsProvider(f)) bubblemapsProviderCount += 1;
-    if (f.buyGateDecision === 'BUY_APPROVED_PAPER') buyApprovedPaper += 1;
-    else buyRejected += 1;
+    if (f.buyGateDecision === 'BUY_APPROVED_PAPER') {
+      buyApprovedPaper += 1;
+      if (f.shadowPolicyPass === true)       shadowPolicyPass    += 1;
+      else if (f.shadowPolicyPass === false) shadowPolicyFail    += 1;
+      else                                   shadowPolicyMissing += 1;
+    } else {
+      buyRejected += 1;
+    }
   }
 
   // Mark processed contracts as seen — skip recheckable TOO_EARLY fixtures so they can
@@ -358,6 +371,9 @@ export async function runRipperPaperCycle(
     bubblemapsProviderCount,
     buyApprovedPaper,
     buyRejected,
+    shadowPolicyPass,
+    shadowPolicyFail,
+    shadowPolicyMissing,
     seenSkippedCount,
     tooEarlyRecheckableCount,
     outputPath:    captureResult.capturedCount > 0 ? fixtureOutputPath : null,

@@ -67,6 +67,10 @@ export interface RipperPaperLoopResult {
   totalTooEarlyRecheckable: number;
   /** Total post-approval observation fixtures across all cycles (read-only, no new buy approvals) */
   totalPostApprovalObserved: number;
+  /** Shadow policy counts across all approved fixtures — shadow-only, no gate changes */
+  totalShadowPolicyPass:    number;
+  totalShadowPolicyFail:    number;
+  totalShadowPolicyMissing: number;
   errors: RipperPaperLoopError[];
   cycles: RipperPaperLoopCycleSummary[];
   realTradingLocked: true;
@@ -101,6 +105,9 @@ export async function runRipperPaperLoop(
   let totalSeenSkipped  = 0;
   let totalTooEarlyRecheckable   = 0;
   let totalPostApprovalObserved  = 0;
+  let totalShadowPolicyPass      = 0;
+  let totalShadowPolicyFail      = 0;
+  let totalShadowPolicyMissing   = 0;
   let stoppedByFile     = false;
   let stoppedByError    = false;
   const errors: RipperPaperLoopError[] = [];
@@ -160,6 +167,9 @@ export async function runRipperPaperLoop(
     totalSeenSkipped             += cycleResult.seenSkippedCount;
     totalTooEarlyRecheckable     += cycleResult.tooEarlyRecheckableCount;
     totalPostApprovalObserved    += cycleResult.postApprovalObservedCount;
+    totalShadowPolicyPass        += cycleResult.shadowPolicyPass    ?? 0;
+    totalShadowPolicyFail        += cycleResult.shadowPolicyFail    ?? 0;
+    totalShadowPolicyMissing     += cycleResult.shadowPolicyMissing ?? 0;
 
     options.onCycleComplete?.(cycleResult, cycleNumber, sourceRefresh);
 
@@ -191,6 +201,9 @@ export async function runRipperPaperLoop(
     totalSeenSkipped,
     totalTooEarlyRecheckable,
     totalPostApprovalObserved,
+    totalShadowPolicyPass,
+    totalShadowPolicyFail,
+    totalShadowPolicyMissing,
     errors,
     cycles,
     realTradingLocked: true,
@@ -261,6 +274,7 @@ export function renderRipperPaperLoopResult(
   lines.push(`  Seen/deduped    : ${result.totalSeenSkipped}`);
   lines.push(`  Too-early recheck: ${result.totalTooEarlyRecheckable}`);
   lines.push(`  Post-approval obs: ${result.totalPostApprovalObserved}`);
+  lines.push(`  Shadow policy price_gt_0_25: pass=${result.totalShadowPolicyPass} fail=${result.totalShadowPolicyFail} missing=${result.totalShadowPolicyMissing}`);
   lines.push('');
 
   const stopReason = result.stoppedByFile
