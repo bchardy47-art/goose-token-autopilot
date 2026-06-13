@@ -181,6 +181,7 @@ import { runRipperEntrySim, renderRipperEntrySim } from './token-grab/ripperEntr
 import { runRipperDelayedWatch, renderRipperDelayedWatch } from './token-grab/ripperDelayedWatch';
 import { runRipperApprovedObservationAutopsy, renderRipperApprovedObservationAutopsy } from './token-grab/ripperApprovedObservationAutopsy';
 import { runRipperExitSim, renderRipperExitSim } from './token-grab/ripperExitSim';
+import { runRipperEntryFeatureAutopsy, renderRipperEntryFeatureAutopsy } from './token-grab/ripperEntryFeatureAutopsy';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3335,6 +3336,45 @@ async function main(): Promise<void> {
           outcomePaths:     resOutcomePaths,
         });
         console.log(renderRipperExitSim(resResult));
+        break;
+      }
+
+      case 'token:ripper-entry-feature-autopsy': {
+        const refaApprovalsIdx = process.argv.indexOf('--approvals');
+        const refaApprovalPaths: string[] = [];
+        if (refaApprovalsIdx !== -1) {
+          for (let i = refaApprovalsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            refaApprovalPaths.push(process.argv[i]);
+          }
+        }
+        const refaObsIdx = process.argv.indexOf('--observations');
+        const refaObsPaths: string[] = [];
+        if (refaObsIdx !== -1) {
+          for (let i = refaObsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            refaObsPaths.push(process.argv[i]);
+          }
+        }
+        const refaOutcomesIdx = process.argv.indexOf('--outcomes');
+        const refaOutcomePaths: string[] = [];
+        if (refaOutcomesIdx !== -1) {
+          for (let i = refaOutcomesIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            refaOutcomePaths.push(process.argv[i]);
+          }
+        }
+        if (refaApprovalPaths.length === 0) {
+          console.error('[token:ripper-entry-feature-autopsy] No --approvals files specified.');
+          console.error('  Usage: npm run token:ripper-entry-feature-autopsy -- --approvals data/token-grab/ripper/cycles/cycle-*.jsonl --observations data/token-grab/ripper/observations/obs-*.jsonl --outcomes data/token-grab/ripper/outcomes/ripper-approved-outcomes-*.json');
+          process.exit(1);
+        }
+        const refaResult = runRipperEntryFeatureAutopsy({
+          approvalPaths:    refaApprovalPaths,
+          observationPaths: refaObsPaths,
+          outcomePaths:     refaOutcomePaths,
+        });
+        console.log(renderRipperEntryFeatureAutopsy(refaResult));
         break;
       }
 
