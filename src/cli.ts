@@ -184,6 +184,7 @@ import { runRipperExitSim, renderRipperExitSim } from './token-grab/ripperExitSi
 import { runRipperEntryFeatureAutopsy, renderRipperEntryFeatureAutopsy } from './token-grab/ripperEntryFeatureAutopsy';
 import { runRipperShadowFilterReport, renderRipperShadowFilterReport } from './token-grab/ripperShadowFilterReport';
 import { runRipperShadowPolicyReport, renderRipperShadowPolicyReport } from './token-grab/ripperShadowPolicyReport';
+import { runRipperShadowPortfolioReport, renderRipperShadowPortfolioReport } from './token-grab/ripperShadowPortfolioReport';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3446,6 +3447,36 @@ async function main(): Promise<void> {
           outcomePaths:  rsprOutcomePaths,
         });
         console.log(renderRipperShadowPolicyReport(rsprResult));
+        break;
+      }
+
+      case 'token:ripper-shadow-portfolio-report': {
+        const rsppApprovalsIdx = process.argv.indexOf('--approvals');
+        const rsppApprovalPaths: string[] = [];
+        if (rsppApprovalsIdx !== -1) {
+          for (let i = rsppApprovalsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rsppApprovalPaths.push(process.argv[i]);
+          }
+        }
+        const rsppOutcomesIdx = process.argv.indexOf('--outcomes');
+        const rsppOutcomePaths: string[] = [];
+        if (rsppOutcomesIdx !== -1) {
+          for (let i = rsppOutcomesIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rsppOutcomePaths.push(process.argv[i]);
+          }
+        }
+        if (rsppApprovalPaths.length === 0) {
+          console.error('[token:ripper-shadow-portfolio-report] No --approvals files specified.');
+          console.error('  Usage: npm run token:ripper-shadow-portfolio-report -- --approvals data/token-grab/ripper/cycles/cycle-*.jsonl --outcomes data/token-grab/ripper/outcomes/ripper-approved-outcomes-*.json');
+          process.exit(1);
+        }
+        const rsppResult = runRipperShadowPortfolioReport({
+          approvalPaths: rsppApprovalPaths,
+          outcomePaths:  rsppOutcomePaths,
+        });
+        console.log(renderRipperShadowPortfolioReport(rsppResult));
         break;
       }
 
