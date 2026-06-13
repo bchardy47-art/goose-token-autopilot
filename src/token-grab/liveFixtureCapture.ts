@@ -16,6 +16,57 @@ import {
 import { loadEarSignals, type EarsInputFormat } from './ripperEarsReport';
 import { type ClusterRiskProvider, type ClusterRiskResult } from './clusterRiskProvider';
 
+// ── Shadow policy ─────────────────────────────────────────────────────────────────────────
+
+export const SHADOW_POLICY_PRICE_GT_0_25 = 'price_gt_0_25';
+
+export interface ShadowPolicyTag {
+  shadowPolicyId:     string;
+  shadowPolicyPass:   boolean;
+  shadowPolicyReason: string;
+  shadowPolicyValue:  number | null;
+  shadowPolicyMode:   'shadow_only';
+}
+
+/**
+ * Computes the shadow policy tag for a candidate at approval time.
+ * Policy: price_gt_0_25 — approvalPriceChangePct > 0.25
+ * Shadow-only: does not affect eligibility, scoring, or buy gates.
+ */
+export function computeShadowPolicy(priceChangePct: number | null | undefined): ShadowPolicyTag {
+  const value = (priceChangePct != null && Number.isFinite(Number(priceChangePct)))
+    ? Number(priceChangePct)
+    : null;
+
+  if (value == null) {
+    return {
+      shadowPolicyId:     SHADOW_POLICY_PRICE_GT_0_25,
+      shadowPolicyPass:   false,
+      shadowPolicyReason: 'approvalPriceChangePct missing',
+      shadowPolicyValue:  null,
+      shadowPolicyMode:   'shadow_only',
+    };
+  }
+
+  if (value > 0.25) {
+    return {
+      shadowPolicyId:     SHADOW_POLICY_PRICE_GT_0_25,
+      shadowPolicyPass:   true,
+      shadowPolicyReason: 'approvalPriceChangePct > 0.25',
+      shadowPolicyValue:  value,
+      shadowPolicyMode:   'shadow_only',
+    };
+  }
+
+  return {
+    shadowPolicyId:     SHADOW_POLICY_PRICE_GT_0_25,
+    shadowPolicyPass:   false,
+    shadowPolicyReason: 'approvalPriceChangePct <= 0.25',
+    shadowPolicyValue:  value,
+    shadowPolicyMode:   'shadow_only',
+  };
+}
+
 // ── Fixture shape ─────────────────────────────────────────────────────────────────────────
 
 export interface LiveRipperFixture {
@@ -34,6 +85,12 @@ export interface LiveRipperFixture {
   blockers: string[];
   topReasons: string[];
   warnings: string[];
+  /** Shadow policy tag — present only on BUY_APPROVED_PAPER fixtures (missing on old artifacts) */
+  shadowPolicyId?:     string;
+  shadowPolicyPass?:   boolean;
+  shadowPolicyReason?: string;
+  shadowPolicyValue?:  number | null;
+  shadowPolicyMode?:   'shadow_only';
   realTradingLocked: true;
   paperOnly: true;
   readOnly: true;
@@ -110,7 +167,7 @@ export function buildFixture(
   const ts    = capturedAt.slice(0, 16).replace('T', '-').replace(':', '');
   const id    = `${signal.source}:${token}:${ts}`;
 
-  return {
+  const fixture: LiveRipperFixture = {
     id,
     capturedAt,
     source: signal.source,
@@ -130,6 +187,18 @@ export function buildFixture(
     paperOnly: true,
     readOnly: true,
   };
+
+  // Attach shadow policy metadata only to approved candidates (shadow-only, never gates)
+  if (buyGateDecision === 'BUY_APPROVED_PAPER') {
+    const sp = computeShadowPolicy(signal.priceChangePct);
+    fixture.shadowPolicyId     = sp.shadowPolicyId;
+    fixture.shadowPolicyPass   = sp.shadowPolicyPass;
+    fixture.shadowPolicyReason = sp.shadowPolicyReason;
+    fixture.shadowPolicyValue  = sp.shadowPolicyValue;
+    fixture.shadowPolicyMode   = sp.shadowPolicyMode;
+  }
+
+  return fixture;
 }
 
 // ── JSONL storage ─────────────────────────────────────────────────────────────────────────

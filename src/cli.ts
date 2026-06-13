@@ -183,6 +183,7 @@ import { runRipperApprovedObservationAutopsy, renderRipperApprovedObservationAut
 import { runRipperExitSim, renderRipperExitSim } from './token-grab/ripperExitSim';
 import { runRipperEntryFeatureAutopsy, renderRipperEntryFeatureAutopsy } from './token-grab/ripperEntryFeatureAutopsy';
 import { runRipperShadowFilterReport, renderRipperShadowFilterReport } from './token-grab/ripperShadowFilterReport';
+import { runRipperShadowPolicyReport, renderRipperShadowPolicyReport } from './token-grab/ripperShadowPolicyReport';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3415,6 +3416,36 @@ async function main(): Promise<void> {
           outcomePaths:     rsfrOutcomePaths,
         });
         console.log(renderRipperShadowFilterReport(rsfrResult));
+        break;
+      }
+
+      case 'token:ripper-shadow-policy-report': {
+        const rsprApprovalsIdx = process.argv.indexOf('--approvals');
+        const rsprApprovalPaths: string[] = [];
+        if (rsprApprovalsIdx !== -1) {
+          for (let i = rsprApprovalsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rsprApprovalPaths.push(process.argv[i]);
+          }
+        }
+        const rsprOutcomesIdx = process.argv.indexOf('--outcomes');
+        const rsprOutcomePaths: string[] = [];
+        if (rsprOutcomesIdx !== -1) {
+          for (let i = rsprOutcomesIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rsprOutcomePaths.push(process.argv[i]);
+          }
+        }
+        if (rsprApprovalPaths.length === 0) {
+          console.error('[token:ripper-shadow-policy-report] No --approvals files specified.');
+          console.error('  Usage: npm run token:ripper-shadow-policy-report -- --approvals data/token-grab/ripper/cycles/cycle-*.jsonl --outcomes data/token-grab/ripper/outcomes/ripper-approved-outcomes-*.json');
+          process.exit(1);
+        }
+        const rsprResult = runRipperShadowPolicyReport({
+          approvalPaths: rsprApprovalPaths,
+          outcomePaths:  rsprOutcomePaths,
+        });
+        console.log(renderRipperShadowPolicyReport(rsprResult));
         break;
       }
 
