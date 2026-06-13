@@ -182,6 +182,7 @@ import { runRipperDelayedWatch, renderRipperDelayedWatch } from './token-grab/ri
 import { runRipperApprovedObservationAutopsy, renderRipperApprovedObservationAutopsy } from './token-grab/ripperApprovedObservationAutopsy';
 import { runRipperExitSim, renderRipperExitSim } from './token-grab/ripperExitSim';
 import { runRipperEntryFeatureAutopsy, renderRipperEntryFeatureAutopsy } from './token-grab/ripperEntryFeatureAutopsy';
+import { runRipperShadowFilterReport, renderRipperShadowFilterReport } from './token-grab/ripperShadowFilterReport';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3375,6 +3376,45 @@ async function main(): Promise<void> {
           outcomePaths:     refaOutcomePaths,
         });
         console.log(renderRipperEntryFeatureAutopsy(refaResult));
+        break;
+      }
+
+      case 'token:ripper-shadow-filter-report': {
+        const rsfrApprovalsIdx = process.argv.indexOf('--approvals');
+        const rsfrApprovalPaths: string[] = [];
+        if (rsfrApprovalsIdx !== -1) {
+          for (let i = rsfrApprovalsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rsfrApprovalPaths.push(process.argv[i]);
+          }
+        }
+        const rsfrObsIdx = process.argv.indexOf('--observations');
+        const rsfrObsPaths: string[] = [];
+        if (rsfrObsIdx !== -1) {
+          for (let i = rsfrObsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rsfrObsPaths.push(process.argv[i]);
+          }
+        }
+        const rsfrOutcomesIdx = process.argv.indexOf('--outcomes');
+        const rsfrOutcomePaths: string[] = [];
+        if (rsfrOutcomesIdx !== -1) {
+          for (let i = rsfrOutcomesIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rsfrOutcomePaths.push(process.argv[i]);
+          }
+        }
+        if (rsfrApprovalPaths.length === 0) {
+          console.error('[token:ripper-shadow-filter-report] No --approvals files specified.');
+          console.error('  Usage: npm run token:ripper-shadow-filter-report -- --approvals data/token-grab/ripper/cycles/cycle-*.jsonl --observations data/token-grab/ripper/observations/obs-*.jsonl --outcomes data/token-grab/ripper/outcomes/ripper-approved-outcomes-*.json');
+          process.exit(1);
+        }
+        const rsfrResult = runRipperShadowFilterReport({
+          approvalPaths:    rsfrApprovalPaths,
+          observationPaths: rsfrObsPaths,
+          outcomePaths:     rsfrOutcomePaths,
+        });
+        console.log(renderRipperShadowFilterReport(rsfrResult));
         break;
       }
 
