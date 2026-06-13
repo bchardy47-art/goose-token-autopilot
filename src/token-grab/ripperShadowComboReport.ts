@@ -77,6 +77,65 @@ export interface FullComboWatchlist {
   summary:     FullComboWatchlistSummary;
 }
 
+export interface UniqueContractEntry {
+  contractKey:                string;
+  contractKeyShort:           string;
+  symbol?:                    string;
+  firstApprovedAt:            string;
+  latestApprovedAt:           string;
+  instanceCount:              number;
+  repeated:                   boolean;
+  bestApprovalPriceChangePct: number | null;
+  bestLiquidityUsd:           number | null;
+  bestVolumeUsd:              number | null;
+  outcomePctChange:           number | null;
+  classification:             ComboCandidateClassification;
+  anyInstancePassedFullCombo: boolean;
+}
+
+export interface FullComboUniqueContractSummary {
+  uniqueContractCount:       number;
+  totalInstancesRepresented: number;
+  repeatedContractCount:     number;
+  pricedUniqueContracts:     number;
+  pendingUniqueContracts:    number;
+  winnerUniqueContracts:     number;
+  loserUniqueContracts:      number;
+  uniqueContractWinRate:     number | null;
+  avgPct:                    number | null;
+  medianPct:                 number | null;
+  worstLoss:                 number | null;
+  bestWinner:                UniqueContractEntry | null;
+  worstLoser:                UniqueContractEntry | null;
+}
+
+export interface ComboInstanceVsUniqueComparison {
+  instanceCandidates: number;
+  instancePriced:     number;
+  instancePending:    number;
+  instanceWinners:    number;
+  instanceLosers:     number;
+  instanceWinRate:    number | null;
+  instanceAvgPct:     number | null;
+  instanceMedianPct:  number | null;
+  instanceWorstLoss:  number | null;
+  uniqueContracts:    number;
+  uniquePriced:       number;
+  uniquePending:      number;
+  uniqueWinners:      number;
+  uniqueLosers:       number;
+  uniqueWinRate:      number | null;
+  uniqueAvgPct:       number | null;
+  uniqueMedianPct:    number | null;
+  uniqueWorstLoss:    number | null;
+}
+
+export interface FullComboUniqueContractView {
+  entries:    UniqueContractEntry[];
+  summary:    FullComboUniqueContractSummary;
+  comparison: ComboInstanceVsUniqueComparison;
+}
+
 export interface RipperShadowComboReportOptions {
   approvalPaths: string[];
   outcomePaths:  string[];
@@ -96,9 +155,10 @@ export interface RipperShadowComboReportResult {
   totalCandidates:         number;
   allStats:                ComboPolicyStats;
   policyStats:             ComboPolicyStats[];
-  currentLeader:           ComboLeader | null;
-  fullComboWatchlist:      FullComboWatchlist;
-  realTradingLocked:       true;
+  currentLeader:               ComboLeader | null;
+  fullComboWatchlist:          FullComboWatchlist;
+  fullComboUniqueContractView: FullComboUniqueContractView;
+  realTradingLocked:           true;
   tradingExecuted:         0;
   noRealTradeSent:         true;
   paperOnly:               true;
@@ -410,6 +470,109 @@ export function runRipperShadowComboReport(
     },
   };
 
+  // ── Step 7: Build full combo unique-contract view ─────────────────────────
+  const ucMap = new Map<string, UniqueContractEntry>();
+  for (const c of fullComboCands) {
+    const ex = ucMap.get(c.contractKey);
+    if (!ex) {
+      ucMap.set(c.contractKey, {
+        contractKey:                c.contractKey,
+        contractKeyShort:           c.contractKeyShort,
+        symbol:                     c.symbol,
+        firstApprovedAt:            c.approvedAt,
+        latestApprovedAt:           c.approvedAt,
+        instanceCount:              1,
+        repeated:                   false,
+        bestApprovalPriceChangePct: c.approvalPriceChangePct,
+        bestLiquidityUsd:           c.liquidityUsd,
+        bestVolumeUsd:              c.volumeUsd,
+        outcomePctChange:           c.outcomePctChange,
+        classification:             c.classification,
+        anyInstancePassedFullCombo: true,
+      });
+    } else {
+      ex.instanceCount++;
+      if (c.approvedAt < ex.firstApprovedAt)  ex.firstApprovedAt  = c.approvedAt;
+      if (c.approvedAt > ex.latestApprovedAt) ex.latestApprovedAt = c.approvedAt;
+      if (c.approvalPriceChangePct != null &&
+          (ex.bestApprovalPriceChangePct == null || c.approvalPriceChangePct > ex.bestApprovalPriceChangePct)) {
+        ex.bestApprovalPriceChangePct = c.approvalPriceChangePct;
+      }
+      if (c.liquidityUsd != null &&
+          (ex.bestLiquidityUsd == null || c.liquidityUsd > ex.bestLiquidityUsd)) {
+        ex.bestLiquidityUsd = c.liquidityUsd;
+      }
+      if (c.volumeUsd != null &&
+          (ex.bestVolumeUsd == null || c.volumeUsd > ex.bestVolumeUsd)) {
+        ex.bestVolumeUsd = c.volumeUsd;
+      }
+      if (!ex.symbol && c.symbol) ex.symbol = c.symbol;
+    }
+  }
+  for (const e of ucMap.values()) {
+    e.repeated = e.instanceCount > 1;
+  }
+
+  const ucEntries = [...ucMap.values()];
+  ucEntries.sort((a, b) => {
+    const aPending = a.classification === 'PENDING_PRICE';
+    const bPending = b.classification === 'PENDING_PRICE';
+    if (aPending !== bPending) return aPending ? -1 : 1;
+    return b.latestApprovedAt.localeCompare(a.latestApprovedAt);
+  });
+
+  const ucPriced   = ucEntries.filter(e => e.outcomePctChange != null);
+  const ucPending  = ucEntries.filter(e => e.outcomePctChange == null);
+  const ucWinners  = ucPriced.filter(e => e.classification === 'WINNER');
+  const ucLosers   = ucPriced.filter(e => e.classification === 'LOSER');
+  const ucOutcomes = ucPriced.map(e => e.outcomePctChange as number);
+
+  const ucWinnersSorted = [...ucWinners].sort(
+    (a, b) => (b.outcomePctChange as number) - (a.outcomePctChange as number),
+  );
+  const ucLosersSorted  = [...ucLosers].sort(
+    (a, b) => (a.outcomePctChange as number) - (b.outcomePctChange as number),
+  );
+
+  const fullComboUniqueContractView: FullComboUniqueContractView = {
+    entries: ucEntries,
+    summary: {
+      uniqueContractCount:       ucEntries.length,
+      totalInstancesRepresented: ucEntries.reduce((s, e) => s + e.instanceCount, 0),
+      repeatedContractCount:     ucEntries.filter(e => e.repeated).length,
+      pricedUniqueContracts:     ucPriced.length,
+      pendingUniqueContracts:    ucPending.length,
+      winnerUniqueContracts:     ucWinners.length,
+      loserUniqueContracts:      ucLosers.length,
+      uniqueContractWinRate:     ucPriced.length > 0 ? (ucWinners.length / ucPriced.length) * 100 : null,
+      avgPct:                    avgOf(ucOutcomes),
+      medianPct:                 medianOf(ucOutcomes),
+      worstLoss:                 ucOutcomes.length > 0 ? Math.min(...ucOutcomes) : null,
+      bestWinner:                ucWinnersSorted[0]                 ?? null,
+      worstLoser:                ucLosersSorted[0]                  ?? null,
+    },
+    comparison: {
+      instanceCandidates: fullComboWatchlist.summary.totalCount,
+      instancePriced:     fullComboWatchlist.summary.pricedCount,
+      instancePending:    fullComboWatchlist.summary.pendingCount,
+      instanceWinners:    fullComboWatchlist.summary.winners,
+      instanceLosers:     fullComboWatchlist.summary.losers,
+      instanceWinRate:    fullComboWatchlist.summary.winRate,
+      instanceAvgPct:     fullComboWatchlist.summary.avgPct,
+      instanceMedianPct:  fullComboWatchlist.summary.medianPct,
+      instanceWorstLoss:  fullComboWatchlist.summary.worstLoss,
+      uniqueContracts:    ucEntries.length,
+      uniquePriced:       ucPriced.length,
+      uniquePending:      ucPending.length,
+      uniqueWinners:      ucWinners.length,
+      uniqueLosers:       ucLosers.length,
+      uniqueWinRate:      ucPriced.length > 0 ? (ucWinners.length / ucPriced.length) * 100 : null,
+      uniqueAvgPct:       avgOf(ucOutcomes),
+      uniqueMedianPct:    medianOf(ucOutcomes),
+      uniqueWorstLoss:    ucOutcomes.length > 0 ? Math.min(...ucOutcomes) : null,
+    },
+  };
+
   return {
     generatedAt,
     approvalFilesRead,
@@ -425,6 +588,7 @@ export function runRipperShadowComboReport(
     policyStats,
     currentLeader,
     fullComboWatchlist,
+    fullComboUniqueContractView,
     realTradingLocked: true,
     tradingExecuted:   0,
     noRealTradeSent:   true,
@@ -513,6 +677,75 @@ function renderFullComboWatchlist(
   }
   if (hasRepeated) {
     lines.push('  [*] Repeated contract: all instances share the same latest outcome (outcomes keyed by contractKey).');
+  }
+  return lines;
+}
+
+function renderFullComboUniqueContractView(
+  view: FullComboUniqueContractView,
+): string[] {
+  const lines: string[] = [];
+  const s = view.summary;
+
+  lines.push(`  Unique contracts : ${s.uniqueContractCount}`);
+  lines.push(`  Total instances  : ${s.totalInstancesRepresented}`);
+  if (s.repeatedContractCount > 0) lines.push(`  Repeated         : ${s.repeatedContractCount}`);
+  lines.push(`  Priced: ${s.pricedUniqueContracts}   Pending: ${s.pendingUniqueContracts}`);
+  lines.push(`  Winners: ${s.winnerUniqueContracts}   Losers: ${s.loserUniqueContracts}   Win rate: ${fmtRate(s.uniqueContractWinRate)}`);
+  if (s.avgPct    != null) lines.push(`  Avg outcome : ${fmtPct(s.avgPct)}`);
+  if (s.medianPct != null) lines.push(`  Median      : ${fmtPct(s.medianPct)}`);
+  if (s.worstLoss != null) lines.push(`  Worst loss  : ${fmtPct(s.worstLoss)}`);
+  if (s.bestWinner) {
+    const b = s.bestWinner;
+    lines.push(`  Best winner : ${b.symbol ? `$${b.symbol}` : b.contractKeyShort}  ${fmtPct(b.outcomePctChange)}`);
+  }
+  if (s.worstLoser) {
+    const w = s.worstLoser;
+    lines.push(`  Worst loser : ${w.symbol ? `$${w.symbol}` : w.contractKeyShort}  ${fmtPct(w.outcomePctChange)}`);
+  }
+  lines.push('');
+
+  if (view.entries.length === 0) {
+    lines.push('  (no unique contracts)');
+  } else {
+    lines.push('  class    insts  outcome  bestPricePct  bestLiqUsd     bestVolUsd     latestApprovedAt     sym/addr');
+    for (const e of view.entries) {
+      const cls   = fmtClass(e.classification);
+      const insts = String(e.instanceCount).padStart(5);
+      const out   = fmtPct(e.outcomePctChange).padStart(8);
+      const prc   = e.bestApprovalPriceChangePct != null
+        ? `${e.bestApprovalPriceChangePct >= 0 ? '+' : ''}${e.bestApprovalPriceChangePct.toFixed(2)}%`.padEnd(13)
+        : '          n/a ';
+      const liq   = fmtUsd(e.bestLiquidityUsd).padEnd(14);
+      const vol   = fmtUsd(e.bestVolumeUsd).padEnd(14);
+      const ts    = e.latestApprovedAt.slice(0, 19).replace('T', ' ');
+      const lbl   = e.symbol ? `$${e.symbol}` : e.contractKeyShort;
+      const rep   = e.repeated ? ' [r]' : '';
+      lines.push(`  ${cls} ${insts}  ${out}  ${prc}  ${liq}  ${vol}  ${ts}  ${lbl}${rep}`);
+    }
+    lines.push('');
+  }
+
+  // Side-by-side comparison
+  const c = view.comparison;
+  lines.push('  FULL COMBO INSTANCE VIEW vs UNIQUE CONTRACT VIEW');
+  lines.push('');
+  const compHdr = 'metric'.padEnd(22) + 'INSTANCE VIEW'.padStart(16) + 'UNIQUE CONTRACT'.padStart(18);
+  lines.push(`  ${compHdr}`);
+  lines.push(`  ${'-'.repeat(compHdr.length)}`);
+  const compRows: [string, string, string][] = [
+    ['candidates / unique', String(c.instanceCandidates), String(c.uniqueContracts)],
+    ['priced',              String(c.instancePriced),     String(c.uniquePriced)],
+    ['pending',             String(c.instancePending),    String(c.uniquePending)],
+    ['winners',             String(c.instanceWinners),    String(c.uniqueWinners)],
+    ['losers',              String(c.instanceLosers),     String(c.uniqueLosers)],
+    ['win rate',            fmtRate(c.instanceWinRate),   fmtRate(c.uniqueWinRate)],
+    ['avg',                 fmtPct(c.instanceAvgPct),     fmtPct(c.uniqueAvgPct)],
+    ['median',              fmtPct(c.instanceMedianPct),  fmtPct(c.uniqueMedianPct)],
+    ['worst loss',          fmtPct(c.instanceWorstLoss),  fmtPct(c.uniqueWorstLoss)],
+  ];
+  for (const [label, instVal, uniqVal] of compRows) {
+    lines.push(`  ${label.padEnd(22)}${instVal.padStart(16)}${uniqVal.padStart(18)}`);
   }
   return lines;
 }
@@ -683,6 +916,14 @@ export function renderRipperShadowComboReport(
   lines.push(`  ${SEP2}`);
   lines.push('');
   for (const l of renderFullComboWatchlist(result.fullComboWatchlist, result.generatedAt)) lines.push(l);
+  lines.push('');
+
+  // ── Full combo unique-contract view (always shown) ───────────────────────
+  lines.push(`  ${SEP2}`);
+  lines.push('  FULL COMBO UNIQUE-CONTRACT VIEW');
+  lines.push(`  ${SEP2}`);
+  lines.push('');
+  for (const l of renderFullComboUniqueContractView(result.fullComboUniqueContractView)) lines.push(l);
   lines.push('');
 
   // ── Do Not Apply Yet (always shown) ───────────────────────────────────────
