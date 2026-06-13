@@ -185,6 +185,7 @@ import { runRipperEntryFeatureAutopsy, renderRipperEntryFeatureAutopsy } from '.
 import { runRipperShadowFilterReport, renderRipperShadowFilterReport } from './token-grab/ripperShadowFilterReport';
 import { runRipperShadowPolicyReport, renderRipperShadowPolicyReport } from './token-grab/ripperShadowPolicyReport';
 import { runRipperShadowPortfolioReport, renderRipperShadowPortfolioReport } from './token-grab/ripperShadowPortfolioReport';
+import { runRipperShadowComboReport, renderRipperShadowComboReport } from './token-grab/ripperShadowComboReport';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3477,6 +3478,36 @@ async function main(): Promise<void> {
           outcomePaths:  rsppOutcomePaths,
         });
         console.log(renderRipperShadowPortfolioReport(rsppResult));
+        break;
+      }
+
+      case 'token:ripper-shadow-combo-report': {
+        const rscApprovalsIdx = process.argv.indexOf('--approvals');
+        const rscApprovalPaths: string[] = [];
+        if (rscApprovalsIdx !== -1) {
+          for (let i = rscApprovalsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rscApprovalPaths.push(process.argv[i]);
+          }
+        }
+        const rscOutcomesIdx = process.argv.indexOf('--outcomes');
+        const rscOutcomePaths: string[] = [];
+        if (rscOutcomesIdx !== -1) {
+          for (let i = rscOutcomesIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rscOutcomePaths.push(process.argv[i]);
+          }
+        }
+        if (rscApprovalPaths.length === 0) {
+          console.error('[token:ripper-shadow-combo-report] No --approvals files specified.');
+          console.error('  Usage: npm run token:ripper-shadow-combo-report -- --approvals data/token-grab/ripper/cycles/cycle-*.jsonl --outcomes data/token-grab/ripper/outcomes/ripper-approved-outcomes-*.json');
+          process.exit(1);
+        }
+        const rscResult = runRipperShadowComboReport({
+          approvalPaths: rscApprovalPaths,
+          outcomePaths:  rscOutcomePaths,
+        });
+        console.log(renderRipperShadowComboReport(rscResult));
         break;
       }
 
