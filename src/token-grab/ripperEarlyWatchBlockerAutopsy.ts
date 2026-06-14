@@ -16,6 +16,9 @@ export type BlockerLabel =
   | 'PRICE_ALREADY_MOVED_TOO_FAR'
   | 'HOLDER_RISK'
   | 'CLUSTER_RISK'
+  | 'SLIPPAGE_MISSING'
+  | 'SLIPPAGE_TOO_HIGH'
+  | 'QUOTE_MISSING'
   | 'SAFETY_NOT_ENRICHED'
   | 'UNKNOWN_BLOCKER';
 
@@ -47,14 +50,17 @@ export interface RipperEarlyWatchBlockerAutopsyOptions {
 }
 
 export interface RipperEarlyWatchBlockerAutopsyResult {
-  generatedAt:          string;
-  totalPriceMovedCount: number;
-  rows:                 BlockerAutopsyRow[];
-  reportOnly:           true;
-  readOnly:             true;
-  tradingExecuted:      0;
-  realTradingLocked:    true;
-  paperOnly:            true;
+  generatedAt:               string;
+  totalPriceMovedCandidates: number; // all contracts with bestPct > 0.25 before approval exclusion
+  excludedObsApproved:       number; // excluded: had BUY_APPROVED_PAPER in observation fixtures
+  excludedFileApproved:      number; // excluded: had BUY_APPROVED_PAPER in approval files only
+  totalPriceMovedCount:      number; // true non-approved rows shown in autopsy
+  rows:                      BlockerAutopsyRow[];
+  reportOnly:                true;
+  readOnly:                  true;
+  tradingExecuted:           0;
+  realTradingLocked:         true;
+  paperOnly:                 true;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -116,6 +122,8 @@ export function runRipperEarlyWatchBlockerAutopsy(
   // Per-contract: sorted ascending by capturedAt
   const allFixturesMap  = new Map<string, LiveRipperFixture[]>();
   const firstHitMap     = new Map<string, LiveRipperFixture>();
+  // BUY_APPROVED_PAPER timestamps found inside observation fixtures
+  const obsApprovalsMap = new Map<string, number[]>();
 
   for (const p of options.observationPaths) {
     if (!fs.existsSync(p)) continue;
@@ -132,6 +140,14 @@ export function runRipperEarlyWatchBlockerAutopsy(
       const list = allFixturesMap.get(contractKey);
       if (list) list.push(f);
       else allFixturesMap.set(contractKey, [f]);
+
+      // Track approvals inside observation files so we can exclude candidates
+      // that were actually approved even if not in the approval-cycle files.
+      if (f.buyGateDecision === 'BUY_APPROVED_PAPER') {
+        const obsApprList = obsApprovalsMap.get(contractKey);
+        if (obsApprList) obsApprList.push(capturedAtMs);
+        else obsApprovalsMap.set(contractKey, [capturedAtMs]);
+      }
 
       if (passesPolicy(pct, liq, vol)) {
         const existing = firstHitMap.get(contractKey);
@@ -169,6 +185,9 @@ export function runRipperEarlyWatchBlockerAutopsy(
 
   // ── Build rows ─────────────────────────────────────────────────────────────
   const rows: BlockerAutopsyRow[] = [];
+  let totalPriceMovedCandidates = 0;
+  let excludedObsApproved       = 0;
+  let excludedFileApproved      = 0;
 
   for (const [contractKey, firstHit] of firstHitMap) {
     const firstWatchAtMs = Date.parse(firstHit.capturedAt);
@@ -189,11 +208,19 @@ export function runRipperEarlyWatchBlockerAutopsy(
       }
     }
 
-    // Filter: only PRICE_MOVED candidates (best > 0.25, no approval)
+    // Only PRICE_MOVED candidates (best > 0.25)
     if (bestPct == null || bestPct <= WATCH_EARLY_RIP_PCT_MAX) continue;
-    const approvalTimes    = approvalsMap.get(contractKey) ?? [];
-    const laterBuyApproved = approvalTimes.some(t => t >= firstWatchAtMs);
-    if (laterBuyApproved) continue;
+    totalPriceMovedCandidates++;
+
+    // Exclude if approved — check BOTH observation fixtures and approval cycle files.
+    // Observations can contain BUY_APPROVED_PAPER records that never made it into
+    // a cycle file, which is exactly the case that was mis-classifying candidates.
+    const obsApprTimes  = obsApprovalsMap.get(contractKey) ?? [];
+    const fileApprTimes = approvalsMap.get(contractKey) ?? [];
+    const approvedInObs  = obsApprTimes.some(t => t >= firstWatchAtMs);
+    const approvedInFile = fileApprTimes.some(t => t >= firstWatchAtMs);
+    if (approvedInObs) { excludedObsApproved++;  continue; }
+    if (approvedInFile) { excludedFileApproved++; continue; }
 
     const latestFixture = allFixtures[allFixtures.length - 1] ?? firstHit;
 
@@ -232,6 +259,9 @@ export function runRipperEarlyWatchBlockerAutopsy(
 
   return {
     generatedAt,
+    totalPriceMovedCandidates,
+    excludedObsApproved,
+    excludedFileApproved,
     totalPriceMovedCount: rows.length,
     rows,
     reportOnly:           true,
@@ -274,9 +304,12 @@ export function renderRipperEarlyWatchBlockerAutopsy(
   lines.push('  [REPORT ONLY — NO TRADES — NO APPROVAL CHANGES — READ ONLY]');
   lines.push(SEP);
   lines.push('');
-  lines.push(`  Generated           : ${result.generatedAt}`);
-  lines.push(`  PRICE_MOVED (total) : ${result.totalPriceMovedCount}`);
-  lines.push('  (candidates that moved >0.25% after first watch but never got BUY_APPROVED_PAPER)');
+  lines.push(`  Generated                    : ${result.generatedAt}`);
+  lines.push(`  PRICE_MOVED candidates       : ${result.totalPriceMovedCandidates}`);
+  lines.push(`  excluded (obs approved)      : ${result.excludedObsApproved}`);
+  lines.push(`  excluded (file approved)     : ${result.excludedFileApproved}`);
+  lines.push(`  True non-approved (autopsy)  : ${result.totalPriceMovedCount}`);
+  lines.push('  (obs-approved = BUY_APPROVED_PAPER found in observation fixture, not approval file)');
   lines.push('');
   lines.push(`  Policy filter: WATCH_EARLY_RIP`);
   lines.push(`    liquidityUsd >= ${WATCH_EARLY_RIP_LIQ_MIN.toLocaleString()}`);

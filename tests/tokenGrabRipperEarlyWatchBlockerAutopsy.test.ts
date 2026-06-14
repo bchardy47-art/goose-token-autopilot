@@ -109,9 +109,12 @@ describe('candidate filtering', () => {
     expect(r.rows.length).toBe(1);
     expect(r.rows[0].contractKey).toBe(CONTRACT_A);
     expect(r.totalPriceMovedCount).toBe(1);
+    expect(r.totalPriceMovedCandidates).toBe(1);
+    expect(r.excludedObsApproved).toBe(0);
+    expect(r.excludedFileApproved).toBe(0);
   });
 
-  it('excludes contract that got BUY_APPROVED_PAPER', () => {
+  it('excludes contract that got BUY_APPROVED_PAPER in approval file', () => {
     const op = writeJsonl('o.jsonl', [
       makeObs({ capturedAt: at(0),      priceChangePct: 0.1 }),
       makeObs({ capturedAt: at(10_000), priceChangePct: 0.5, liquidityUsd: 35_000, volumeUsd: 25_000 }),
@@ -119,6 +122,71 @@ describe('candidate filtering', () => {
     const ap = writeJsonl('a.jsonl', [makeApproval({ capturedAt: at(60_000) })]);
     const r = runRipperEarlyWatchBlockerAutopsy({ observationPaths: [op], approvalPaths: [ap] });
     expect(r.rows.length).toBe(0);
+    expect(r.totalPriceMovedCandidates).toBe(1);
+    expect(r.excludedFileApproved).toBe(1);
+    expect(r.excludedObsApproved).toBe(0);
+  });
+
+  it('excludes contract whose observation fixture has buyGateDecision BUY_APPROVED_PAPER', () => {
+    // The best-move observation itself carries gateDecision BUY_APPROVED_PAPER —
+    // this was the live bug: candidates like $SPCX were mis-classified as non-approved.
+    const op = writeJsonl('o.jsonl', [
+      makeObs({ capturedAt: at(0),      priceChangePct: 0.1 }),
+      makeObs({ capturedAt: at(10_000), priceChangePct: 0.5, liquidityUsd: 35_000, volumeUsd: 25_000,
+                buyGateDecision: 'BUY_APPROVED_PAPER' }),
+    ]);
+    const r = runRipperEarlyWatchBlockerAutopsy({ observationPaths: [op], approvalPaths: [] });
+    expect(r.rows.length).toBe(0);
+    expect(r.totalPriceMovedCandidates).toBe(1);
+    expect(r.excludedObsApproved).toBe(1);
+    expect(r.excludedFileApproved).toBe(0);
+  });
+
+  it('excludes via obs gate even when approval file is absent', () => {
+    const op = writeJsonl('o.jsonl', [
+      makeObs({ capturedAt: at(0),      priceChangePct: 0.1 }),
+      makeObs({ capturedAt: at(5_000),  priceChangePct: 0.3, liquidityUsd: 35_000, volumeUsd: 25_000,
+                buyGateDecision: 'BUY_APPROVED_PAPER' }),
+      makeObs({ capturedAt: at(10_000), priceChangePct: 0.8, liquidityUsd: 35_000, volumeUsd: 25_000 }),
+    ]);
+    const r = runRipperEarlyWatchBlockerAutopsy({ observationPaths: [op], approvalPaths: [] });
+    expect(r.rows.length).toBe(0);
+    expect(r.excludedObsApproved).toBe(1);
+  });
+
+  it('obs-gate approval before firstWatchAt does not exclude candidate', () => {
+    // Approval in obs file that is BEFORE the first watch hit should not count.
+    const op = writeJsonl('o.jsonl', [
+      // obs with BUY_APPROVED_PAPER before the WATCH_EARLY_RIP hit
+      makeObs({ capturedAt: at(0), priceChangePct: 0.5, liquidityUsd: 35_000, volumeUsd: 25_000,
+                buyGateDecision: 'BUY_APPROVED_PAPER' }),
+      // first WATCH_EARLY_RIP hit (comes later in time)
+      makeObs({ capturedAt: at(10_000), priceChangePct: 0.1, liquidityUsd: 35_000, volumeUsd: 25_000 }),
+      // later obs that pushes pct above 0.25
+      makeObs({ capturedAt: at(20_000), priceChangePct: 0.4, liquidityUsd: 35_000, volumeUsd: 25_000 }),
+    ]);
+    const r = runRipperEarlyWatchBlockerAutopsy({ observationPaths: [op], approvalPaths: [] });
+    // The BUY_APPROVED_PAPER was BEFORE firstWatchAt (at 10_000), so should not exclude
+    expect(r.rows.length).toBe(1);
+    expect(r.excludedObsApproved).toBe(0);
+  });
+
+  it('two candidates: one obs-approved excluded, one true miss included', () => {
+    const op = writeJsonl('o.jsonl', [
+      // CONTRACT_A: obs approved
+      makeObs({ capturedAt: at(0),      contract: CONTRACT_A, priceChangePct: 0.1 }),
+      makeObs({ capturedAt: at(10_000), contract: CONTRACT_A, priceChangePct: 0.5,
+                liquidityUsd: 35_000, volumeUsd: 25_000, buyGateDecision: 'BUY_APPROVED_PAPER' }),
+      // CONTRACT_B: true miss
+      makeObs({ capturedAt: at(0),      contract: CONTRACT_B, priceChangePct: 0.1 }),
+      makeObs({ capturedAt: at(10_000), contract: CONTRACT_B, priceChangePct: 0.4,
+                liquidityUsd: 35_000, volumeUsd: 25_000 }),
+    ]);
+    const r = runRipperEarlyWatchBlockerAutopsy({ observationPaths: [op], approvalPaths: [] });
+    expect(r.totalPriceMovedCandidates).toBe(2);
+    expect(r.excludedObsApproved).toBe(1);
+    expect(r.rows.length).toBe(1);
+    expect(r.rows[0].contractKey).toBe(CONTRACT_B);
   });
 
   it('excludes contract whose best later pct does not exceed 0.25', () => {
@@ -411,6 +479,19 @@ describe('renderer', () => {
     const r   = runRipperEarlyWatchBlockerAutopsy({ observationPaths: [], approvalPaths: [] });
     const out = renderRipperEarlyWatchBlockerAutopsy(r);
     expect(out).toContain('no PRICE_MOVED candidates to autopsy');
+  });
+
+  it('shows exclusion summary counts in header', () => {
+    const op = writeJsonl('o.jsonl', [
+      makeObs({ capturedAt: at(0),      priceChangePct: 0.1 }),
+      makeObs({ capturedAt: at(10_000), priceChangePct: 0.5, liquidityUsd: 35_000, volumeUsd: 25_000,
+                buyGateDecision: 'BUY_APPROVED_PAPER' }),
+    ]);
+    const r   = runRipperEarlyWatchBlockerAutopsy({ observationPaths: [op], approvalPaths: [] });
+    const out = renderRipperEarlyWatchBlockerAutopsy(r);
+    expect(out).toContain('PRICE_MOVED candidates');
+    expect(out).toContain('excluded (obs approved)');
+    expect(out).toContain('True non-approved');
   });
 
   it('renders candidate section with symbol when present', () => {
