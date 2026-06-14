@@ -197,6 +197,7 @@ import { runRipperApprovalTriggerLagReport, renderRipperApprovalTriggerLagReport
 import { runRipperApprovalFollowPaperPlan, renderRipperApprovalFollowPaperPlan } from './token-grab/ripperApprovalFollowPaperPlan';
 import { runRipperApprovalFollowPaperSession, renderRipperApprovalFollowPaperSession } from './token-grab/ripperApprovalFollowPaperSession';
 import { runRipperApprovalFollowPaperSessionReport, renderRipperApprovalFollowPaperSessionReport } from './token-grab/ripperApprovalFollowPaperSessionReport';
+import { runRipperWait5PaperShadow, renderRipperWait5PaperShadow } from './token-grab/ripperWait5PaperShadow';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3839,6 +3840,18 @@ async function main(): Promise<void> {
         }
         const rafpsrResult = runRipperApprovalFollowPaperSessionReport({ sessionPath: rafpsrSessionPath });
         console.log(renderRipperApprovalFollowPaperSessionReport(rafpsrResult));
+        break;
+      }
+
+      case 'token:ripper-wait5-paper-shadow': {
+        const rw5Idx = process.argv.indexOf('--session');
+        const rw5Path = rw5Idx !== -1 ? process.argv[rw5Idx + 1] : null;
+        if (!rw5Path) {
+          console.error('[token:ripper-wait5-paper-shadow] --session <path> is required.');
+          console.error('  Usage: npm run token:ripper-wait5-paper-shadow -- --session data/token-grab/ripper/approval-follow-paper-session.jsonl');
+          process.exit(1);
+        }
+        console.log(renderRipperWait5PaperShadow(runRipperWait5PaperShadow(rw5Path)));
         break;
       }
 
