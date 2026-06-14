@@ -195,6 +195,7 @@ import { runRipperApprovalPersistenceAudit, renderRipperApprovalPersistenceAudit
 import { runRipperEarlyWatchLeadValueReport, renderRipperEarlyWatchLeadValueReport } from './token-grab/ripperEarlyWatchLeadValueReport';
 import { runRipperApprovalTriggerLagReport, renderRipperApprovalTriggerLagReport } from './token-grab/ripperApprovalTriggerLagReport';
 import { runRipperApprovalFollowPaperPlan, renderRipperApprovalFollowPaperPlan } from './token-grab/ripperApprovalFollowPaperPlan';
+import { runRipperApprovalFollowPaperSession, renderRipperApprovalFollowPaperSession } from './token-grab/ripperApprovalFollowPaperSession';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3787,6 +3788,43 @@ async function main(): Promise<void> {
           approvalPaths:    raffppApprovalPaths,
         });
         console.log(renderRipperApprovalFollowPaperPlan(raffppResult));
+        break;
+      }
+
+      case 'token:ripper-approval-follow-paper-session': {
+        const rafpsObsIdx = process.argv.indexOf('--observations');
+        const rafpsObsPaths: string[] = [];
+        if (rafpsObsIdx !== -1) {
+          for (let i = rafpsObsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rafpsObsPaths.push(process.argv[i]);
+          }
+        }
+        const rafpsApprovalsIdx = process.argv.indexOf('--approvals');
+        const rafpsApprovalPaths: string[] = [];
+        if (rafpsApprovalsIdx !== -1) {
+          for (let i = rafpsApprovalsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rafpsApprovalPaths.push(process.argv[i]);
+          }
+        }
+        const rafpsOutIdx = process.argv.indexOf('--out');
+        const rafpsOutPath = rafpsOutIdx !== -1 ? process.argv[rafpsOutIdx + 1] : null;
+        if (rafpsObsPaths.length === 0 && rafpsApprovalPaths.length === 0) {
+          console.error('[token:ripper-approval-follow-paper-session] No --observations or --approvals files specified.');
+          console.error('  Usage: npm run token:ripper-approval-follow-paper-session -- --observations data/token-grab/ripper/observations/*.jsonl --approvals data/token-grab/ripper/cycles/cycle-*.jsonl --out data/token-grab/ripper/approval-follow-paper-session.jsonl');
+          process.exit(1);
+        }
+        if (!rafpsOutPath) {
+          console.error('[token:ripper-approval-follow-paper-session] --out <path> is required.');
+          process.exit(1);
+        }
+        const rafpsResult = runRipperApprovalFollowPaperSession({
+          observationPaths: rafpsObsPaths,
+          approvalPaths:    rafpsApprovalPaths,
+          outPath:          rafpsOutPath,
+        });
+        console.log(renderRipperApprovalFollowPaperSession(rafpsResult));
         break;
       }
 

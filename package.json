@@ -121,6 +121,7 @@
     "token:ripper-early-watch-lead-value-report": "tsx src/cli.ts token:ripper-early-watch-lead-value-report",
     "token:ripper-approval-trigger-lag-report": "tsx src/cli.ts token:ripper-approval-trigger-lag-report",
     "token:ripper-approval-follow-paper-plan": "tsx src/cli.ts token:ripper-approval-follow-paper-plan",
+    "token:ripper-approval-follow-paper-session": "tsx src/cli.ts token:ripper-approval-follow-paper-session",
     "token:ripper-approved-autopsy": "tsx src/cli.ts token:ripper-approved-autopsy",
     "token:ripper-entry-sim": "tsx src/cli.ts token:ripper-entry-sim",
     "token:prime-gate-audit": "tsx src/cli.ts token:prime-gate-audit",
