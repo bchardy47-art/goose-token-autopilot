@@ -196,6 +196,7 @@ import { runRipperEarlyWatchLeadValueReport, renderRipperEarlyWatchLeadValueRepo
 import { runRipperApprovalTriggerLagReport, renderRipperApprovalTriggerLagReport } from './token-grab/ripperApprovalTriggerLagReport';
 import { runRipperApprovalFollowPaperPlan, renderRipperApprovalFollowPaperPlan } from './token-grab/ripperApprovalFollowPaperPlan';
 import { runRipperApprovalFollowPaperSession, renderRipperApprovalFollowPaperSession } from './token-grab/ripperApprovalFollowPaperSession';
+import { runRipperApprovalFollowPaperSessionReport, renderRipperApprovalFollowPaperSessionReport } from './token-grab/ripperApprovalFollowPaperSessionReport';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3825,6 +3826,19 @@ async function main(): Promise<void> {
           outPath:          rafpsOutPath,
         });
         console.log(renderRipperApprovalFollowPaperSession(rafpsResult));
+        break;
+      }
+
+      case 'token:ripper-approval-follow-paper-session-report': {
+        const rafpsrSessionIdx = process.argv.indexOf('--session');
+        const rafpsrSessionPath = rafpsrSessionIdx !== -1 ? process.argv[rafpsrSessionIdx + 1] : null;
+        if (!rafpsrSessionPath) {
+          console.error('[token:ripper-approval-follow-paper-session-report] --session <path> is required.');
+          console.error('  Usage: npm run token:ripper-approval-follow-paper-session-report -- --session data/token-grab/ripper/approval-follow-paper-session.jsonl');
+          process.exit(1);
+        }
+        const rafpsrResult = runRipperApprovalFollowPaperSessionReport({ sessionPath: rafpsrSessionPath });
+        console.log(renderRipperApprovalFollowPaperSessionReport(rafpsrResult));
         break;
       }
 
