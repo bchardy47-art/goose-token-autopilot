@@ -118,6 +118,7 @@
     "token:ripper-early-watch-tracked-lane-report": "tsx src/cli.ts token:ripper-early-watch-tracked-lane-report",
     "token:ripper-early-watch-blocker-autopsy": "tsx src/cli.ts token:ripper-early-watch-blocker-autopsy",
     "token:ripper-approval-persistence-audit": "tsx src/cli.ts token:ripper-approval-persistence-audit",
+    "token:ripper-early-watch-lead-value-report": "tsx src/cli.ts token:ripper-early-watch-lead-value-report",
     "token:ripper-approved-autopsy": "tsx src/cli.ts token:ripper-approved-autopsy",
     "token:ripper-entry-sim": "tsx src/cli.ts token:ripper-entry-sim",
     "token:prime-gate-audit": "tsx src/cli.ts token:prime-gate-audit",

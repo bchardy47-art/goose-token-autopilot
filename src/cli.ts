@@ -192,6 +192,7 @@ import { runRipperEarlyWatchPolicyReport, renderRipperEarlyWatchPolicyReport } f
 import { runRipperEarlyWatchTrackedLaneReport, renderRipperEarlyWatchTrackedLaneReport } from './token-grab/ripperEarlyWatchTrackedLaneReport';
 import { runRipperEarlyWatchBlockerAutopsy, renderRipperEarlyWatchBlockerAutopsy } from './token-grab/ripperEarlyWatchBlockerAutopsy';
 import { runRipperApprovalPersistenceAudit, renderRipperApprovalPersistenceAudit } from './token-grab/ripperApprovalPersistenceAudit';
+import { runRipperEarlyWatchLeadValueReport, renderRipperEarlyWatchLeadValueReport } from './token-grab/ripperEarlyWatchLeadValueReport';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3694,6 +3695,36 @@ async function main(): Promise<void> {
           approvalPaths:    rapaApprovalPaths,
         });
         console.log(renderRipperApprovalPersistenceAudit(rapaResult));
+        break;
+      }
+
+      case 'token:ripper-early-watch-lead-value-report': {
+        const rewlvrObsIdx = process.argv.indexOf('--observations');
+        const rewlvrObsPaths: string[] = [];
+        if (rewlvrObsIdx !== -1) {
+          for (let i = rewlvrObsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rewlvrObsPaths.push(process.argv[i]);
+          }
+        }
+        const rewlvrApprovalsIdx = process.argv.indexOf('--approvals');
+        const rewlvrApprovalPaths: string[] = [];
+        if (rewlvrApprovalsIdx !== -1) {
+          for (let i = rewlvrApprovalsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rewlvrApprovalPaths.push(process.argv[i]);
+          }
+        }
+        if (rewlvrObsPaths.length === 0) {
+          console.error('[token:ripper-early-watch-lead-value-report] No --observations files specified.');
+          console.error('  Usage: npm run token:ripper-early-watch-lead-value-report -- --observations data/token-grab/ripper/observations/*.jsonl --approvals data/token-grab/ripper/cycles/cycle-*.jsonl');
+          process.exit(1);
+        }
+        const rewlvrResult = runRipperEarlyWatchLeadValueReport({
+          observationPaths: rewlvrObsPaths,
+          approvalPaths:    rewlvrApprovalPaths,
+        });
+        console.log(renderRipperEarlyWatchLeadValueReport(rewlvrResult));
         break;
       }
 
