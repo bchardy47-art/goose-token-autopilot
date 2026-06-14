@@ -7,6 +7,7 @@ import {
   runRipperEarlyWatchTrackedLaneReport,
   renderRipperEarlyWatchTrackedLaneReport,
   type TrackedLaneStatus,
+  type ApprovalSource,
 } from '../src/token-grab/ripperEarlyWatchTrackedLaneReport';
 
 // ── Fixture constants ─────────────────────────────────────────────────────────
@@ -30,9 +31,10 @@ function makeObs(opts: {
   liquidityUsd?: number | null;
   volumeUsd?: number | null;
   symbol?: string;
+  buyGateDecision?: string;
 }) {
   return {
-    buyGateDecision: 'WATCH',
+    buyGateDecision: opts.buyGateDecision ?? 'WATCH',
     capturedAt:      opts.capturedAt ?? BASE_ISO,
     normalizedSignal: {
       contract:       opts.contract      ?? CONTRACT_A,
@@ -262,6 +264,105 @@ describe('row fields', () => {
     const ap = writeJsonl('a.jsonl', [makeApproval({ capturedAt: at(0) })]);
     const r  = runRipperEarlyWatchTrackedLaneReport({ observationPaths: [op], approvalPaths: [ap], nowMs: BASE_MS + 120_000 });
     expect(r.rows[0].laterBuyApproved).toBe(false);
+  });
+});
+
+// ── Dual-source approval detection ───────────────────────────────────────────
+
+describe('dual-source approval detection', () => {
+  function rowFor(
+    obsFixtures: object[],
+    approvalFixtures: object[],
+    contract = CONTRACT_A,
+    nowMs    = BASE_MS + 120_000,
+  ) {
+    const op = writeJsonl('o.jsonl', obsFixtures);
+    const ap = writeJsonl('a.jsonl', approvalFixtures);
+    const r  = runRipperEarlyWatchTrackedLaneReport({
+      observationPaths: [op],
+      approvalPaths:    [ap],
+      nowMs,
+    });
+    const row = r.rows.find(row => row.contractKey === contract);
+    if (!row) throw new Error(`No row found for ${contract}`);
+    return row;
+  }
+
+  it('approved only in observation fixture counts as approved', () => {
+    const row = rowFor(
+      [
+        makeObs({ capturedAt: at(0) }),                                                     // firstWatchAt hit (WATCH)
+        makeObs({ capturedAt: at(60_000), buyGateDecision: 'BUY_APPROVED_PAPER' }),         // obs approval after
+      ],
+      [],
+    );
+    expect(row.laterBuyApproved).toBe(true);
+    expect(row.approvalSource).toBe<ApprovalSource>('obs');
+    expect(row.approvedAt).toBe(at(60_000));
+    expect(row.status).toBe('GRADUATED_APPROVED');
+  });
+
+  it('approved only in approval file counts as approved', () => {
+    const row = rowFor(
+      [makeObs({ capturedAt: at(0) })],
+      [makeApproval({ capturedAt: at(60_000) })],
+    );
+    expect(row.laterBuyApproved).toBe(true);
+    expect(row.approvalSource).toBe<ApprovalSource>('file');
+    expect(row.approvedAt).toBe(at(60_000));
+    expect(row.status).toBe('GRADUATED_APPROVED');
+  });
+
+  it('approved in both uses earliest timestamp and source=both', () => {
+    const row = rowFor(
+      [
+        makeObs({ capturedAt: at(0) }),
+        makeObs({ capturedAt: at(90_000), buyGateDecision: 'BUY_APPROVED_PAPER' }),         // obs at t+90s
+      ],
+      [makeApproval({ capturedAt: at(60_000) })],                                           // file at t+60s (earlier)
+    );
+    expect(row.laterBuyApproved).toBe(true);
+    expect(row.approvalSource).toBe<ApprovalSource>('both');
+    expect(row.approvedAt).toBe(at(60_000));                                                // earliest wins
+    expect(row.minToApp).toBeCloseTo(1.0, 5);                                               // 60s = 1 min
+  });
+
+  it('not approved in either remains unapproved', () => {
+    const row = rowFor(
+      [makeObs({ capturedAt: at(0) })],
+      [],
+    );
+    expect(row.laterBuyApproved).toBe(false);
+    expect(row.approvedAt).toBeNull();
+    expect(row.approvalSource).toBeNull();
+    expect(row.minToApp).toBeNull();
+  });
+
+  it('obs approval before firstWatchAt is excluded', () => {
+    // obs approval at t=0, but firstWatchAt is also at t=0 — only STRICTLY before is excluded
+    // so t=0 approval == firstWatchAt should be included (>= check)
+    const row = rowFor(
+      [
+        makeObs({ capturedAt: at(0) }),
+        makeObs({ capturedAt: at(0), buyGateDecision: 'BUY_APPROVED_PAPER' }),
+      ],
+      [],
+      CONTRACT_A,
+      BASE_MS + 60_000,
+    );
+    expect(row.laterBuyApproved).toBe(true);
+    expect(row.approvalSource).toBe<ApprovalSource>('obs');
+  });
+
+  it('minToApp is minutes from firstWatchAt to approvedAt', () => {
+    const row = rowFor(
+      [
+        makeObs({ capturedAt: at(0) }),
+        makeObs({ capturedAt: at(120_000), buyGateDecision: 'BUY_APPROVED_PAPER' }),
+      ],
+      [],
+    );
+    expect(row.minToApp).toBeCloseTo(2.0, 5);                                               // 120s = 2 min
   });
 });
 

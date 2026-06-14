@@ -18,6 +18,8 @@ export type TrackedLaneStatus =
   | 'STALLED'
   | 'WATCHING';
 
+export type ApprovalSource = 'obs' | 'file' | 'both';
+
 export interface TrackedLaneRow {
   contractKey:             string;
   contractKeyShort:        string;
@@ -32,6 +34,9 @@ export interface TrackedLaneRow {
   latestVolumeUsd:         number | null;
   bestLaterPriceChangePct: number | null;
   laterBuyApproved:        boolean;
+  approvedAt:              string | null;
+  approvalSource:          ApprovalSource | null;
+  minToApp:                number | null;
   liquidityHeld:           boolean;
   volumeHeld:              boolean;
   status:                  TrackedLaneStatus;
@@ -100,9 +105,11 @@ export function runRipperEarlyWatchTrackedLaneReport(
 
   // ── Load observations ──────────────────────────────────────────────────────
   // allObsMap: ALL observations per contract (for latest-obs and later-obs tracking)
-  const allObsMap  = new Map<string, ObsRecord[]>();
+  const allObsMap   = new Map<string, ObsRecord[]>();
   // firstHitMap: earliest WATCH_EARLY_RIP-passing obs per contract
   const firstHitMap = new Map<string, ObsRecord>();
+  // obsApprovalsMap: obs fixtures that carry BUY_APPROVED_PAPER (dual-source detection)
+  const obsApprovalsMap = new Map<string, number[]>();
 
   for (const p of options.observationPaths) {
     if (!fs.existsSync(p)) continue;
@@ -135,6 +142,12 @@ export function runRipperEarlyWatchTrackedLaneReport(
         if (!existing || capturedAtMs < existing.capturedAtMs) {
           firstHitMap.set(contractKey, rec);
         }
+      }
+
+      if (f.buyGateDecision === 'BUY_APPROVED_PAPER') {
+        const obsApprList = obsApprovalsMap.get(contractKey);
+        if (obsApprList) obsApprList.push(capturedAtMs);
+        else obsApprovalsMap.set(contractKey, [capturedAtMs]);
       }
     }
   }
@@ -186,9 +199,28 @@ export function runRipperEarlyWatchTrackedLaneReport(
       }
     }
 
-    // Approval at or after first watch time
-    const approvalTimes   = approvalsMap.get(contractKey) ?? [];
-    const laterBuyApproved = approvalTimes.some(t => t >= firstWatchAtMs);
+    // Dual-source approval: check both obs fixtures and approval cycle files
+    const obsApprTimes  = (obsApprovalsMap.get(contractKey) ?? []).filter(t => t >= firstWatchAtMs);
+    const fileApprTimes = (approvalsMap.get(contractKey)    ?? []).filter(t => t >= firstWatchAtMs);
+
+    const obsApproved  = obsApprTimes.length  > 0;
+    const fileApproved = fileApprTimes.length > 0;
+    const laterBuyApproved = obsApproved || fileApproved;
+
+    let approvedAt:     string | null = null;
+    let approvalSource: ApprovalSource | null = null;
+    let minToApp:       number | null = null;
+
+    if (laterBuyApproved) {
+      const earliestObs  = obsApproved  ? Math.min(...obsApprTimes)  : Infinity;
+      const earliestFile = fileApproved ? Math.min(...fileApprTimes) : Infinity;
+      const earliest     = Math.min(earliestObs, earliestFile);
+      approvedAt     = new Date(earliest).toISOString();
+      approvalSource = obsApproved && fileApproved ? 'both'
+                     : obsApproved                 ? 'obs'
+                     :                              'file';
+      minToApp = (earliest - firstWatchAtMs) / 60_000;
+    }
 
     const latestLiq    = latestObs.liquidityUsd;
     const latestVol    = latestObs.volumeUsd;
@@ -225,6 +257,9 @@ export function runRipperEarlyWatchTrackedLaneReport(
       latestVolumeUsd:        latestVol,
       bestLaterPriceChangePct,
       laterBuyApproved,
+      approvedAt,
+      approvalSource,
+      minToApp,
       liquidityHeld,
       volumeHeld,
       status,
@@ -306,7 +341,8 @@ export function renderRipperEarlyWatchTrackedLaneReport(
       'latLiq'.padStart(8),
       'latVol'.padStart(8),
       'bestPct'.padStart(8),
-      'approved'.padStart(9),
+      'appSrc'.padStart(7),
+      'appMin'.padStart(7),
       'liqHeld'.padStart(8),
       'volHeld'.padStart(8),
       'status',
@@ -317,6 +353,8 @@ export function renderRipperEarlyWatchTrackedLaneReport(
     for (const r of result.rows) {
       const lbl    = r.symbol ? `$${r.symbol}` : r.contractKeyShort;
       const watchTs = r.firstWatchAt.slice(0, 19).replace('T', ' ');
+      const appSrcStr = r.approvalSource ?? '-';
+      const appMinStr = r.minToApp != null ? `${r.minToApp.toFixed(1)}m` : '-';
       const row = [
         lbl.padEnd(16),
         watchTs.padEnd(19),
@@ -328,7 +366,8 @@ export function renderRipperEarlyWatchTrackedLaneReport(
         fmtUsd(r.latestLiquidityUsd).padStart(8),
         fmtUsd(r.latestVolumeUsd).padStart(8),
         fmtPct(r.bestLaterPriceChangePct).padStart(8),
-        (r.laterBuyApproved ? 'yes' : 'no').padStart(9),
+        appSrcStr.padStart(7),
+        appMinStr.padStart(7),
         (r.liquidityHeld ? 'yes' : 'no').padStart(8),
         (r.volumeHeld    ? 'yes' : 'no').padStart(8),
         r.status,
