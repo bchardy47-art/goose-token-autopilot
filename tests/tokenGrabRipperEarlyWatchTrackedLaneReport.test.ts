@@ -492,4 +492,139 @@ describe('renderer', () => {
     expect(out).toContain('FAILED_VOLUME');
     expect(out).toContain('STALLED');
   });
+
+  it('renders LEAD TIME SUMMARY section', () => {
+    const r   = runRipperEarlyWatchTrackedLaneReport({ observationPaths: [], approvalPaths: [] });
+    const out = renderRipperEarlyWatchTrackedLaneReport(r);
+    expect(out).toContain('LEAD TIME SUMMARY');
+    expect(out).toContain('same-obs / <=0.5m');
+    expect(out).toContain('>0.5m  to  5m');
+    expect(out).toContain('>5m    to 30m');
+    expect(out).toContain('>30m');
+    expect(out).toContain('Avg positive lead time');
+    expect(out).toContain('Median positive lead time');
+  });
+});
+
+// ── Lead time summary ─────────────────────────────────────────────────────────
+
+describe('lead time summary', () => {
+  function summaryFor(obsFixtures: object[], approvalFixtures: object[], nowMs = BASE_MS + 120_000) {
+    const op = writeJsonl('o.jsonl', obsFixtures);
+    const ap = writeJsonl('a.jsonl', approvalFixtures);
+    return runRipperEarlyWatchTrackedLaneReport({
+      observationPaths: [op],
+      approvalPaths:    [ap],
+      nowMs,
+    }).leadTimeSummary;
+  }
+
+  it('empty inputs produce all-zero summary', () => {
+    const r   = runRipperEarlyWatchTrackedLaneReport({ observationPaths: [], approvalPaths: [] });
+    const lts = r.leadTimeSummary;
+    expect(lts.approvedCount).toBe(0);
+    expect(lts.unapprovedCount).toBe(0);
+    expect(lts.sameObsCount).toBe(0);
+    expect(lts.under5mCount).toBe(0);
+    expect(lts.under30mCount).toBe(0);
+    expect(lts.over30mCount).toBe(0);
+    expect(lts.positiveLeadCount).toBe(0);
+    expect(lts.avgPositiveLeadMin).toBeNull();
+    expect(lts.medianPositiveLeadMin).toBeNull();
+  });
+
+  it('same-observation approval (0.0m) goes into sameObsCount bucket', () => {
+    // firstWatchAt == approval time → minToApp = 0.0 → <= 0.5 → sameObs
+    const lts = summaryFor(
+      [makeObs({ capturedAt: at(0), buyGateDecision: 'BUY_APPROVED_PAPER' })],
+      [],
+    );
+    expect(lts.sameObsCount).toBe(1);
+    expect(lts.under5mCount).toBe(0);
+    expect(lts.positiveLeadCount).toBe(0);
+  });
+
+  it('2m approval goes into under5mCount bucket', () => {
+    const lts = summaryFor(
+      [
+        makeObs({ capturedAt: at(0) }),
+        makeObs({ capturedAt: at(120_000), buyGateDecision: 'BUY_APPROVED_PAPER' }), // +2m
+      ],
+      [],
+    );
+    expect(lts.under5mCount).toBe(1);
+    expect(lts.sameObsCount).toBe(0);
+    expect(lts.under30mCount).toBe(0);
+    expect(lts.positiveLeadCount).toBe(1);
+  });
+
+  it('10m approval goes into under30mCount bucket', () => {
+    const lts = summaryFor(
+      [
+        makeObs({ capturedAt: at(0) }),
+        makeObs({ capturedAt: at(600_000), buyGateDecision: 'BUY_APPROVED_PAPER' }), // +10m
+      ],
+      [],
+    );
+    expect(lts.under30mCount).toBe(1);
+    expect(lts.under5mCount).toBe(0);
+    expect(lts.over30mCount).toBe(0);
+    expect(lts.positiveLeadCount).toBe(1);
+  });
+
+  it('60m approval goes into over30mCount bucket', () => {
+    const lts = summaryFor(
+      [makeObs({ capturedAt: at(0) })],
+      [makeApproval({ capturedAt: at(3_600_000) })], // +60m via file
+    );
+    expect(lts.over30mCount).toBe(1);
+    expect(lts.under30mCount).toBe(0);
+    expect(lts.positiveLeadCount).toBe(1);
+  });
+
+  it('avg and median exclude same-obs (<=0.5m) approvals', () => {
+    // One same-obs (0m), one 2m, one 8m
+    const lts = summaryFor(
+      [
+        makeObs({ contract: CONTRACT_A, capturedAt: at(0), buyGateDecision: 'BUY_APPROVED_PAPER' }),
+        makeObs({ contract: CONTRACT_B, capturedAt: at(0) }),
+        makeObs({ contract: CONTRACT_B, capturedAt: at(120_000), buyGateDecision: 'BUY_APPROVED_PAPER' }), // +2m
+      ],
+      [makeApproval({ contract: CONTRACT_A, capturedAt: at(0) })],
+    );
+    // CONTRACT_A: sameObs (0m) — excluded from positive
+    // CONTRACT_B: 2m — included
+    expect(lts.sameObsCount).toBe(1);
+    expect(lts.positiveLeadCount).toBe(1);
+    expect(lts.avgPositiveLeadMin).toBeCloseTo(2.0, 5);
+    expect(lts.medianPositiveLeadMin).toBeCloseTo(2.0, 5);
+  });
+
+  it('median of even-length positive list uses midpoint average', () => {
+    // Two positive lead times: 2m and 8m → median = 5m
+    const lts = summaryFor(
+      [
+        makeObs({ contract: CONTRACT_A, capturedAt: at(0) }),
+        makeObs({ contract: CONTRACT_A, capturedAt: at(120_000), buyGateDecision: 'BUY_APPROVED_PAPER' }), // +2m
+        makeObs({ contract: CONTRACT_B, capturedAt: at(0) }),
+        makeObs({ contract: CONTRACT_B, capturedAt: at(480_000), buyGateDecision: 'BUY_APPROVED_PAPER' }), // +8m
+      ],
+      [],
+    );
+    expect(lts.positiveLeadCount).toBe(2);
+    expect(lts.avgPositiveLeadMin).toBeCloseTo(5.0, 5);
+    expect(lts.medianPositiveLeadMin).toBeCloseTo(5.0, 5);
+  });
+
+  it('unapproved candidates counted correctly', () => {
+    const lts = summaryFor(
+      [
+        makeObs({ contract: CONTRACT_A, capturedAt: at(0) }),
+        makeObs({ contract: CONTRACT_B, capturedAt: at(0) }),
+      ],
+      [makeApproval({ contract: CONTRACT_A, capturedAt: at(60_000) })],
+    );
+    expect(lts.approvedCount).toBe(1);
+    expect(lts.unapprovedCount).toBe(1);
+  });
 });

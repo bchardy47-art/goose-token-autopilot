@@ -42,6 +42,18 @@ export interface TrackedLaneRow {
   status:                  TrackedLaneStatus;
 }
 
+export interface LeadTimeSummary {
+  approvedCount:         number;
+  unapprovedCount:       number;
+  sameObsCount:          number;  // minToApp <= 0.5m (same-observation overlap)
+  under5mCount:          number;  // > 0.5m to 5m
+  under30mCount:         number;  // > 5m to 30m
+  over30mCount:          number;  // > 30m
+  positiveLeadCount:     number;  // minToApp > 0.5m
+  avgPositiveLeadMin:    number | null;
+  medianPositiveLeadMin: number | null;
+}
+
 export interface RipperEarlyWatchTrackedLaneOptions {
   observationPaths: string[];
   approvalPaths:    string[];
@@ -52,6 +64,7 @@ export interface RipperEarlyWatchTrackedLaneResult {
   generatedAt:       string;
   totalCandidates:   number;
   rows:              TrackedLaneRow[];
+  leadTimeSummary:   LeadTimeSummary;
   reportOnly:        true;
   readOnly:          true;
   tradingExecuted:   0;
@@ -268,10 +281,48 @@ export function runRipperEarlyWatchTrackedLaneReport(
 
   rows.sort((a, b) => a.firstWatchAt.localeCompare(b.firstWatchAt));
 
+  // ── Lead time summary ──────────────────────────────────────────────────────
+  const approvedRows    = rows.filter(r => r.laterBuyApproved);
+  const unapprovedCount = rows.length - approvedRows.length;
+
+  const sameObsCount  = approvedRows.filter(r => r.minToApp != null && r.minToApp <= 0.5).length;
+  const under5mCount  = approvedRows.filter(r => r.minToApp != null && r.minToApp > 0.5 && r.minToApp <= 5).length;
+  const under30mCount = approvedRows.filter(r => r.minToApp != null && r.minToApp > 5   && r.minToApp <= 30).length;
+  const over30mCount  = approvedRows.filter(r => r.minToApp != null && r.minToApp > 30).length;
+
+  const positiveTimes = approvedRows
+    .filter(r => r.minToApp != null && r.minToApp > 0.5)
+    .map(r => r.minToApp as number);
+
+  let avgPositiveLeadMin:    number | null = null;
+  let medianPositiveLeadMin: number | null = null;
+
+  if (positiveTimes.length > 0) {
+    avgPositiveLeadMin = positiveTimes.reduce((a, b) => a + b, 0) / positiveTimes.length;
+    const sorted = [...positiveTimes].sort((a, b) => a - b);
+    const mid    = Math.floor(sorted.length / 2);
+    medianPositiveLeadMin = sorted.length % 2 === 0
+      ? (sorted[mid - 1] + sorted[mid]) / 2
+      : sorted[mid];
+  }
+
+  const leadTimeSummary: LeadTimeSummary = {
+    approvedCount:         approvedRows.length,
+    unapprovedCount,
+    sameObsCount,
+    under5mCount,
+    under30mCount,
+    over30mCount,
+    positiveLeadCount:     positiveTimes.length,
+    avgPositiveLeadMin,
+    medianPositiveLeadMin,
+  };
+
   return {
     generatedAt,
     totalCandidates:   rows.length,
     rows,
+    leadTimeSummary,
     reportOnly:        true,
     readOnly:          true,
     tradingExecuted:   0,
@@ -387,6 +438,26 @@ export function renderRipperEarlyWatchTrackedLaneReport(
   lines.push('  FAILED_VOLUME       latest volumeUsd < 20,000');
   lines.push('  STALLED             above floors, no price move, no approval');
   lines.push('  WATCHING            no later observations yet');
+  lines.push('');
+
+  // ── Lead time summary section ──────────────────────────────────────────────
+  const lts = result.leadTimeSummary;
+  lines.push(`  ${SEP2}`);
+  lines.push('  LEAD TIME SUMMARY');
+  lines.push(`  ${SEP2}`);
+  lines.push('');
+  lines.push(`  Approved candidates   : ${lts.approvedCount}`);
+  lines.push(`  Unapproved candidates : ${lts.unapprovedCount}`);
+  lines.push(`  Positive lead (>0.5m) : ${lts.positiveLeadCount}`);
+  lines.push('');
+  lines.push('  Buckets:');
+  lines.push(`    same-obs / <=0.5m   : ${lts.sameObsCount}`);
+  lines.push(`    >0.5m  to  5m       : ${lts.under5mCount}`);
+  lines.push(`    >5m    to 30m       : ${lts.under30mCount}`);
+  lines.push(`    >30m                : ${lts.over30mCount}`);
+  lines.push('');
+  lines.push(`  Avg positive lead time    : ${lts.avgPositiveLeadMin    != null ? `${lts.avgPositiveLeadMin.toFixed(1)}m`    : 'n/a'}`);
+  lines.push(`  Median positive lead time : ${lts.medianPositiveLeadMin != null ? `${lts.medianPositiveLeadMin.toFixed(1)}m` : 'n/a'}`);
   lines.push('');
 
   lines.push(`  ${SEP2}`);
