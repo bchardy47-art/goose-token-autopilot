@@ -89,22 +89,66 @@ function passesPolicy(pct: number | null, liq: number | null, vol: number | null
 
 function deriveBlockers(fixture: LiveRipperFixture): BlockerLabel[] {
   const labels: BlockerLabel[] = [];
-  const sig    = fixture.normalizedSignal as unknown as Record<string, unknown>;
-  const liq    = toFiniteNum(sig['liquidityUsd']);
-  const vol    = toFiniteNum(sig['volumeUsd']);
-  const pct    = toFiniteNum(sig['priceChangePct']);
-  const holder = sig['holderRiskHint'];
-  const cluster = sig['clusterRiskHint'];
+  const sig = fixture.normalizedSignal as unknown as Record<string, unknown>;
+  const raw = (typeof fixture.raw === 'object' && fixture.raw !== null
+    ? fixture.raw as Record<string, unknown>
+    : {});
 
+  const liq = toFiniteNum(sig['liquidityUsd']);
+  const vol = toFiniteNum(sig['volumeUsd']);
+  const pct = toFiniteNum(sig['priceChangePct']);
+
+  // Liquidity/volume/price — all read directly from normalizedSignal
   if (liq != null && liq < WATCH_EARLY_RIP_LIQ_MIN) labels.push('LOW_LIQUIDITY_AT_BEST');
-  if (vol != null && vol < WATCH_EARLY_RIP_VOL_MIN)  labels.push('LOW_VOLUME_AT_BEST');
-  if (pct != null && pct > 1.0)                      labels.push('PRICE_ALREADY_MOVED_TOO_FAR');
-  if (holder === 'RISKY')                             labels.push('HOLDER_RISK');
-  if (cluster != null && typeof cluster === 'string' &&
-      (cluster.toUpperCase().includes('RISK') || cluster.toUpperCase().includes('DANGER'))) {
-    labels.push('CLUSTER_RISK');
+  if (vol != null && vol < WATCH_EARLY_RIP_VOL_MIN) labels.push('LOW_VOLUME_AT_BEST');
+  if (pct != null && pct > 1.0)                     labels.push('PRICE_ALREADY_MOVED_TOO_FAR');
+
+  // Holder risk — check both the normalizedSignal hint (used in early enrichment) and
+  // the raw fixture (which is where the production enricher actually writes).
+  const holderHint  = sig['holderRiskHint'];
+  const holderRaw   = raw['holderRisk'];
+  const holderValue =
+    typeof holderHint === 'string' ? holderHint :
+    typeof holderRaw  === 'string' ? holderRaw  : null;
+  if (holderValue === 'RISKY' || holderValue === 'HIGH' || holderValue === 'DANGER') {
+    labels.push('HOLDER_RISK');
   }
-  if (holder == null && cluster == null) labels.push('SAFETY_NOT_ENRICHED');
+
+  // Cluster risk — check normalizedSignal hint + raw.clusterRisk (production field).
+  const clusterHint  = sig['clusterRiskHint'];
+  const clusterRaw   = raw['clusterRisk'];
+  const clusterValue =
+    typeof clusterHint === 'string' ? clusterHint :
+    typeof clusterRaw  === 'string' ? clusterRaw  : null;
+  if (clusterValue != null) {
+    const up = clusterValue.toUpperCase();
+    if (up.includes('RISK') || up.includes('DANGER') || up === 'WATCH' || up === 'HIGH') {
+      labels.push('CLUSTER_RISK');
+    }
+  }
+
+  // Slippage — only emit when observable. If a slippage field is present but
+  // empty/null/non-numeric → MISSING. If present and > 500 bps → TOO_HIGH.
+  const slipSig = sig['slippageBps'];
+  const slipRaw = raw['slippageBps'];
+  const slipFieldPresent = slipSig !== undefined || slipRaw !== undefined;
+  const slipNum = toFiniteNum(slipSig ?? slipRaw);
+  if (slipFieldPresent && slipNum == null) labels.push('SLIPPAGE_MISSING');
+  if (slipNum != null && slipNum > 500)    labels.push('SLIPPAGE_TOO_HIGH');
+
+  // Quote — only emit when observable. If a quote field is present but null → MISSING.
+  const quoteSig = sig['quote'];
+  const quoteRaw = raw['quote'];
+  const quoteFieldPresent = quoteSig !== undefined || quoteRaw !== undefined;
+  const quoteValue = quoteSig ?? quoteRaw;
+  if (quoteFieldPresent && (quoteValue == null || quoteValue === false)) {
+    labels.push('QUOTE_MISSING');
+  }
+
+  // Safety enrichment — true only if no holder/cluster signal of any kind exists.
+  const noHolderEnrich  = holderHint == null && holderRaw == null;
+  const noClusterEnrich = clusterHint == null && clusterRaw == null;
+  if (noHolderEnrich && noClusterEnrich) labels.push('SAFETY_NOT_ENRICHED');
 
   if (labels.length === 0) labels.push('UNKNOWN_BLOCKER');
   return labels;
@@ -372,13 +416,16 @@ export function renderRipperEarlyWatchBlockerAutopsy(
   lines.push('  BLOCKER LABEL KEY');
   lines.push(`  ${SEP2}`);
   lines.push('');
-  lines.push('  LOW_LIQUIDITY_AT_BEST      liquidityUsd < 30,000 at best-move observation');
-  lines.push('  LOW_VOLUME_AT_BEST         volumeUsd < 20,000 at best-move observation');
+  lines.push('  LOW_LIQUIDITY_AT_BEST       liquidityUsd < 30,000 at best-move observation');
+  lines.push('  LOW_VOLUME_AT_BEST          volumeUsd < 20,000 at best-move observation');
   lines.push('  PRICE_ALREADY_MOVED_TOO_FAR priceChangePct > 100% at best-move observation');
-  lines.push('  HOLDER_RISK                holderRiskHint = RISKY at best-move observation');
-  lines.push('  CLUSTER_RISK               clusterRiskHint indicates risk');
-  lines.push('  SAFETY_NOT_ENRICHED        no holderRiskHint or clusterRiskHint present');
-  lines.push('  UNKNOWN_BLOCKER            no field-derivable blocker found');
+  lines.push('  HOLDER_RISK                 holderRisk/holderRiskHint = RISKY|HIGH|DANGER');
+  lines.push('  CLUSTER_RISK                clusterRisk/clusterRiskHint indicates risk');
+  lines.push('  SLIPPAGE_MISSING            slippage field present but null/non-numeric');
+  lines.push('  SLIPPAGE_TOO_HIGH           slippageBps > 500 at best-move observation');
+  lines.push('  QUOTE_MISSING               quote field present but null/false');
+  lines.push('  SAFETY_NOT_ENRICHED         no holder/cluster fields present in obs or raw');
+  lines.push('  UNKNOWN_BLOCKER             no field-derivable blocker found');
   lines.push('');
 
   lines.push(`  ${SEP2}`);

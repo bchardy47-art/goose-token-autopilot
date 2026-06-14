@@ -35,31 +35,44 @@ interface ObsOpts {
   ripperScore?:     number;
   holderRiskHint?:  string | null;
   clusterRiskHint?: string | null;
+  rawClusterRisk?:  string | null;
+  rawHolderRisk?:   string | null;
+  slippageBps?:     number | null;
+  quote?:           unknown;
 }
 
 function makeObs(opts: ObsOpts = {}) {
+  const raw: Record<string, unknown> = {};
+  if (opts.rawClusterRisk !== undefined) raw['clusterRisk'] = opts.rawClusterRisk;
+  if (opts.rawHolderRisk  !== undefined) raw['holderRisk']  = opts.rawHolderRisk;
+
+  const sig: Record<string, unknown> = {
+    id:            `id:${opts.contract ?? CONTRACT_A}`,
+    source:        'test',
+    sourceKind:    'DEX_NEW_POOL',
+    contract:      opts.contract ?? CONTRACT_A,
+    symbol:        opts.symbol,
+    discoveredAt:  opts.capturedAt ?? BASE_ISO,
+    observedAt:    opts.capturedAt ?? BASE_ISO,
+    confidence:    'LOW',
+    signalReasons: [],
+    warnings:      [],
+    priceChangePct: opts.priceChangePct !== undefined ? opts.priceChangePct : 0.1,
+    liquidityUsd:   opts.liquidityUsd  !== undefined ? opts.liquidityUsd : 35_000,
+    volumeUsd:      opts.volumeUsd     !== undefined ? opts.volumeUsd : 25_000,
+    holderRiskHint:  opts.holderRiskHint  ?? null,
+    clusterRiskHint: opts.clusterRiskHint ?? null,
+  };
+  if (opts.slippageBps !== undefined) sig['slippageBps'] = opts.slippageBps;
+  if (opts.quote       !== undefined) sig['quote']       = opts.quote;
+
   return {
     capturedAt:       opts.capturedAt ?? BASE_ISO,
     buyGateDecision:  opts.buyGateDecision ?? 'WATCH',
     blockers:         opts.blockers ?? [],
     ripperScore:      opts.ripperScore,
-    normalizedSignal: {
-      id:            `id:${opts.contract ?? CONTRACT_A}`,
-      source:        'test',
-      sourceKind:    'DEX_NEW_POOL',
-      contract:      opts.contract ?? CONTRACT_A,
-      symbol:        opts.symbol,
-      discoveredAt:  opts.capturedAt ?? BASE_ISO,
-      observedAt:    opts.capturedAt ?? BASE_ISO,
-      confidence:    'LOW',
-      signalReasons: [],
-      warnings:      [],
-      priceChangePct: opts.priceChangePct !== undefined ? opts.priceChangePct : 0.1,
-      liquidityUsd:   opts.liquidityUsd  !== undefined ? opts.liquidityUsd : 35_000,
-      volumeUsd:      opts.volumeUsd     !== undefined ? opts.volumeUsd : 25_000,
-      holderRiskHint:  opts.holderRiskHint  ?? null,
-      clusterRiskHint: opts.clusterRiskHint ?? null,
-    },
+    raw,
+    normalizedSignal: sig,
   };
 }
 
@@ -394,6 +407,72 @@ describe('derived blocker detection', () => {
       holderRiskHint: 'CLEAN',
     });
     expect(blockers).toContain('UNKNOWN_BLOCKER');
+  });
+
+  it('CLUSTER_RISK when raw.clusterRisk = WATCH (production field path)', () => {
+    // Production fixtures put clusterRisk on raw, not on normalizedSignal.
+    const blockers = derivedBlockersFor({
+      capturedAt: at(10_000), priceChangePct: 0.5, liquidityUsd: 35_000, volumeUsd: 25_000,
+      rawClusterRisk: 'WATCH',
+    });
+    expect(blockers).toContain('CLUSTER_RISK');
+    expect(blockers).not.toContain('SAFETY_NOT_ENRICHED');
+  });
+
+  it('HOLDER_RISK when raw.holderRisk = RISKY (production field path)', () => {
+    const blockers = derivedBlockersFor({
+      capturedAt: at(10_000), priceChangePct: 0.5, liquidityUsd: 35_000, volumeUsd: 25_000,
+      rawHolderRisk: 'RISKY',
+    });
+    expect(blockers).toContain('HOLDER_RISK');
+    expect(blockers).not.toContain('SAFETY_NOT_ENRICHED');
+  });
+
+  it('SLIPPAGE_MISSING when slippageBps field is present but null', () => {
+    const blockers = derivedBlockersFor({
+      capturedAt: at(10_000), priceChangePct: 0.5, liquidityUsd: 35_000, volumeUsd: 25_000,
+      slippageBps: null,
+    });
+    expect(blockers).toContain('SLIPPAGE_MISSING');
+  });
+
+  it('SLIPPAGE_TOO_HIGH when slippageBps > 500', () => {
+    const blockers = derivedBlockersFor({
+      capturedAt: at(10_000), priceChangePct: 0.5, liquidityUsd: 35_000, volumeUsd: 25_000,
+      slippageBps: 750,
+    });
+    expect(blockers).toContain('SLIPPAGE_TOO_HIGH');
+  });
+
+  it('no SLIPPAGE_* when slippageBps field is absent (conservative)', () => {
+    const blockers = derivedBlockersFor({
+      capturedAt: at(10_000), priceChangePct: 0.5, liquidityUsd: 35_000, volumeUsd: 25_000,
+    });
+    expect(blockers).not.toContain('SLIPPAGE_MISSING');
+    expect(blockers).not.toContain('SLIPPAGE_TOO_HIGH');
+  });
+
+  it('QUOTE_MISSING when quote field is present but null', () => {
+    const blockers = derivedBlockersFor({
+      capturedAt: at(10_000), priceChangePct: 0.5, liquidityUsd: 35_000, volumeUsd: 25_000,
+      quote: null,
+    });
+    expect(blockers).toContain('QUOTE_MISSING');
+  });
+
+  it('no QUOTE_MISSING when quote field is absent (conservative)', () => {
+    const blockers = derivedBlockersFor({
+      capturedAt: at(10_000), priceChangePct: 0.5, liquidityUsd: 35_000, volumeUsd: 25_000,
+    });
+    expect(blockers).not.toContain('QUOTE_MISSING');
+  });
+
+  it('no QUOTE_MISSING when quote field is a truthy object', () => {
+    const blockers = derivedBlockersFor({
+      capturedAt: at(10_000), priceChangePct: 0.5, liquidityUsd: 35_000, volumeUsd: 25_000,
+      quote: { priceUsd: 1.0 },
+    });
+    expect(blockers).not.toContain('QUOTE_MISSING');
   });
 });
 

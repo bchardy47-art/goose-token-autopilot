@@ -191,6 +191,7 @@ import { runRipperEntryLagReport, renderRipperEntryLagReport } from './token-gra
 import { runRipperEarlyWatchPolicyReport, renderRipperEarlyWatchPolicyReport } from './token-grab/ripperEarlyWatchPolicyReport';
 import { runRipperEarlyWatchTrackedLaneReport, renderRipperEarlyWatchTrackedLaneReport } from './token-grab/ripperEarlyWatchTrackedLaneReport';
 import { runRipperEarlyWatchBlockerAutopsy, renderRipperEarlyWatchBlockerAutopsy } from './token-grab/ripperEarlyWatchBlockerAutopsy';
+import { runRipperApprovalPersistenceAudit, renderRipperApprovalPersistenceAudit } from './token-grab/ripperApprovalPersistenceAudit';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3663,6 +3664,36 @@ async function main(): Promise<void> {
           approvalPaths:    rewebaApprovalPaths,
         });
         console.log(renderRipperEarlyWatchBlockerAutopsy(rewebaResult));
+        break;
+      }
+
+      case 'token:ripper-approval-persistence-audit': {
+        const rapaObsIdx = process.argv.indexOf('--observations');
+        const rapaObsPaths: string[] = [];
+        if (rapaObsIdx !== -1) {
+          for (let i = rapaObsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rapaObsPaths.push(process.argv[i]);
+          }
+        }
+        const rapaApprovalsIdx = process.argv.indexOf('--approvals');
+        const rapaApprovalPaths: string[] = [];
+        if (rapaApprovalsIdx !== -1) {
+          for (let i = rapaApprovalsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rapaApprovalPaths.push(process.argv[i]);
+          }
+        }
+        if (rapaObsPaths.length === 0 && rapaApprovalPaths.length === 0) {
+          console.error('[token:ripper-approval-persistence-audit] No --observations or --approvals files specified.');
+          console.error('  Usage: npm run token:ripper-approval-persistence-audit -- --observations data/token-grab/ripper/observations/*.jsonl --approvals data/token-grab/ripper/cycles/cycle-*.jsonl');
+          process.exit(1);
+        }
+        const rapaResult = runRipperApprovalPersistenceAudit({
+          observationPaths: rapaObsPaths,
+          approvalPaths:    rapaApprovalPaths,
+        });
+        console.log(renderRipperApprovalPersistenceAudit(rapaResult));
         break;
       }
 
