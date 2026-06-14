@@ -190,6 +190,7 @@ import { runRipperExitWindowReport, renderRipperExitWindowReport } from './token
 import { runRipperEntryLagReport, renderRipperEntryLagReport } from './token-grab/ripperEntryLagReport';
 import { runRipperEarlyWatchPolicyReport, renderRipperEarlyWatchPolicyReport } from './token-grab/ripperEarlyWatchPolicyReport';
 import { runRipperEarlyWatchTrackedLaneReport, renderRipperEarlyWatchTrackedLaneReport } from './token-grab/ripperEarlyWatchTrackedLaneReport';
+import { runRipperEarlyWatchBlockerAutopsy, renderRipperEarlyWatchBlockerAutopsy } from './token-grab/ripperEarlyWatchBlockerAutopsy';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3632,6 +3633,36 @@ async function main(): Promise<void> {
           approvalPaths:    rewtlrApprovalPaths,
         });
         console.log(renderRipperEarlyWatchTrackedLaneReport(rewtlrResult));
+        break;
+      }
+
+      case 'token:ripper-early-watch-blocker-autopsy': {
+        const rewebaObsIdx = process.argv.indexOf('--observations');
+        const rewebaObsPaths: string[] = [];
+        if (rewebaObsIdx !== -1) {
+          for (let i = rewebaObsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rewebaObsPaths.push(process.argv[i]);
+          }
+        }
+        const rewebaApprovalsIdx = process.argv.indexOf('--approvals');
+        const rewebaApprovalPaths: string[] = [];
+        if (rewebaApprovalsIdx !== -1) {
+          for (let i = rewebaApprovalsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rewebaApprovalPaths.push(process.argv[i]);
+          }
+        }
+        if (rewebaObsPaths.length === 0) {
+          console.error('[token:ripper-early-watch-blocker-autopsy] No --observations files specified.');
+          console.error('  Usage: npm run token:ripper-early-watch-blocker-autopsy -- --observations data/token-grab/ripper/observations/*.jsonl --approvals data/token-grab/ripper/cycles/cycle-*.jsonl');
+          process.exit(1);
+        }
+        const rewebaResult = runRipperEarlyWatchBlockerAutopsy({
+          observationPaths: rewebaObsPaths,
+          approvalPaths:    rewebaApprovalPaths,
+        });
+        console.log(renderRipperEarlyWatchBlockerAutopsy(rewebaResult));
         break;
       }
 
