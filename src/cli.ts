@@ -187,6 +187,7 @@ import { runRipperShadowPolicyReport, renderRipperShadowPolicyReport } from './t
 import { runRipperShadowPortfolioReport, renderRipperShadowPortfolioReport } from './token-grab/ripperShadowPortfolioReport';
 import { runRipperShadowComboReport, renderRipperShadowComboReport } from './token-grab/ripperShadowComboReport';
 import { runRipperExitWindowReport, renderRipperExitWindowReport } from './token-grab/ripperExitWindowReport';
+import { runRipperEntryLagReport, renderRipperEntryLagReport } from './token-grab/ripperEntryLagReport';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3539,6 +3540,36 @@ async function main(): Promise<void> {
           observationPaths:  rewrObservationPaths,
         });
         console.log(renderRipperExitWindowReport(rewrResult));
+        break;
+      }
+
+      case 'token:ripper-entry-lag-report': {
+        const relrApprovalsIdx = process.argv.indexOf('--approvals');
+        const relrApprovalPaths: string[] = [];
+        if (relrApprovalsIdx !== -1) {
+          for (let i = relrApprovalsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            relrApprovalPaths.push(process.argv[i]);
+          }
+        }
+        const relrObservationsIdx = process.argv.indexOf('--observations');
+        const relrObservationPaths: string[] = [];
+        if (relrObservationsIdx !== -1) {
+          for (let i = relrObservationsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            relrObservationPaths.push(process.argv[i]);
+          }
+        }
+        if (relrApprovalPaths.length === 0) {
+          console.error('[token:ripper-entry-lag-report] No --approvals files specified.');
+          console.error('  Usage: npm run token:ripper-entry-lag-report -- --approvals data/token-grab/ripper/cycles/cycle-*.jsonl --observations data/token-grab/ripper/observations/*.jsonl');
+          process.exit(1);
+        }
+        const relrResult = runRipperEntryLagReport({
+          approvalPaths:    relrApprovalPaths,
+          observationPaths: relrObservationPaths,
+        });
+        console.log(renderRipperEntryLagReport(relrResult));
         break;
       }
 
