@@ -188,6 +188,7 @@ import { runRipperShadowPortfolioReport, renderRipperShadowPortfolioReport } fro
 import { runRipperShadowComboReport, renderRipperShadowComboReport } from './token-grab/ripperShadowComboReport';
 import { runRipperExitWindowReport, renderRipperExitWindowReport } from './token-grab/ripperExitWindowReport';
 import { runRipperEntryLagReport, renderRipperEntryLagReport } from './token-grab/ripperEntryLagReport';
+import { runRipperEarlyWatchPolicyReport, renderRipperEarlyWatchPolicyReport } from './token-grab/ripperEarlyWatchPolicyReport';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3570,6 +3571,36 @@ async function main(): Promise<void> {
           observationPaths: relrObservationPaths,
         });
         console.log(renderRipperEntryLagReport(relrResult));
+        break;
+      }
+
+      case 'token:ripper-early-watch-policy-report': {
+        const rewprObsIdx = process.argv.indexOf('--observations');
+        const rewprObsPaths: string[] = [];
+        if (rewprObsIdx !== -1) {
+          for (let i = rewprObsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rewprObsPaths.push(process.argv[i]);
+          }
+        }
+        const rewprApprovalsIdx = process.argv.indexOf('--approvals');
+        const rewprApprovalPaths: string[] = [];
+        if (rewprApprovalsIdx !== -1) {
+          for (let i = rewprApprovalsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rewprApprovalPaths.push(process.argv[i]);
+          }
+        }
+        if (rewprObsPaths.length === 0) {
+          console.error('[token:ripper-early-watch-policy-report] No --observations files specified.');
+          console.error('  Usage: npm run token:ripper-early-watch-policy-report -- --observations data/token-grab/ripper/observations/*.jsonl --approvals data/token-grab/ripper/cycles/cycle-*.jsonl');
+          process.exit(1);
+        }
+        const rewprResult = runRipperEarlyWatchPolicyReport({
+          observationPaths: rewprObsPaths,
+          approvalPaths:    rewprApprovalPaths,
+        });
+        console.log(renderRipperEarlyWatchPolicyReport(rewprResult));
         break;
       }
 
