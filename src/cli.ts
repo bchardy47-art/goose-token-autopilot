@@ -189,6 +189,7 @@ import { runRipperShadowComboReport, renderRipperShadowComboReport } from './tok
 import { runRipperExitWindowReport, renderRipperExitWindowReport } from './token-grab/ripperExitWindowReport';
 import { runRipperEntryLagReport, renderRipperEntryLagReport } from './token-grab/ripperEntryLagReport';
 import { runRipperEarlyWatchPolicyReport, renderRipperEarlyWatchPolicyReport } from './token-grab/ripperEarlyWatchPolicyReport';
+import { runRipperEarlyWatchTrackedLaneReport, renderRipperEarlyWatchTrackedLaneReport } from './token-grab/ripperEarlyWatchTrackedLaneReport';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3601,6 +3602,36 @@ async function main(): Promise<void> {
           approvalPaths:    rewprApprovalPaths,
         });
         console.log(renderRipperEarlyWatchPolicyReport(rewprResult));
+        break;
+      }
+
+      case 'token:ripper-early-watch-tracked-lane-report': {
+        const rewtlrObsIdx = process.argv.indexOf('--observations');
+        const rewtlrObsPaths: string[] = [];
+        if (rewtlrObsIdx !== -1) {
+          for (let i = rewtlrObsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rewtlrObsPaths.push(process.argv[i]);
+          }
+        }
+        const rewtlrApprovalsIdx = process.argv.indexOf('--approvals');
+        const rewtlrApprovalPaths: string[] = [];
+        if (rewtlrApprovalsIdx !== -1) {
+          for (let i = rewtlrApprovalsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rewtlrApprovalPaths.push(process.argv[i]);
+          }
+        }
+        if (rewtlrObsPaths.length === 0) {
+          console.error('[token:ripper-early-watch-tracked-lane-report] No --observations files specified.');
+          console.error('  Usage: npm run token:ripper-early-watch-tracked-lane-report -- --observations data/token-grab/ripper/observations/*.jsonl --approvals data/token-grab/ripper/cycles/cycle-*.jsonl');
+          process.exit(1);
+        }
+        const rewtlrResult = runRipperEarlyWatchTrackedLaneReport({
+          observationPaths: rewtlrObsPaths,
+          approvalPaths:    rewtlrApprovalPaths,
+        });
+        console.log(renderRipperEarlyWatchTrackedLaneReport(rewtlrResult));
         break;
       }
 
