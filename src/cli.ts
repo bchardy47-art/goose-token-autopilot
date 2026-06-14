@@ -186,6 +186,7 @@ import { runRipperShadowFilterReport, renderRipperShadowFilterReport } from './t
 import { runRipperShadowPolicyReport, renderRipperShadowPolicyReport } from './token-grab/ripperShadowPolicyReport';
 import { runRipperShadowPortfolioReport, renderRipperShadowPortfolioReport } from './token-grab/ripperShadowPortfolioReport';
 import { runRipperShadowComboReport, renderRipperShadowComboReport } from './token-grab/ripperShadowComboReport';
+import { runRipperExitWindowReport, renderRipperExitWindowReport } from './token-grab/ripperExitWindowReport';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3508,6 +3509,36 @@ async function main(): Promise<void> {
           outcomePaths:  rscOutcomePaths,
         });
         console.log(renderRipperShadowComboReport(rscResult));
+        break;
+      }
+
+      case 'token:ripper-exit-window-report': {
+        const rewrApprovalsIdx = process.argv.indexOf('--approvals');
+        const rewrApprovalPaths: string[] = [];
+        if (rewrApprovalsIdx !== -1) {
+          for (let i = rewrApprovalsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rewrApprovalPaths.push(process.argv[i]);
+          }
+        }
+        const rewrObservationsIdx = process.argv.indexOf('--observations');
+        const rewrObservationPaths: string[] = [];
+        if (rewrObservationsIdx !== -1) {
+          for (let i = rewrObservationsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rewrObservationPaths.push(process.argv[i]);
+          }
+        }
+        if (rewrApprovalPaths.length === 0) {
+          console.error('[token:ripper-exit-window-report] No --approvals files specified.');
+          console.error('  Usage: npm run token:ripper-exit-window-report -- --approvals data/token-grab/ripper/cycles/cycle-*.jsonl --observations data/token-grab/ripper/observations/*.jsonl');
+          process.exit(1);
+        }
+        const rewrResult = runRipperExitWindowReport({
+          approvalPaths:     rewrApprovalPaths,
+          observationPaths:  rewrObservationPaths,
+        });
+        console.log(renderRipperExitWindowReport(rewrResult));
         break;
       }
 
