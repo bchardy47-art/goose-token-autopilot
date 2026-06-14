@@ -193,6 +193,7 @@ import { runRipperEarlyWatchTrackedLaneReport, renderRipperEarlyWatchTrackedLane
 import { runRipperEarlyWatchBlockerAutopsy, renderRipperEarlyWatchBlockerAutopsy } from './token-grab/ripperEarlyWatchBlockerAutopsy';
 import { runRipperApprovalPersistenceAudit, renderRipperApprovalPersistenceAudit } from './token-grab/ripperApprovalPersistenceAudit';
 import { runRipperEarlyWatchLeadValueReport, renderRipperEarlyWatchLeadValueReport } from './token-grab/ripperEarlyWatchLeadValueReport';
+import { runRipperApprovalTriggerLagReport, renderRipperApprovalTriggerLagReport } from './token-grab/ripperApprovalTriggerLagReport';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3725,6 +3726,36 @@ async function main(): Promise<void> {
           approvalPaths:    rewlvrApprovalPaths,
         });
         console.log(renderRipperEarlyWatchLeadValueReport(rewlvrResult));
+        break;
+      }
+
+      case 'token:ripper-approval-trigger-lag-report': {
+        const ratlrObsIdx = process.argv.indexOf('--observations');
+        const ratlrObsPaths: string[] = [];
+        if (ratlrObsIdx !== -1) {
+          for (let i = ratlrObsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            ratlrObsPaths.push(process.argv[i]);
+          }
+        }
+        const ratlrApprovalsIdx = process.argv.indexOf('--approvals');
+        const ratlrApprovalPaths: string[] = [];
+        if (ratlrApprovalsIdx !== -1) {
+          for (let i = ratlrApprovalsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            ratlrApprovalPaths.push(process.argv[i]);
+          }
+        }
+        if (ratlrObsPaths.length === 0 && ratlrApprovalPaths.length === 0) {
+          console.error('[token:ripper-approval-trigger-lag-report] No --observations or --approvals files specified.');
+          console.error('  Usage: npm run token:ripper-approval-trigger-lag-report -- --observations data/token-grab/ripper/observations/*.jsonl --approvals data/token-grab/ripper/cycles/cycle-*.jsonl');
+          process.exit(1);
+        }
+        const ratlrResult = runRipperApprovalTriggerLagReport({
+          observationPaths: ratlrObsPaths,
+          approvalPaths:    ratlrApprovalPaths,
+        });
+        console.log(renderRipperApprovalTriggerLagReport(ratlrResult));
         break;
       }
 
