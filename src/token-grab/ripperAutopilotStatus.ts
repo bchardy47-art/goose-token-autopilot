@@ -108,12 +108,40 @@ function extractTimingEdge(timingPath: string): string | null {
 }
 
 function extractExitPolicyLeader(exitPath: string): string | null {
-  const last = readLastJsonlLine(exitPath);
-  if (!last) return null;
-  const policy = last['policy'] as string | undefined;
-  const avg    = last['avgSimulatedPL'] as number | undefined;
-  if (!policy) return null;
-  return avg != null ? `${policy} (avg P/L: ${avg >= 0 ? '+' : ''}${avg.toFixed(1)}%)` : policy;
+  if (!fs.existsSync(exitPath)) return null;
+  const lines = fs.readFileSync(exitPath, 'utf-8')
+    .split('\n').filter(l => l.trim().length > 0);
+  if (lines.length === 0) return null;
+
+  // Parse all rows and check if any supported policy has real observed coverage
+  const rows: Record<string, unknown>[] = [];
+  for (const line of lines) {
+    try { rows.push(JSON.parse(line) as Record<string, unknown>); } catch { /* skip */ }
+  }
+  if (rows.length === 0) return null;
+
+  const coveredRows = rows.filter(r => {
+    const supported        = r['supported'] as boolean | undefined;
+    const candidatesWithData = r['candidatesWithData'] as number | undefined;
+    return supported === true && typeof candidatesWithData === 'number' && candidatesWithData > 0;
+  });
+
+  if (coveredRows.length === 0) return 'INSUFFICIENT_DATA';
+
+  // Pick best by avgSimulatedPL among covered supported rows
+  let best = coveredRows[0];
+  for (const r of coveredRows) {
+    const rAvg    = r['avgSimulatedPL'] as number | null | undefined;
+    const bestAvg = best['avgSimulatedPL'] as number | null | undefined;
+    if (typeof rAvg === 'number' && (bestAvg == null || rAvg > bestAvg)) best = r;
+  }
+
+  const policy = best['policy'] as string | undefined;
+  const avg    = best['avgSimulatedPL'] as number | null | undefined;
+  if (!policy) return 'INSUFFICIENT_DATA';
+  return typeof avg === 'number'
+    ? `${policy} (avg P/L: ${avg >= 0 ? '+' : ''}${avg.toFixed(1)}%)`
+    : policy;
 }
 
 function extractRealFakeRule(realFakePath: string): string | null {

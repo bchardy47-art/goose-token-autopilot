@@ -232,3 +232,99 @@ describe('renderRipperAutopilotStatus', () => {
     expect(output).toContain('PAPER INTENTS');
   });
 });
+
+// ── Exit policy leader ────────────────────────────────────────────────────────
+
+function makeExitPolicyRow(opts: {
+  policy?: string;
+  supported?: boolean;
+  candidatesWithData?: number;
+  avgSimulatedPL?: number | null;
+} = {}): object {
+  return {
+    policy:            opts.policy             ?? 'TIME_EXIT_10M',
+    supported:         opts.supported          ?? true,
+    candidatesWithData: opts.candidatesWithData ?? 0,
+    candidatesAnalyzed: 5,
+    coveragePct:       0,
+    avgSimulatedPL:    opts.avgSimulatedPL     ?? null,
+    medianSimulatedPL: null,
+    winRate:           null,
+    dumpRate:          null,
+    worstDrawdown:     null,
+    generatedAt:       BASE_ISO,
+  };
+}
+
+describe('exit policy leader', () => {
+  it('returns null when no exit policy file exists', () => {
+    const result = runRipperAutopilotStatus(makeOptions());
+    expect(result.latestExitPolicyLeader).toBeNull();
+  });
+
+  it('returns INSUFFICIENT_DATA when exit policy file exists but all coverage is 0', () => {
+    const exitPath = path.join(tmpDir, 'exit.jsonl');
+    fs.writeFileSync(exitPath, [
+      makeExitPolicyRow({ policy: 'TAKE_1PCT_STOP_3PCT', candidatesWithData: 0 }),
+      makeExitPolicyRow({ policy: 'TIME_EXIT_10M',       candidatesWithData: 0 }),
+      makeExitPolicyRow({ policy: 'TRAILING_AFTER_3PCT', supported: false, candidatesWithData: 0 }),
+    ].map(r => JSON.stringify(r)).join('\n') + '\n', 'utf-8');
+    const result = runRipperAutopilotStatus(makeOptions({ exitPolicyPath: exitPath }));
+    expect(result.latestExitPolicyLeader).toBe('INSUFFICIENT_DATA');
+  });
+
+  it('returns INSUFFICIENT_DATA when only unsupported policies have coverage', () => {
+    const exitPath = path.join(tmpDir, 'exit.jsonl');
+    fs.writeFileSync(exitPath, [
+      makeExitPolicyRow({ policy: 'TRAILING_AFTER_3PCT', supported: false, candidatesWithData: 10, avgSimulatedPL: 5 }),
+      makeExitPolicyRow({ policy: 'TIME_EXIT_10M',       supported: true,  candidatesWithData: 0  }),
+    ].map(r => JSON.stringify(r)).join('\n') + '\n', 'utf-8');
+    const result = runRipperAutopilotStatus(makeOptions({ exitPolicyPath: exitPath }));
+    expect(result.latestExitPolicyLeader).toBe('INSUFFICIENT_DATA');
+  });
+
+  it('returns named leader when a supported policy has coverage', () => {
+    const exitPath = path.join(tmpDir, 'exit.jsonl');
+    fs.writeFileSync(exitPath, [
+      makeExitPolicyRow({ policy: 'TAKE_1PCT_STOP_3PCT', candidatesWithData: 5,  avgSimulatedPL: 0.5 }),
+      makeExitPolicyRow({ policy: 'TIME_EXIT_10M',       candidatesWithData: 5,  avgSimulatedPL: 1.2 }),
+      makeExitPolicyRow({ policy: 'TRAILING_AFTER_3PCT', supported: false, candidatesWithData: 0 }),
+    ].map(r => JSON.stringify(r)).join('\n') + '\n', 'utf-8');
+    const result = runRipperAutopilotStatus(makeOptions({ exitPolicyPath: exitPath }));
+    // TIME_EXIT_10M has better avg → should be the leader
+    expect(result.latestExitPolicyLeader).toContain('TIME_EXIT_10M');
+    expect(result.latestExitPolicyLeader).not.toBe('INSUFFICIENT_DATA');
+  });
+
+  it('leader string includes avg P/L when available', () => {
+    const exitPath = path.join(tmpDir, 'exit.jsonl');
+    fs.writeFileSync(exitPath, [
+      makeExitPolicyRow({ policy: 'TIME_EXIT_10M', candidatesWithData: 5, avgSimulatedPL: 2.3 }),
+    ].map(r => JSON.stringify(r)).join('\n') + '\n', 'utf-8');
+    const result = runRipperAutopilotStatus(makeOptions({ exitPolicyPath: exitPath }));
+    expect(result.latestExitPolicyLeader).toContain('+2.3%');
+  });
+
+  it('dashboard renders INSUFFICIENT_DATA when coverage is 0', () => {
+    const exitPath = path.join(tmpDir, 'exit.jsonl');
+    fs.writeFileSync(exitPath, [
+      makeExitPolicyRow({ policy: 'TIME_EXIT_10M', candidatesWithData: 0 }),
+    ].map(r => JSON.stringify(r)).join('\n') + '\n', 'utf-8');
+    const result = runRipperAutopilotStatus(makeOptions({ exitPolicyPath: exitPath }));
+    const output = renderRipperAutopilotStatus(result);
+    expect(output).toContain('INSUFFICIENT_DATA');
+  });
+
+  it('safety fields are unchanged regardless of exit policy state', () => {
+    const exitPath = path.join(tmpDir, 'exit.jsonl');
+    fs.writeFileSync(exitPath, [
+      makeExitPolicyRow({ policy: 'TIME_EXIT_10M', candidatesWithData: 5, avgSimulatedPL: 1.0 }),
+    ].map(r => JSON.stringify(r)).join('\n') + '\n', 'utf-8');
+    const result = runRipperAutopilotStatus(makeOptions({ exitPolicyPath: exitPath }));
+    expect(result.reportOnly).toBe(true);
+    expect(result.readOnly).toBe(true);
+    expect(result.tradingExecuted).toBe(0);
+    expect(result.realTradingLocked).toBe(true);
+    expect(result.paperOnly).toBe(true);
+  });
+});
