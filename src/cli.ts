@@ -200,6 +200,7 @@ import { runRipperApprovalFollowPaperSessionReport, renderRipperApprovalFollowPa
 import { runRipperWait5PaperShadow, renderRipperWait5PaperShadow } from './token-grab/ripperWait5PaperShadow';
 import { runRipperGateLoosenShadowReport, renderRipperGateLoosenShadowReport } from './token-grab/ripperGateLoosenShadowReport';
 import { runRipperLooseExtraObservationPlan, renderRipperLooseExtraObservationPlan } from './token-grab/ripperLooseExtraObservationPlan';
+import { runRipperLooseExtraObservationFollowup, renderRipperLooseExtraObservationFollowup } from './token-grab/ripperLooseExtraObservationFollowup';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3917,6 +3918,33 @@ async function main(): Promise<void> {
           outPath:          rleopOutPath,
         });
         console.log(renderRipperLooseExtraObservationPlan(rleopResult));
+        break;
+      }
+
+      case 'token:ripper-loose-extra-observation-followup': {
+        const rleofPlanIdx  = process.argv.indexOf('--plan');
+        const rleofPlanPath = rleofPlanIdx !== -1 ? process.argv[rleofPlanIdx + 1] : null;
+        const rleofObsIdx   = process.argv.indexOf('--observations');
+        const rleofObsPaths: string[] = [];
+        if (rleofObsIdx !== -1) {
+          for (let i = rleofObsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rleofObsPaths.push(process.argv[i]);
+          }
+        }
+        const rleofOutIdx  = process.argv.indexOf('--out');
+        const rleofOutPath = rleofOutIdx !== -1 ? process.argv[rleofOutIdx + 1] : null;
+        if (!rleofPlanPath || !rleofOutPath) {
+          console.error('[token:ripper-loose-extra-observation-followup] --plan and --out are required.');
+          console.error('  Usage: npm run token:ripper-loose-extra-observation-followup -- --plan data/token-grab/ripper/loose-extra-observation-plan.json --observations data/token-grab/ripper/observations/*.jsonl --out data/token-grab/ripper/loose-extra-observation-followup.jsonl');
+          process.exit(1);
+        }
+        const rleofResult = runRipperLooseExtraObservationFollowup({
+          planPath:         rleofPlanPath,
+          observationPaths: rleofObsPaths,
+          outPath:          rleofOutPath,
+        });
+        console.log(renderRipperLooseExtraObservationFollowup(rleofResult));
         break;
       }
 
