@@ -215,6 +215,7 @@ import { runRipperPaperExitPolicyReport, renderRipperPaperExitPolicyReport } fro
 import { runRipperRealVsFakeAutopsy, renderRipperRealVsFakeAutopsy } from './token-grab/ripperRealVsFakeAutopsy';
 import { runRipperAutopilotStatus, renderRipperAutopilotStatus } from './token-grab/ripperAutopilotStatus';
 import { runRipperPaperObservationDiagnostic, renderRipperPaperObservationDiagnostic } from './token-grab/ripperPaperObservationDiagnostic';
+import { runFlatJunkReducerReport, renderFlatJunkReducerReport } from './token-grab/ripperFlatJunkReducerReport';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -3380,6 +3381,20 @@ async function main(): Promise<void> {
           cyclePaths:       rpodCycles,
         });
         console.log(renderRipperPaperObservationDiagnostic(rpodResult));
+        break;
+      }
+
+      case 'token:ripper-flat-junk-reducer-report': {
+        const fjrCycles = getArgValuesMulti('--cycles');
+        const fjrObs    = getArgValuesMulti('--observations');
+        const fjrOut    = getArgValue('--out')
+          ?? 'data/token-grab/ripper/flat-junk-reducer-report.jsonl';
+        const fjrResult = runFlatJunkReducerReport({
+          cyclePaths:       fjrCycles,
+          observationPaths: fjrObs,
+          outPath:          fjrOut,
+        });
+        console.log(renderFlatJunkReducerReport(fjrResult));
         break;
       }
 
