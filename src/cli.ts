@@ -238,6 +238,20 @@ function getArgValues(flag: string): string[] {
   return values;
 }
 
+function getArgValuesMulti(flag: string): string[] {
+  const values: string[] = [];
+  let collecting = false;
+  for (let i = 0; i < process.argv.length; i++) {
+    const arg = process.argv[i]!;
+    if (arg === flag) { collecting = true; continue; }
+    if (collecting) {
+      if (arg.startsWith('--')) { collecting = false; }
+      else { values.push(arg); }
+    }
+  }
+  return values;
+}
+
 function parseNumberArg(flag: string, fallback: number, options: { integer?: boolean; min?: number } = {}): number {
   const raw = getArgValue(flag);
   if (raw == null) return fallback;
@@ -3331,8 +3345,8 @@ async function main(): Promise<void> {
       }
 
       case 'token:ripper-real-vs-fake-autopsy': {
-        const rvfaCycles = getArgValues('--cycles');
-        const rvfaObs    = getArgValues('--observations');
+        const rvfaCycles = getArgValuesMulti('--cycles');
+        const rvfaObs    = getArgValuesMulti('--observations');
         const rvfaOut    = getArgValue('--out')
           ?? 'data/token-grab/ripper/real-vs-fake-autopsy.jsonl';
         const rvfaResult = runRipperRealVsFakeAutopsy({
@@ -3358,8 +3372,8 @@ async function main(): Promise<void> {
 
       case 'token:ripper-paper-observation-diagnostic': {
         const rpodIntents  = getArgValue('--intents') ?? 'data/token-grab/ripper/paper-intents.jsonl';
-        const rpodObsPaths = getArgValues('--observations');
-        const rpodCycles   = getArgValues('--cycles');
+        const rpodObsPaths = getArgValuesMulti('--observations');
+        const rpodCycles   = getArgValuesMulti('--cycles');
         const rpodResult   = runRipperPaperObservationDiagnostic({
           intentsPath:      rpodIntents,
           observationPaths: rpodObsPaths,

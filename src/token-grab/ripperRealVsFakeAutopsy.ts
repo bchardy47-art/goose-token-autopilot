@@ -41,6 +41,9 @@ export interface RipperRealVsFakeAutopsyResult {
   generatedAt:           string;
   candidatesAnalyzed:    number;
   observedCandidates:    number;
+  obsFilesRead:          number;
+  obsRowsRead:           number;
+  paperIntentObsRows:    number;
   winners1:              number;
   winners3:              number;
   winners5:              number;
@@ -130,14 +133,27 @@ function readApprovedFixtures(cyclePaths: string[]): RawFixture[] {
   return result;
 }
 
-function buildObsByContract(paths: string[]): Map<string, { capturedAt: string; priceChangePct: number | null }[]> {
+interface ObsReadResult {
+  byContract:         Map<string, { capturedAt: string; priceChangePct: number | null }[]>;
+  obsFilesRead:       number;
+  obsRowsRead:        number;
+  paperIntentObsRows: number;
+}
+
+function buildObsByContract(paths: string[]): ObsReadResult {
   const map = new Map<string, { capturedAt: string; priceChangePct: number | null }[]>();
+  let obsFilesRead       = 0;
+  let obsRowsRead        = 0;
+  let paperIntentObsRows = 0;
   for (const p of paths) {
     if (!fs.existsSync(p)) continue;
+    obsFilesRead++;
     const lines = fs.readFileSync(p, 'utf-8').split('\n').filter(l => l.trim().length > 0);
     for (const line of lines) {
       try {
         const f          = JSON.parse(line) as Record<string, unknown>;
+        obsRowsRead++;
+        if (f['sourceKind'] === 'PAPER_INTENT_OBS') paperIntentObsRows++;
         const contract   = extractRipperContract(f);
         const capturedAt = f['capturedAt'] as string | undefined;
         if (!contract || !capturedAt) continue;
@@ -151,7 +167,7 @@ function buildObsByContract(paths: string[]): Map<string, { capturedAt: string; 
   for (const list of map.values()) {
     list.sort((a, b) => a.capturedAt.localeCompare(b.capturedAt));
   }
-  return map;
+  return { byContract: map, obsFilesRead, obsRowsRead, paperIntentObsRows };
 }
 
 function computeBreakdown(
@@ -276,7 +292,8 @@ export function runRipperRealVsFakeAutopsy(
   const generatedAt = new Date(nowMs).toISOString();
 
   const rawFixtures = readApprovedFixtures(options.cyclePaths);
-  const byContract  = buildObsByContract(options.observationPaths);
+  const obsResult   = buildObsByContract(options.observationPaths);
+  const byContract  = obsResult.byContract;
 
   const candidates: AutopsyCandidate[] = rawFixtures.map(f => {
     const obs = (byContract.get(f.contract) ?? []).find(o => o.capturedAt >= f.capturedAt);
@@ -342,6 +359,9 @@ export function runRipperRealVsFakeAutopsy(
     generatedAt,
     candidatesAnalyzed:     candidates.length,
     observedCandidates,
+    obsFilesRead:           obsResult.obsFilesRead,
+    obsRowsRead:            obsResult.obsRowsRead,
+    paperIntentObsRows:     obsResult.paperIntentObsRows,
     winners1,
     winners3,
     winners5,
@@ -385,6 +405,10 @@ export function renderRipperRealVsFakeAutopsy(
 
   lines.push(`  Candidates analyzed   : ${result.candidatesAnalyzed}`);
   lines.push(`  Observed candidates   : ${result.observedCandidates}`);
+  lines.push(`  Obs files read        : ${result.obsFilesRead}`);
+  lines.push(`  Obs rows read         : ${result.obsRowsRead}`);
+  lines.push(`  Paper intent obs rows : ${result.paperIntentObsRows}`);
+  lines.push(`  Approved with obs     : ${result.observedCandidates}`);
   lines.push(`  Generated at          : ${result.generatedAt}`);
   lines.push('');
 

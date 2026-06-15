@@ -61,6 +61,21 @@ function makeObs(opts: { contract?: string; capturedAt?: string; priceChangePct?
   };
 }
 
+function makePaperIntentObs(opts: { contract?: string; capturedAt?: string; priceChangePct?: number } = {}) {
+  const contract     = opts.contract     ?? CONTRACT_A;
+  const capturedAt   = opts.capturedAt   ?? at(10_000);
+  const pct          = opts.priceChangePct ?? 5;
+  return {
+    capturedAt,
+    source:    'paper-intent-obs',
+    sourceKind: 'PAPER_INTENT_OBS',
+    intentId:  'test-intent-id',
+    normalizedSignal: { contract, priceChangePct: pct },
+    raw:              { contract, priceChangePct: pct },
+    realTradingLocked: true, paperOnly: true, readOnly: true,
+  };
+}
+
 let tmpDir: string;
 beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'autopsy-test-')); });
 afterEach(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
@@ -348,5 +363,111 @@ describe('renderRipperRealVsFakeAutopsy', () => {
     expect(output).toContain('reportOnly=true');
     expect(output).toContain('tradingExecuted=0');
     expect(output).toContain('doNotChangeGatesYet=true');
+  });
+});
+
+// ── Obs stats fields ──────────────────────────────────────────────────────────
+
+describe('obs stats fields', () => {
+  it('obsFilesRead is 0 when no observation paths given', () => {
+    const result = runRipperRealVsFakeAutopsy({
+      cyclePaths: [], observationPaths: [], outPath: outPath(), nowMs: BASE_MS,
+    });
+    expect(result.obsFilesRead).toBe(0);
+    expect(result.obsRowsRead).toBe(0);
+    expect(result.paperIntentObsRows).toBe(0);
+  });
+
+  it('obsFilesRead counts files that exist', () => {
+    const obs1 = writeObs([makeObs({ contract: CONTRACT_A, priceChangePct: 5 })], 'obs1.jsonl');
+    const obs2 = writeObs([makeObs({ contract: CONTRACT_B, priceChangePct: 3 })], 'obs2.jsonl');
+    const result = runRipperRealVsFakeAutopsy({
+      cyclePaths: [], observationPaths: [obs1, obs2], outPath: outPath(), nowMs: BASE_MS,
+    });
+    expect(result.obsFilesRead).toBe(2);
+    expect(result.obsRowsRead).toBe(2);
+    expect(result.paperIntentObsRows).toBe(0);
+  });
+
+  it('paperIntentObsRows counts rows with sourceKind PAPER_INTENT_OBS', () => {
+    const obs = writeObs([
+      makeObs({ contract: CONTRACT_A, priceChangePct: 5 }),
+      makePaperIntentObs({ contract: CONTRACT_B, priceChangePct: 3 }),
+      makePaperIntentObs({ contract: CONTRACT_C, priceChangePct: 7 }),
+    ]);
+    const result = runRipperRealVsFakeAutopsy({
+      cyclePaths: [], observationPaths: [obs], outPath: outPath(), nowMs: BASE_MS,
+    });
+    expect(result.obsRowsRead).toBe(3);
+    expect(result.paperIntentObsRows).toBe(2);
+  });
+});
+
+// ── Paper intent obs matching ─────────────────────────────────────────────────
+
+describe('paper intent obs matching', () => {
+  it('paper-intent-observations row matches approved candidate by contract', () => {
+    const cycle = writeCycle([makeFixture({ contract: CONTRACT_A, capturedAt: BASE_ISO })]);
+    const obs   = writeObs([makePaperIntentObs({ contract: CONTRACT_A, capturedAt: at(10_000), priceChangePct: 6 })]);
+    const result = runRipperRealVsFakeAutopsy({
+      cyclePaths: [cycle], observationPaths: [obs], outPath: outPath(), nowMs: BASE_MS,
+    });
+    expect(result.observedCandidates).toBe(1);
+    expect(result.winners1).toBe(1);
+  });
+
+  it('observed candidates > 0 when matching paper obs exists', () => {
+    const cycle = writeCycle([makeFixture({ contract: CONTRACT_A, capturedAt: BASE_ISO })]);
+    const obs   = writeObs([makePaperIntentObs({ contract: CONTRACT_A, capturedAt: at(5_000), priceChangePct: 4 })]);
+    const result = runRipperRealVsFakeAutopsy({
+      cyclePaths: [cycle], observationPaths: [obs], outPath: outPath(), nowMs: BASE_MS,
+    });
+    expect(result.observedCandidates).toBeGreaterThan(0);
+  });
+
+  it('nested normalizedSignal.contract is extracted from paper-intent obs row', () => {
+    const cycle = writeCycle([makeFixture({ contract: CONTRACT_B, capturedAt: BASE_ISO })]);
+    const obs   = writeObs([makePaperIntentObs({ contract: CONTRACT_B, capturedAt: at(5_000), priceChangePct: 2 })]);
+    const result = runRipperRealVsFakeAutopsy({
+      cyclePaths: [cycle], observationPaths: [obs], outPath: outPath(), nowMs: BASE_MS,
+    });
+    expect(result.observedCandidates).toBe(1);
+  });
+
+  it('nested normalizedSignal.priceChangePct is used for classification', () => {
+    const cycle = writeCycle([makeFixture({ contract: CONTRACT_A, capturedAt: BASE_ISO })]);
+    const obs   = writeObs([makePaperIntentObs({ contract: CONTRACT_A, capturedAt: at(5_000), priceChangePct: 8 })]);
+    const result = runRipperRealVsFakeAutopsy({
+      cyclePaths: [cycle], observationPaths: [obs], outPath: outPath(), nowMs: BASE_MS,
+    });
+    expect(result.winners5).toBe(1);
+  });
+
+  it('multiple observation paths are accepted and merged', () => {
+    const cycle = writeCycle([
+      makeFixture({ contract: CONTRACT_A, capturedAt: BASE_ISO }),
+      makeFixture({ contract: CONTRACT_B, capturedAt: BASE_ISO }),
+    ]);
+    const obs1 = writeObs([makePaperIntentObs({ contract: CONTRACT_A, capturedAt: at(5_000), priceChangePct: 5 })], 'obs1.jsonl');
+    const obs2 = writeObs([makePaperIntentObs({ contract: CONTRACT_B, capturedAt: at(5_000), priceChangePct: 3 })], 'obs2.jsonl');
+    const result = runRipperRealVsFakeAutopsy({
+      cyclePaths: [cycle], observationPaths: [obs1, obs2], outPath: outPath(), nowMs: BASE_MS,
+    });
+    expect(result.observedCandidates).toBe(2);
+    expect(result.obsFilesRead).toBe(2);
+  });
+
+  it('safety fields are unchanged when paper obs rows are present', () => {
+    const cycle = writeCycle([makeFixture({ contract: CONTRACT_A, capturedAt: BASE_ISO })]);
+    const obs   = writeObs([makePaperIntentObs({ contract: CONTRACT_A, capturedAt: at(5_000), priceChangePct: 5 })]);
+    const result = runRipperRealVsFakeAutopsy({
+      cyclePaths: [cycle], observationPaths: [obs], outPath: outPath(), nowMs: BASE_MS,
+    });
+    expect(result.reportOnly).toBe(true);
+    expect(result.readOnly).toBe(true);
+    expect(result.tradingExecuted).toBe(0);
+    expect(result.realTradingLocked).toBe(true);
+    expect(result.paperOnly).toBe(true);
+    expect(result.doNotChangeGatesYet).toBe(true);
   });
 });
