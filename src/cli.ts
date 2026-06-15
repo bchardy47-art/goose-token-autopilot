@@ -201,6 +201,7 @@ import { runRipperWait5PaperShadow, renderRipperWait5PaperShadow } from './token
 import { runRipperGateLoosenShadowReport, renderRipperGateLoosenShadowReport } from './token-grab/ripperGateLoosenShadowReport';
 import { runRipperLooseExtraObservationPlan, renderRipperLooseExtraObservationPlan } from './token-grab/ripperLooseExtraObservationPlan';
 import { runRipperLooseExtraObservationFollowup, renderRipperLooseExtraObservationFollowup } from './token-grab/ripperLooseExtraObservationFollowup';
+import { runRipperLooseExtraForwardEnroll, renderRipperLooseExtraForwardEnroll } from './token-grab/ripperLooseExtraForwardEnroll';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3918,6 +3919,42 @@ async function main(): Promise<void> {
           outPath:          rleopOutPath,
         });
         console.log(renderRipperLooseExtraObservationPlan(rleopResult));
+        break;
+      }
+
+      case 'token:ripper-loose-extra-forward-enroll': {
+        const rlefe_appIdx = process.argv.indexOf('--approvals');
+        const rlefe_appPaths: string[] = [];
+        if (rlefe_appIdx !== -1) {
+          for (let i = rlefe_appIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rlefe_appPaths.push(process.argv[i]);
+          }
+        }
+        const rlefe_obsIdx = process.argv.indexOf('--observations');
+        const rlefe_obsPaths: string[] = [];
+        if (rlefe_obsIdx !== -1) {
+          for (let i = rlefe_obsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rlefe_obsPaths.push(process.argv[i]);
+          }
+        }
+        const rlefe_outIdx  = process.argv.indexOf('--out');
+        const rlefe_outPath = rlefe_outIdx !== -1 ? process.argv[rlefe_outIdx + 1] : null;
+        const rlefe_maxAgeIdx = process.argv.indexOf('--max-age-minutes');
+        const rlefe_maxAge = rlefe_maxAgeIdx !== -1 ? parseInt(process.argv[rlefe_maxAgeIdx + 1], 10) : undefined;
+        if (!rlefe_outPath) {
+          console.error('[token:ripper-loose-extra-forward-enroll] --out <path> is required.');
+          console.error('  Usage: npm run token:ripper-loose-extra-forward-enroll -- --approvals data/token-grab/ripper/cycles/cycle-*.jsonl --observations data/token-grab/ripper/observations/*.jsonl --out data/token-grab/ripper/loose-extra-forward-enroll.jsonl');
+          process.exit(1);
+        }
+        const rlefe_result = runRipperLooseExtraForwardEnroll({
+          approvalPaths:    rlefe_appPaths,
+          observationPaths: rlefe_obsPaths,
+          outPath:          rlefe_outPath,
+          maxAgeMinutes:    rlefe_maxAge,
+        });
+        console.log(renderRipperLooseExtraForwardEnroll(rlefe_result));
         break;
       }
 
