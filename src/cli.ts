@@ -202,6 +202,7 @@ import { runRipperGateLoosenShadowReport, renderRipperGateLoosenShadowReport } f
 import { runRipperLooseExtraObservationPlan, renderRipperLooseExtraObservationPlan } from './token-grab/ripperLooseExtraObservationPlan';
 import { runRipperLooseExtraObservationFollowup, renderRipperLooseExtraObservationFollowup } from './token-grab/ripperLooseExtraObservationFollowup';
 import { runRipperLooseExtraForwardEnroll, renderRipperLooseExtraForwardEnroll } from './token-grab/ripperLooseExtraForwardEnroll';
+import { runRipperLooseExtraObservationCapture, renderRipperLooseExtraObservationCapture } from './token-grab/ripperLooseExtraObservationCapture';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3919,6 +3920,27 @@ async function main(): Promise<void> {
           outPath:          rleopOutPath,
         });
         console.log(renderRipperLooseExtraObservationPlan(rleopResult));
+        break;
+      }
+
+      case 'token:ripper-loose-extra-observation-capture': {
+        const rleofc_enrollIdx = process.argv.indexOf('--enroll');
+        const rleofc_enrollPath = rleofc_enrollIdx !== -1 ? process.argv[rleofc_enrollIdx + 1] : null;
+        const rleofc_obsDirIdx = process.argv.indexOf('--observations-dir');
+        const rleofc_obsDir    = rleofc_obsDirIdx !== -1 ? process.argv[rleofc_obsDirIdx + 1] : null;
+        const rleofc_prefixIdx = process.argv.indexOf('--out-prefix');
+        const rleofc_prefix    = rleofc_prefixIdx !== -1 ? process.argv[rleofc_prefixIdx + 1] : 'loose-extra-obs';
+        if (!rleofc_enrollPath || !rleofc_obsDir) {
+          console.error('[token:ripper-loose-extra-observation-capture] --enroll and --observations-dir are required.');
+          console.error('  Usage: npm run token:ripper-loose-extra-observation-capture -- --enroll data/token-grab/ripper/loose-extra-forward-enroll.jsonl --observations-dir data/token-grab/ripper/observations --out-prefix loose-extra-obs');
+          process.exit(1);
+        }
+        const rleofc_result = await runRipperLooseExtraObservationCapture({
+          enrollPath:      rleofc_enrollPath,
+          observationsDir: rleofc_obsDir,
+          outPrefix:       rleofc_prefix,
+        });
+        console.log(renderRipperLooseExtraObservationCapture(rleofc_result));
         break;
       }
 
