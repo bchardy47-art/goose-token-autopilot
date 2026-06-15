@@ -648,3 +648,199 @@ describe('renderer', () => {
     expect(out).toContain('WINNER');
   });
 });
+
+// ── JSONL forward-enroll plan support ────────────────────────────────────────
+
+function makeEnrollRow(contract: string, opts: {
+  symbol?:          string | null;
+  score?:           number | null;
+  clusterRisk?:     string;
+  launchAgeBucket?: string | null;
+  entryDecision?:   string | null;
+  firstSeenAt?:     string;
+}= {}): object {
+  const firstSeenAt = opts.firstSeenAt ?? T0;
+  const base = Date.parse(firstSeenAt);
+  return {
+    symbol:          opts.symbol          ?? null,
+    contract,
+    score:           opts.score           ?? 70,
+    launchAgeBucket: opts.launchAgeBucket ?? 'PRIME_WINDOW',
+    entryDecision:   opts.entryDecision   ?? 'WATCH',
+    clusterRisk:     opts.clusterRisk     ?? 'CLEAN',
+    firstSeenAt,
+    enrolledAt:      T0,
+    policyName:      'LOOSE_60_WATCH',
+    status:          'FORWARD_OBSERVATION_ENROLLED',
+    checkpoints: [
+      { label: '+5m',   targetAt: new Date(base + 5   * 60_000).toISOString() },
+      { label: '+15m',  targetAt: new Date(base + 15  * 60_000).toISOString() },
+      { label: '+30m',  targetAt: new Date(base + 30  * 60_000).toISOString() },
+      { label: '+60m',  targetAt: new Date(base + 60  * 60_000).toISOString() },
+      { label: '+120m', targetAt: new Date(base + 120 * 60_000).toISOString() },
+    ],
+  };
+}
+
+function writeEnrollJsonl(name: string, rows: object[]): string {
+  const p = path.join(tmpDir, name);
+  fs.writeFileSync(p, rows.map(r => JSON.stringify(r)).join('\n') + '\n');
+  return p;
+}
+
+describe('JSONL forward-enroll plan', () => {
+  it('parses a JSONL enroll file and produces followup rows', () => {
+    const enroll = writeEnrollJsonl('enroll.jsonl', [makeEnrollRow('AAAA')]);
+    const r = runRipperLooseExtraObservationFollowup({
+      planPath: enroll, observationPaths: [], outPath: outPath(),
+    });
+    expect(r.rowsWritten).toBe(5); // 1 candidate × 5 checkpoints
+    expect(r.summary.candidatesInPlan).toBe(1);
+  });
+
+  it('enroll rows produce correct checkpoint labels', () => {
+    const enroll = writeEnrollJsonl('enroll.jsonl', [makeEnrollRow('AAAA')]);
+    const op     = outPath();
+    runRipperLooseExtraObservationFollowup({
+      planPath: enroll, observationPaths: [], outPath: op,
+    });
+    const labels = readRows(op).map(r => r.checkpointLabel);
+    expect(labels).toEqual(['+5m', '+15m', '+30m', '+60m', '+120m']);
+  });
+
+  it('carries identity fields from enroll row into followup rows', () => {
+    const enroll = writeEnrollJsonl('enroll.jsonl', [
+      makeEnrollRow('AAAA', { symbol: 'ENRTOK', score: 77, clusterRisk: 'WATCH' }),
+    ]);
+    const op = outPath();
+    runRipperLooseExtraObservationFollowup({
+      planPath: enroll, observationPaths: [], outPath: op,
+    });
+    const row = readRows(op)[0];
+    expect(row.contract).toBe('AAAA');
+    expect(row.symbol).toBe('ENRTOK');
+    expect(row.score).toBe(77);
+    expect(row.clusterRisk).toBe('WATCH');
+    expect(row.policyName).toBe('LOOSE_60_WATCH');
+  });
+
+  it('JSONL enroll plan finds OBSERVED when matching observation exists', () => {
+    const enroll = writeEnrollJsonl('enroll.jsonl', [makeEnrollRow('AAAA')]);
+    const obs    = writeJsonl('obs.jsonl', [
+      makeObsRow({ contract: 'AAAA', capturedAt: CP5M, priceChangePct: 6.5 }),
+    ]);
+    const op = outPath();
+    runRipperLooseExtraObservationFollowup({
+      planPath: enroll, observationPaths: [obs], outPath: op,
+    });
+    const row = readRows(op).find(r => r.checkpointLabel === '+5m')!;
+    expect(row.status).toBe('OBSERVED');
+    expect(row.priceChangePct).toBe(6.5);
+  });
+
+  it('JSONL enroll plan marks MISSING_OBSERVATION when no obs', () => {
+    const enroll = writeEnrollJsonl('enroll.jsonl', [makeEnrollRow('AAAA')]);
+    const r = runRipperLooseExtraObservationFollowup({
+      planPath: enroll, observationPaths: [], outPath: outPath(),
+    });
+    expect(r.summary.checkpointsMissing).toBe(5);
+  });
+
+  it('handles multiple enroll rows', () => {
+    const enroll = writeEnrollJsonl('enroll.jsonl', [
+      makeEnrollRow('AAAA'), makeEnrollRow('BBBB'),
+    ]);
+    const r = runRipperLooseExtraObservationFollowup({
+      planPath: enroll, observationPaths: [], outPath: outPath(),
+    });
+    expect(r.rowsWritten).toBe(10); // 2 × 5
+    expect(r.summary.candidatesInPlan).toBe(2);
+  });
+
+  it('safety fields are present when using JSONL plan', () => {
+    const enroll = writeEnrollJsonl('enroll.jsonl', [makeEnrollRow('AAAA')]);
+    const r = runRipperLooseExtraObservationFollowup({
+      planPath: enroll, observationPaths: [], outPath: outPath(),
+    });
+    expect(r.reportOnly).toBe(true);
+    expect(r.readOnly).toBe(true);
+    expect(r.tradingExecuted).toBe(0);
+    expect(r.realTradingLocked).toBe(true);
+    expect(r.paperOnly).toBe(true);
+  });
+});
+
+// ── JSON plan still works ─────────────────────────────────────────────────────
+
+describe('JSON plan backward compatibility', () => {
+  it('existing JSON plan file still parses correctly', () => {
+    const plan = writePlan([makeCandidate('AAAA', { symbol: 'JSONTOK', score: 68 })]);
+    const r    = runRipperLooseExtraObservationFollowup({
+      planPath: plan, observationPaths: [], outPath: outPath(),
+    });
+    expect(r.rowsWritten).toBe(5);
+    expect(r.summary.candidatesInPlan).toBe(1);
+  });
+
+  it('JSON plan candidate fields are preserved', () => {
+    const plan = writePlan([makeCandidate('AAAA', { symbol: 'JSONTOK', score: 68, clusterRisk: 'WATCH' })]);
+    const op   = outPath();
+    runRipperLooseExtraObservationFollowup({
+      planPath: plan, observationPaths: [], outPath: op,
+    });
+    const row = readRows(op)[0];
+    expect(row.symbol).toBe('JSONTOK');
+    expect(row.score).toBe(68);
+    expect(row.clusterRisk).toBe('WATCH');
+  });
+
+  it('JSON plan with observation finds OBSERVED', () => {
+    const plan = writePlan([makeCandidate('AAAA')]);
+    const obs  = writeJsonl('obs.jsonl', [
+      makeObsRow({ contract: 'AAAA', capturedAt: CP5M, priceChangePct: 4.2 }),
+    ]);
+    const op = outPath();
+    runRipperLooseExtraObservationFollowup({
+      planPath: plan, observationPaths: [obs], outPath: op,
+    });
+    expect(readRows(op).find(r => r.checkpointLabel === '+5m')?.status).toBe('OBSERVED');
+  });
+});
+
+// ── Malformed JSONL plan ──────────────────────────────────────────────────────
+
+describe('malformed JSONL plan', () => {
+  it('throws a clear error with line number for malformed JSONL line', () => {
+    const p = path.join(tmpDir, 'bad.jsonl');
+    // Line 1 valid, line 2 malformed
+    fs.writeFileSync(p,
+      JSON.stringify(makeEnrollRow('AAAA')) + '\n' +
+      'NOT_VALID_JSON\n',
+    );
+    expect(() =>
+      runRipperLooseExtraObservationFollowup({
+        planPath: p, observationPaths: [], outPath: outPath(),
+      })
+    ).toThrow(/line 2/i);
+  });
+
+  it('error message identifies the command context', () => {
+    const p = path.join(tmpDir, 'bad2.jsonl');
+    fs.writeFileSync(p, 'BROKEN\n');
+    expect(() =>
+      runRipperLooseExtraObservationFollowup({
+        planPath: p, observationPaths: [], outPath: outPath(),
+      })
+    ).toThrow(/ripper-loose-extra-observation-followup/);
+  });
+
+  it('single malformed line on line 1 throws with line 1 in message', () => {
+    const p = path.join(tmpDir, 'bad3.jsonl');
+    fs.writeFileSync(p, '{broken\n');
+    expect(() =>
+      runRipperLooseExtraObservationFollowup({
+        planPath: p, observationPaths: [], outPath: outPath(),
+      })
+    ).toThrow(/line 1/i);
+  });
+});

@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { LooseExtraObservationPlan } from './ripperLooseExtraObservationPlan';
+import type { ForwardEnrollRow } from './ripperLooseExtraForwardEnroll';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -59,6 +60,19 @@ export interface RipperLooseExtraObservationFollowupResult {
   paperOnly:         true;
 }
 
+// ── Internal plan candidate ───────────────────────────────────────────────────
+
+interface PlanCandidate {
+  symbol:          string | null;
+  contract:        string;
+  score:           number | null;
+  clusterRisk:     string;
+  launchAgeBucket: string | null;
+  entryDecision:   string | null;
+  policyName:      string;
+  checkpoints:     Array<{ label: string; targetAt: string }>;
+}
+
 // ── Internal observation row ───────────────────────────────────────────────────
 
 interface ObsRow {
@@ -68,6 +82,64 @@ interface ObsRow {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+function enrollRowToCandidate(row: ForwardEnrollRow): PlanCandidate {
+  return {
+    symbol:          row.symbol,
+    contract:        row.contract,
+    score:           row.score,
+    clusterRisk:     row.clusterRisk,
+    launchAgeBucket: row.launchAgeBucket,
+    entryDecision:   row.entryDecision,
+    policyName:      row.policyName,
+    checkpoints:     row.checkpoints,
+  };
+}
+
+function loadCandidates(planPath: string): PlanCandidate[] {
+  if (!fs.existsSync(planPath)) return [];
+
+  const raw = fs.readFileSync(planPath, 'utf-8');
+
+  // Try JSON plan format: parse the whole file as a single object.
+  // If it succeeds and has a "candidates" array, it's a LooseExtraObservationPlan.
+  let asJson: unknown;
+  try { asJson = JSON.parse(raw); } catch { asJson = undefined; }
+
+  if (
+    asJson !== undefined &&
+    typeof asJson === 'object' && asJson !== null &&
+    'candidates' in (asJson as object)
+  ) {
+    const plan = asJson as LooseExtraObservationPlan;
+    return (plan.candidates ?? []).map(c => ({
+      symbol:          c.symbol,
+      contract:        c.contract,
+      score:           c.score,
+      clusterRisk:     c.clusterRisk,
+      launchAgeBucket: c.launchAgeBucket,
+      entryDecision:   c.entryDecision,
+      policyName:      c.policyName,
+      checkpoints:     c.checkpoints,
+    }));
+  }
+
+  // JSONL forward-enroll format (one ForwardEnrollRow per line)
+  const lines = raw.split('\n').filter(l => l.trim().length > 0);
+  return lines.map((line, i) => {
+    let row: ForwardEnrollRow;
+    try {
+      row = JSON.parse(line) as ForwardEnrollRow;
+    } catch (err) {
+      throw new Error(
+        `[ripper-loose-extra-observation-followup] Failed to parse JSONL plan line ${i + 1}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+    return enrollRowToCandidate(row);
+  });
+}
 
 function readObservationRows(paths: string[]): ObsRow[] {
   const rows: ObsRow[] = [];
@@ -112,12 +184,7 @@ function buildObsByContract(paths: string[]): Map<string, ObsRow[]> {
 export function runRipperLooseExtraObservationFollowup(
   options: RipperLooseExtraObservationFollowupOptions,
 ): RipperLooseExtraObservationFollowupResult {
-  let plan: LooseExtraObservationPlan | null = null;
-  if (fs.existsSync(options.planPath)) {
-    plan = JSON.parse(fs.readFileSync(options.planPath, 'utf-8')) as LooseExtraObservationPlan;
-  }
-
-  const candidates   = plan?.candidates ?? [];
+  const candidates   = loadCandidates(options.planPath);
   const byContract   = buildObsByContract(options.observationPaths);
   const followupRows: FollowupRow[] = [];
 
