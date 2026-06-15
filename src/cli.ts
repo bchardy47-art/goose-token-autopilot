@@ -198,6 +198,7 @@ import { runRipperApprovalFollowPaperPlan, renderRipperApprovalFollowPaperPlan }
 import { runRipperApprovalFollowPaperSession, renderRipperApprovalFollowPaperSession } from './token-grab/ripperApprovalFollowPaperSession';
 import { runRipperApprovalFollowPaperSessionReport, renderRipperApprovalFollowPaperSessionReport } from './token-grab/ripperApprovalFollowPaperSessionReport';
 import { runRipperWait5PaperShadow, renderRipperWait5PaperShadow } from './token-grab/ripperWait5PaperShadow';
+import { runRipperGateLoosenShadowReport, renderRipperGateLoosenShadowReport } from './token-grab/ripperGateLoosenShadowReport';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3852,6 +3853,36 @@ async function main(): Promise<void> {
           process.exit(1);
         }
         console.log(renderRipperWait5PaperShadow(runRipperWait5PaperShadow(rw5Path)));
+        break;
+      }
+
+      case 'token:ripper-gate-loosen-shadow-report': {
+        const rglsrObsIdx = process.argv.indexOf('--observations');
+        const rglsrObsPaths: string[] = [];
+        if (rglsrObsIdx !== -1) {
+          for (let i = rglsrObsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rglsrObsPaths.push(process.argv[i]);
+          }
+        }
+        const rglsrApprovalsIdx = process.argv.indexOf('--approvals');
+        const rglsrApprovalPaths: string[] = [];
+        if (rglsrApprovalsIdx !== -1) {
+          for (let i = rglsrApprovalsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rglsrApprovalPaths.push(process.argv[i]);
+          }
+        }
+        if (rglsrObsPaths.length === 0 && rglsrApprovalPaths.length === 0) {
+          console.error('[token:ripper-gate-loosen-shadow-report] --approvals or --observations required.');
+          console.error('  Usage: npm run token:ripper-gate-loosen-shadow-report -- --approvals data/token-grab/ripper/cycles/cycle-*.jsonl --observations data/token-grab/ripper/observations/*.jsonl');
+          process.exit(1);
+        }
+        const rglsrResult = runRipperGateLoosenShadowReport({
+          approvalPaths:    rglsrApprovalPaths,
+          observationPaths: rglsrObsPaths,
+        });
+        console.log(renderRipperGateLoosenShadowReport(rglsrResult));
         break;
       }
 
