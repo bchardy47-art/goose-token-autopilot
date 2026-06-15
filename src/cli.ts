@@ -210,6 +210,10 @@ import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/
 import { runOutcomeWatchSession, renderOutcomeWatchSessionReport } from './token-grab/outcomeWatchSession';
 import { runResolvedLedger, renderResolvedLedgerReport } from './token-grab/resolvedCandidateLedger';
 import { runLedgerAnalytics, renderLedgerAnalyticsReport } from './token-grab/ledgerAnalytics';
+import { runRipperPaperAutopilotCycle, renderRipperPaperAutopilotCycle } from './token-grab/ripperPaperAutopilotCycle';
+import { runRipperPaperExitPolicyReport, renderRipperPaperExitPolicyReport } from './token-grab/ripperPaperExitPolicyReport';
+import { runRipperRealVsFakeAutopsy, renderRipperRealVsFakeAutopsy } from './token-grab/ripperRealVsFakeAutopsy';
+import { runRipperAutopilotStatus, renderRipperAutopilotStatus } from './token-grab/ripperAutopilotStatus';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -3274,17 +3278,80 @@ async function main(): Promise<void> {
         const raetrOut = raetrOutIdx !== -1
           ? process.argv[raetrOutIdx + 1]
           : 'data/token-grab/ripper/approved-entry-timing-report.jsonl';
+        const raetrMinObsIdx = process.argv.indexOf('--min-observed');
+        const raetrMinObserved = raetrMinObsIdx !== -1
+          ? parseInt(process.argv[raetrMinObsIdx + 1], 10)
+          : undefined;
         if (raetrApprovalPaths.length === 0) {
           console.error('[token:ripper-approved-entry-timing-report] No --approvals files specified.');
-          console.error('  Usage: npm run token:ripper-approved-entry-timing-report -- --approvals data/token-grab/ripper/cycles/cycle-*.jsonl --observations data/token-grab/ripper/observations/*.jsonl --out data/token-grab/ripper/approved-entry-timing-report.jsonl');
+          console.error('  Usage: npm run token:ripper-approved-entry-timing-report -- --approvals data/token-grab/ripper/cycles/cycle-*.jsonl --observations data/token-grab/ripper/observations/*.jsonl --out data/token-grab/ripper/approved-entry-timing-report.jsonl [--min-observed 5]');
           process.exit(1);
         }
         const raetrResult = runRipperApprovedEntryTimingReport({
           approvalPaths:    raetrApprovalPaths,
           observationPaths: raetrObsPaths,
           outPath:          raetrOut,
+          minObserved:      raetrMinObserved,
         });
         console.log(renderRipperApprovedEntryTimingReport(raetrResult));
+        break;
+      }
+
+      case 'token:ripper-paper-autopilot-cycle': {
+        const rpacCyclesDir    = getArgValue('--cycles-dir')       ?? 'data/token-grab/ripper/cycles';
+        const rpacObsDir       = getArgValue('--observations-dir') ?? 'data/token-grab/ripper/observations';
+        const rpacIntents      = getArgValue('--intents')          ?? 'data/token-grab/ripper/paper-intents.jsonl';
+        const rpacMaxAge       = parseNumberArg('--max-age-minutes', 20, { min: 0 });
+        const rpacDryRun       = process.argv.includes('--dry-run');
+        const rpacResult       = runRipperPaperAutopilotCycle({
+          cyclesDir:       rpacCyclesDir,
+          observationsDir: rpacObsDir,
+          intentsPath:     rpacIntents,
+          maxAgeMinutes:   rpacMaxAge,
+          dryRun:          rpacDryRun,
+        });
+        console.log(renderRipperPaperAutopilotCycle(rpacResult));
+        break;
+      }
+
+      case 'token:ripper-paper-exit-policy-report': {
+        const rpepIntents = getArgValue('--intents')
+          ?? 'data/token-grab/ripper/paper-intents.jsonl';
+        const rpepObsPaths = getArgValues('--observations');
+        const rpepOut      = getArgValue('--out')
+          ?? 'data/token-grab/ripper/paper-exit-policy-report.jsonl';
+        const rpepResult   = runRipperPaperExitPolicyReport({
+          intentsPath:      rpepIntents,
+          observationPaths: rpepObsPaths,
+          outPath:          rpepOut,
+        });
+        console.log(renderRipperPaperExitPolicyReport(rpepResult));
+        break;
+      }
+
+      case 'token:ripper-real-vs-fake-autopsy': {
+        const rvfaCycles = getArgValues('--cycles');
+        const rvfaObs    = getArgValues('--observations');
+        const rvfaOut    = getArgValue('--out')
+          ?? 'data/token-grab/ripper/real-vs-fake-autopsy.jsonl';
+        const rvfaResult = runRipperRealVsFakeAutopsy({
+          cyclePaths:       rvfaCycles,
+          observationPaths: rvfaObs,
+          outPath:          rvfaOut,
+        });
+        console.log(renderRipperRealVsFakeAutopsy(rvfaResult));
+        break;
+      }
+
+      case 'token:ripper-autopilot-status': {
+        const rasResult = runRipperAutopilotStatus({
+          cyclesDir:        getArgValue('--cycles-dir')        ?? 'data/token-grab/ripper/cycles',
+          intentsPath:      getArgValue('--intents')           ?? 'data/token-grab/ripper/paper-intents.jsonl',
+          timingReportPath: getArgValue('--timing-report')     ?? 'data/token-grab/ripper/approved-entry-timing-report.jsonl',
+          exitPolicyPath:   getArgValue('--exit-policy-report') ?? 'data/token-grab/ripper/paper-exit-policy-report.jsonl',
+          realVsFakePath:   getArgValue('--real-vs-fake')      ?? 'data/token-grab/ripper/real-vs-fake-autopsy.jsonl',
+        });
+        console.log(renderRipperAutopilotStatus(rasResult));
         break;
       }
 
