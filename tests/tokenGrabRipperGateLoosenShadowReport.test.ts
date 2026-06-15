@@ -189,6 +189,24 @@ describe('extra candidate observation coverage', () => {
   });
 });
 
+describe('extra observation tracker', () => {
+  it('builds DRY-RUN tracker rows for extras missing later observations', () => {
+    const approvals = writeJsonl('approvals.jsonl', [makeFixture({ contract: 'CUR', buyGateDecision: 'BUY_APPROVED_PAPER' })]);
+    const obsFile = writeJsonl('obs.jsonl', [
+      loose60('MISS1', T0, { symbol: 'MISS1', ripperScore: 66 }),
+      agg55('MISS2', at(60_000), { symbol: 'MISS2', ripperScore: 58 }),
+      obs('MISS2', at(60_000), 0.1),
+    ]);
+    const r = runRipperGateLoosenShadowReport({ approvalPaths: [approvals], observationPaths: [obsFile] });
+    expect(r.extraObservationTracker.totalMissingExtrasShown).toBe(2);
+    expect(r.extraObservationTracker.totalMissingExtrasLoose60).toBe(2);
+    expect(r.extraObservationTracker.dryRunEnrollmentShownCount).toBe(2);
+    expect(r.extraObservationTracker.displayLimit).toBe(15);
+    expect(r.extraObservationTracker.decision).toBe('OBSERVATION_COVERAGE_REQUIRED');
+    expect(r.extraObservationTracker.rows[0].suggestedCadenceMins).toEqual([5, 15, 30, 60, 120]);
+  });
+});
+
 describe('renderer', () => {
   it('includes EXTRA CANDIDATE OBSERVATION COVERAGE and DECISION sections', () => {
     const p = writeJsonl('obs.jsonl', [
@@ -201,6 +219,21 @@ describe('renderer', () => {
     expect(out).toContain('DECISION');
     expect(out).toContain('HOLD_CURRENT_GATES');
     expect(out).toContain('No threshold decision can be made from NO_LATER_DATA extras.');
+  });
+
+  it('includes extra observation tracker dry-run section with shown/of clarity', () => {
+    const approvals = writeJsonl('approvals.jsonl', [makeFixture({ contract: 'CUR', buyGateDecision: 'BUY_APPROVED_PAPER' })]);
+    const obsRows: object[] = [];
+    for (let i = 0; i < 20; i++) obsRows.push(loose60(`MISS${i}`, at(i * 60_000), { symbol: `M${i}` }));
+    const obsFile = writeJsonl('obs.jsonl', obsRows);
+    const r = runRipperGateLoosenShadowReport({ approvalPaths: [approvals], observationPaths: [obsFile] });
+    const out = renderRipperGateLoosenShadowReport(r);
+    expect(out).toContain('EXTRA OBSERVATION TRACKER (DRY RUN ONLY)');
+    expect(out).toContain('Missing loosen-shadow extras shown : 15 of 20');
+    expect(out).toContain('Dry-run enroll shown              : 15 of 20');
+    expect(out).toContain('Display limit                     : 15');
+    expect(out).toContain('OBSERVATION_COVERAGE_REQUIRED');
+    expect(out).toContain('HOLD_CURRENT_GATES');
   });
 
   it('includes missing later observation reasons when present', () => {

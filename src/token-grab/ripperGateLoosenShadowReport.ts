@@ -45,6 +45,20 @@ export interface ExtraCandidateObservationCoverage {
   decision:                   'CURRENT_BASELINE_ONLY' | 'NO_EXTRA_CANDIDATES' | 'HOLD_CURRENT_GATES' | 'COVERAGE_OK_REVIEW_ONLY';
 }
 
+export interface ExtraObservationTrackerRow {
+  policy:               PolicyName;
+  symbol:               string | null;
+  contractShort:        string;
+  contractKey:          string;
+  score:                number | null;
+  firstSeenAt:          string;
+  launchAgeBucket:      string | null;
+  entryDecision:        string | null;
+  clusterRisk:          string;
+  missingReason:        MissingLaterObservationReason;
+  suggestedCadenceMins: number[];
+}
+
 export interface PolicyStats {
   policy:              PolicyName;
   totalCandidates:     number;
@@ -73,6 +87,15 @@ export interface RipperGateLoosenShadowReportResult {
   current:           PolicyStats;
   loose60:           PolicyStats;
   aggressive55:      PolicyStats;
+  extraObservationTracker: {
+    totalMissingExtrasShown: number;
+    totalMissingExtrasLoose60: number;
+    totalMissingExtrasAggressive55: number;
+    displayLimit: number;
+    rows: ExtraObservationTrackerRow[];
+    decision: 'OBSERVATION_COVERAGE_REQUIRED' | 'CURRENT_BASELINE_ONLY';
+    dryRunEnrollmentShownCount: number;
+  };
   reportOnly:        true;
   readOnly:          true;
   tradingExecuted:   0;
@@ -84,6 +107,7 @@ export interface RipperGateLoosenShadowReportResult {
 
 const DANGER_TERMS = ['dangerous', 'rug', 'blacklist', 'honeypot', 'freeze', 'mint authority'];
 const SAFE_EXTRA_COVERAGE_THRESHOLD_PCT = 70;
+const EXTRA_TRACKER_DISPLAY_LIMIT = 15;
 
 function signalKey(s: RipperEarSignal): string {
   return s.contract ?? s.tokenAddress ?? s.poolAddress ?? s.id;
@@ -347,7 +371,7 @@ export function runRipperGateLoosenShadowReport(
       avgBestLaterMove:     avg(bestMoves),
       medianBestLaterMove:  median(bestMoves),
       worstLaterMove:       bestMoves.length > 0 ? Math.min(...bestMoves) : null,
-      topExtras:            extraCandidates.slice(0, 15),
+      topExtras:            extraCandidates.slice(0, EXTRA_TRACKER_DISPLAY_LIMIT),
       extraObservationCoverage: {
         totalExtras,
         extrasWithLaterObs,
@@ -367,11 +391,49 @@ export function runRipperGateLoosenShadowReport(
   const loose60      = computeStats(loose60Map, 'LOOSE_60_WATCH', currentKeys);
   const aggressive55 = computeStats(aggressive55Map, 'AGGRESSIVE_55_WATCH', currentKeys);
 
+  const trackerRows: ExtraObservationTrackerRow[] = [];
+  const trackerSeen = new Set<string>();
+
+  for (const [policy, extras] of [
+    ['LOOSE_60_WATCH', loose60.topExtras] as const,
+    ['AGGRESSIVE_55_WATCH', aggressive55.topExtras] as const,
+  ]) {
+    for (const e of extras) {
+      if (e.verdict !== 'NO_LATER_DATA' || !e.missingLaterObservationReason) continue;
+      if (trackerSeen.has(e.contractKey)) continue;
+      trackerSeen.add(e.contractKey);
+      trackerRows.push({
+        policy,
+        symbol: e.symbol,
+        contractShort: e.contractShort,
+        contractKey: e.contractKey,
+        score: e.score,
+        firstSeenAt: e.firstSeenAt,
+        launchAgeBucket: e.launchAgeBucket,
+        entryDecision: e.entryDecision,
+        clusterRisk: e.clusterRisk,
+        missingReason: e.missingLaterObservationReason,
+        suggestedCadenceMins: [5, 15, 30, 60, 120],
+      });
+    }
+  }
+
+  trackerRows.sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt));
+
   return {
     generatedAt,
     current,
     loose60,
     aggressive55,
+    extraObservationTracker: {
+      totalMissingExtrasShown: trackerRows.length,
+      totalMissingExtrasLoose60: loose60.extraObservationCoverage.extrasWithoutLaterObs,
+      totalMissingExtrasAggressive55: aggressive55.extraObservationCoverage.extrasWithoutLaterObs,
+      displayLimit: EXTRA_TRACKER_DISPLAY_LIMIT,
+      rows: trackerRows,
+      decision: trackerRows.length > 0 ? 'OBSERVATION_COVERAGE_REQUIRED' : 'CURRENT_BASELINE_ONLY',
+      dryRunEnrollmentShownCount: trackerRows.length,
+    },
     reportOnly:        true,
     readOnly:          true,
     tradingExecuted:   0,
@@ -511,6 +573,33 @@ export function renderRipperGateLoosenShadowReport(
   renderPolicy(result.current);
   renderPolicy(result.loose60);
   renderPolicy(result.aggressive55);
+
+  lines.push(`  ${SEP2}`);
+  lines.push('  EXTRA OBSERVATION TRACKER (DRY RUN ONLY)');
+  lines.push(`  ${SEP2}`);
+  lines.push(`  Missing loosen-shadow extras shown : ${result.extraObservationTracker.totalMissingExtrasShown} of ${result.extraObservationTracker.totalMissingExtrasLoose60}`);
+  lines.push(`  Dry-run enroll shown              : ${result.extraObservationTracker.dryRunEnrollmentShownCount} of ${result.extraObservationTracker.totalMissingExtrasLoose60}`);
+  lines.push(`  Display limit                     : ${result.extraObservationTracker.displayLimit}`);
+  if (result.extraObservationTracker.totalMissingExtrasAggressive55 !== result.extraObservationTracker.totalMissingExtrasLoose60) {
+    lines.push(`  Aggressive missing extras total   : ${result.extraObservationTracker.totalMissingExtrasAggressive55}`);
+  }
+  lines.push(`  Decision                          : ${result.extraObservationTracker.decision}`);
+  if (result.extraObservationTracker.decision === 'OBSERVATION_COVERAGE_REQUIRED') {
+    lines.push('  HOLD_CURRENT_GATES');
+    lines.push('  No threshold decision can be made from NO_LATER_DATA extras.');
+  }
+  if (result.extraObservationTracker.rows.length > 0) {
+    lines.push('');
+    lines.push('  sym/addr        score   policy               launch         entry                 cluster   missingReason                          cadence');
+    lines.push(`  ${'─'.repeat(128)}`);
+    for (const row of result.extraObservationTracker.rows.slice(0, 20)) {
+      const label = (row.symbol ? `$${row.symbol}` : row.contractShort).padEnd(14);
+      lines.push(
+        `  ${label}  ${fmtN(row.score).padStart(5)}  ${row.policy.padEnd(19)}  ${(row.launchAgeBucket ?? 'n/a').padEnd(13)}  ${(row.entryDecision ?? 'n/a').padEnd(20)}  ${row.clusterRisk.padEnd(8)}  ${row.missingReason.padEnd(36)}  ${row.suggestedCadenceMins.join('/')}`,
+      );
+    }
+  }
+  lines.push('');
 
   lines.push(`  ${SEP2}`);
   lines.push('  SAFETY');
