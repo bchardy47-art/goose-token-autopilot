@@ -178,6 +178,7 @@ import { runRipperNearMissReport as runCycleNearMissReport, renderRipperNearMiss
 import { runRipperApprovedOutcomes, renderRipperApprovedOutcomes, renderRipperApprovedOutcomesUsage } from './token-grab/ripperApprovedOutcomes';
 import { runRipperApprovedAutopsy, renderRipperApprovedAutopsy } from './token-grab/ripperApprovedAutopsy';
 import { runRipperEntrySim, renderRipperEntrySim } from './token-grab/ripperEntrySim';
+import { runRipperApprovedEntryTimingReport, renderRipperApprovedEntryTimingReport } from './token-grab/ripperApprovedEntryTimingReport';
 import { runRipperDelayedWatch, renderRipperDelayedWatch } from './token-grab/ripperDelayedWatch';
 import { runRipperApprovedObservationAutopsy, renderRipperApprovedObservationAutopsy } from './token-grab/ripperApprovedObservationAutopsy';
 import { runRipperExitSim, renderRipperExitSim } from './token-grab/ripperExitSim';
@@ -3249,6 +3250,41 @@ async function main(): Promise<void> {
           outcomePaths: resOutcomePaths.length > 0 ? resOutcomePaths : undefined,
         });
         console.log(renderRipperEntrySim(resResult));
+        break;
+      }
+
+      case 'token:ripper-approved-entry-timing-report': {
+        const raetrApprovalsIdx = process.argv.indexOf('--approvals');
+        const raetrApprovalPaths: string[] = [];
+        if (raetrApprovalsIdx !== -1) {
+          for (let i = raetrApprovalsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            raetrApprovalPaths.push(process.argv[i]);
+          }
+        }
+        const raetrObsIdx = process.argv.indexOf('--observations');
+        const raetrObsPaths: string[] = [];
+        if (raetrObsIdx !== -1) {
+          for (let i = raetrObsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            raetrObsPaths.push(process.argv[i]);
+          }
+        }
+        const raetrOutIdx = process.argv.indexOf('--out');
+        const raetrOut = raetrOutIdx !== -1
+          ? process.argv[raetrOutIdx + 1]
+          : 'data/token-grab/ripper/approved-entry-timing-report.jsonl';
+        if (raetrApprovalPaths.length === 0) {
+          console.error('[token:ripper-approved-entry-timing-report] No --approvals files specified.');
+          console.error('  Usage: npm run token:ripper-approved-entry-timing-report -- --approvals data/token-grab/ripper/cycles/cycle-*.jsonl --observations data/token-grab/ripper/observations/*.jsonl --out data/token-grab/ripper/approved-entry-timing-report.jsonl');
+          process.exit(1);
+        }
+        const raetrResult = runRipperApprovedEntryTimingReport({
+          approvalPaths:    raetrApprovalPaths,
+          observationPaths: raetrObsPaths,
+          outPath:          raetrOut,
+        });
+        console.log(renderRipperApprovedEntryTimingReport(raetrResult));
         break;
       }
 

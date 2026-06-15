@@ -131,6 +131,7 @@
     "token:ripper-loose-extra-observation-capture": "tsx src/cli.ts token:ripper-loose-extra-observation-capture",
     "token:ripper-approved-autopsy": "tsx src/cli.ts token:ripper-approved-autopsy",
     "token:ripper-entry-sim": "tsx src/cli.ts token:ripper-entry-sim",
+    "token:ripper-approved-entry-timing-report": "tsx src/cli.ts token:ripper-approved-entry-timing-report",
     "token:prime-gate-audit": "tsx src/cli.ts token:prime-gate-audit",
     "token:holder-risk-audit": "tsx src/cli.ts token:holder-risk-audit",
     "token:fixture-holder-enrich": "tsx src/cli.ts token:fixture-holder-enrich",
