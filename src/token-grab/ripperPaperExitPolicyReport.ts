@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { PaperIntent } from './ripperPaperDecisionPolicy';
 import { readPaperIntents } from './ripperPaperIntentLedger';
+import { extractRipperContract, extractRipperPriceChangePct } from './ripperExtractors';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -66,15 +67,11 @@ function readObservations(paths: string[]): Map<string, ObsEntry[]> {
     const lines = fs.readFileSync(p, 'utf-8').split('\n').filter(l => l.trim().length > 0);
     for (const line of lines) {
       try {
-        const f   = JSON.parse(line) as Record<string, unknown>;
-        const ns  = f['normalizedSignal'] as Record<string, unknown> | undefined;
-        const raw = f['raw']             as Record<string, unknown> | undefined;
-        const contract   = (ns?.['contract'] ?? raw?.['contract']) as string | undefined;
+        const f          = JSON.parse(line) as Record<string, unknown>;
+        const contract   = extractRipperContract(f);
         const capturedAt = f['capturedAt'] as string | undefined;
         if (!contract || !capturedAt) continue;
-        let pct: number | null = null;
-        if (typeof ns?.['priceChangePct'] === 'number')       pct = ns['priceChangePct']  as number;
-        else if (typeof raw?.['priceChangePct'] === 'number') pct = raw['priceChangePct'] as number;
+        const pct  = extractRipperPriceChangePct(f);
         const list = byContract.get(contract) ?? [];
         list.push({ contract, capturedAt, priceChangePct: pct });
         byContract.set(contract, list);
@@ -134,10 +131,16 @@ function computePolicyStats(
   let worstDrawdown: number | null = null;
 
   for (const intent of observedIntents) {
-    const obs = byContract.get(intent.contract) ?? [];
-    const entry = obs.find(o => o.capturedAt >= intent.targetEntryAt);
-    if (!entry || entry.priceChangePct == null) continue;
-    const pl = simulatePL(entry.priceChangePct, policy);
+    // Use stored priceChangePct (written when intent was marked OBSERVED) before obs-file lookup
+    const storedPct = (intent as Record<string, unknown>)['priceChangePct'];
+    let pct: number | null = typeof storedPct === 'number' ? storedPct : null;
+    if (pct == null) {
+      const obs   = byContract.get(intent.contract) ?? [];
+      const entry = obs.find(o => o.capturedAt >= intent.targetEntryAt);
+      if (entry && entry.priceChangePct != null) pct = entry.priceChangePct;
+    }
+    if (pct == null) continue;
+    const pl = simulatePL(pct, policy);
     simulated.push(pl);
     if (worstDrawdown == null || pl < worstDrawdown) worstDrawdown = pl;
   }

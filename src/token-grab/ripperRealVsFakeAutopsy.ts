@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { extractRipperContract, extractRipperPriceChangePct } from './ripperExtractors';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -104,7 +105,7 @@ function readApprovedFixtures(cyclePaths: string[]): RawFixture[] {
         if (f['buyGateDecision'] !== 'BUY_APPROVED_PAPER') continue;
         const ns  = f['normalizedSignal'] as Record<string, unknown> | undefined;
         const raw = f['raw']             as Record<string, unknown> | undefined;
-        const contract   = (ns?.['contract'] ?? raw?.['contract']) as string | undefined;
+        const contract   = extractRipperContract(f);
         const capturedAt = f['capturedAt'] as string | undefined;
         if (!contract || !capturedAt) continue;
         const key = `${contract}::${capturedAt}`;
@@ -136,15 +137,11 @@ function buildObsByContract(paths: string[]): Map<string, { capturedAt: string; 
     const lines = fs.readFileSync(p, 'utf-8').split('\n').filter(l => l.trim().length > 0);
     for (const line of lines) {
       try {
-        const f   = JSON.parse(line) as Record<string, unknown>;
-        const ns  = f['normalizedSignal'] as Record<string, unknown> | undefined;
-        const raw = f['raw']             as Record<string, unknown> | undefined;
-        const contract   = (ns?.['contract'] ?? raw?.['contract']) as string | undefined;
+        const f          = JSON.parse(line) as Record<string, unknown>;
+        const contract   = extractRipperContract(f);
         const capturedAt = f['capturedAt'] as string | undefined;
         if (!contract || !capturedAt) continue;
-        let pct: number | null = null;
-        if (typeof ns?.['priceChangePct'] === 'number')       pct = ns['priceChangePct']  as number;
-        else if (typeof raw?.['priceChangePct'] === 'number') pct = raw['priceChangePct'] as number;
+        const pct  = extractRipperPriceChangePct(f);
         const list = map.get(contract) ?? [];
         list.push({ capturedAt, priceChangePct: pct });
         map.set(contract, list);

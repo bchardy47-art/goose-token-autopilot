@@ -214,6 +214,7 @@ import { runRipperPaperAutopilotCycle, renderRipperPaperAutopilotCycle } from '.
 import { runRipperPaperExitPolicyReport, renderRipperPaperExitPolicyReport } from './token-grab/ripperPaperExitPolicyReport';
 import { runRipperRealVsFakeAutopsy, renderRipperRealVsFakeAutopsy } from './token-grab/ripperRealVsFakeAutopsy';
 import { runRipperAutopilotStatus, renderRipperAutopilotStatus } from './token-grab/ripperAutopilotStatus';
+import { runRipperPaperObservationDiagnostic, renderRipperPaperObservationDiagnostic } from './token-grab/ripperPaperObservationDiagnostic';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -3352,6 +3353,19 @@ async function main(): Promise<void> {
           realVsFakePath:   getArgValue('--real-vs-fake')      ?? 'data/token-grab/ripper/real-vs-fake-autopsy.jsonl',
         });
         console.log(renderRipperAutopilotStatus(rasResult));
+        break;
+      }
+
+      case 'token:ripper-paper-observation-diagnostic': {
+        const rpodIntents  = getArgValue('--intents') ?? 'data/token-grab/ripper/paper-intents.jsonl';
+        const rpodObsPaths = getArgValues('--observations');
+        const rpodCycles   = getArgValues('--cycles');
+        const rpodResult   = runRipperPaperObservationDiagnostic({
+          intentsPath:      rpodIntents,
+          observationPaths: rpodObsPaths,
+          cyclePaths:       rpodCycles,
+        });
+        console.log(renderRipperPaperObservationDiagnostic(rpodResult));
         break;
       }
 

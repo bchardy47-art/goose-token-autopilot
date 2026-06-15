@@ -12,6 +12,7 @@ import {
   type StatusUpdate,
 } from './ripperPaperIntentLedger';
 import { isPaperIntentOpen } from './ripperPaperIntentDue';
+import { extractRipperContract, extractRipperPriceChangePct } from './ripperExtractors';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -39,6 +40,8 @@ export interface RipperPaperAutopilotCycleResult {
   dueIntentsCount:      number;
   observationsCaptured: number;
   expiredNoDataCount:   number;
+  paperObsPath:         string;
+  paperObsWritten:      number;
   dryRun:               boolean;
   reportOnly:           true;
   readOnly:             true;
@@ -63,6 +66,20 @@ function findLatestCycleFile(cyclesDir: string): string | null {
   return path.join(cyclesDir, files[files.length - 1]);
 }
 
+function listAllCyclePaths(cyclesDir: string): string[] {
+  if (!fs.existsSync(cyclesDir)) return [];
+  return fs.readdirSync(cyclesDir)
+    .filter(f => f.startsWith('cycle-') && f.endsWith('.jsonl') && !f.includes('-feed'))
+    .map(f => path.join(cyclesDir, f));
+}
+
+function listObsPaths(observationsDir: string): string[] {
+  if (!fs.existsSync(observationsDir)) return [];
+  return fs.readdirSync(observationsDir)
+    .filter(f => f.endsWith('.jsonl'))
+    .map(f => path.join(observationsDir, f));
+}
+
 function readFixturesFromCycle(cycleFile: string): Record<string, unknown>[] {
   if (!fs.existsSync(cycleFile)) return [];
   const lines = fs.readFileSync(cycleFile, 'utf-8').split('\n').filter(l => l.trim().length > 0);
@@ -77,17 +94,15 @@ function extractApproved(fixtures: Record<string, unknown>[], sourceCycle: strin
   const approved: ApprovedFixtureInput[] = [];
   for (const f of fixtures) {
     if (f['buyGateDecision'] !== 'BUY_APPROVED_PAPER') continue;
-    const ns  = f['normalizedSignal'] as Record<string, unknown> | undefined;
-    const raw = f['raw']             as Record<string, unknown> | undefined;
-    const contract = (ns?.['contract'] ?? raw?.['contract']) as string | undefined;
+    const contract = extractRipperContract(f);
     if (!contract) continue;
     const capturedAt = f['capturedAt'] as string | undefined;
     if (!capturedAt) continue;
-
+    const ns  = f['normalizedSignal'] as Record<string, unknown> | undefined;
+    const raw = f['raw']             as Record<string, unknown> | undefined;
     const clusterV = raw?.['clusterRisk'];
     const clusterRisk = (clusterV === 'CLEAN' || clusterV === 'WATCH' || clusterV === 'RISKY')
       ? clusterV : 'UNKNOWN';
-
     approved.push({
       contract,
       symbol:          (ns?.['symbol'] as string | undefined) ?? null,
@@ -107,27 +122,19 @@ interface ObsEntry {
   priceChangePct: number | null;
 }
 
-function buildObsByContract(observationsDir: string): Map<string, ObsEntry[]> {
+// Build observation map from arbitrary JSONL file paths (obs dir AND cycle files).
+function buildObsFromPaths(filePaths: string[]): Map<string, ObsEntry[]> {
   const map = new Map<string, ObsEntry[]>();
-  if (!fs.existsSync(observationsDir)) return map;
-
-  const files = fs.readdirSync(observationsDir)
-    .filter(f => f.endsWith('.jsonl'))
-    .map(f => path.join(observationsDir, f));
-
-  for (const filePath of files) {
+  for (const filePath of filePaths) {
+    if (!fs.existsSync(filePath)) continue;
     const lines = fs.readFileSync(filePath, 'utf-8').split('\n').filter(l => l.trim().length > 0);
     for (const line of lines) {
       try {
-        const f   = JSON.parse(line) as Record<string, unknown>;
-        const ns  = f['normalizedSignal'] as Record<string, unknown> | undefined;
-        const raw = f['raw']             as Record<string, unknown> | undefined;
-        const contract   = (ns?.['contract'] ?? raw?.['contract']) as string | undefined;
+        const f         = JSON.parse(line) as Record<string, unknown>;
+        const contract  = extractRipperContract(f);
         const capturedAt = f['capturedAt'] as string | undefined;
         if (!contract || !capturedAt) continue;
-        let pct: number | null = null;
-        if (typeof ns?.['priceChangePct'] === 'number')       pct = ns['priceChangePct']  as number;
-        else if (typeof raw?.['priceChangePct'] === 'number') pct = raw['priceChangePct'] as number;
+        const pct = extractRipperPriceChangePct(f);
         const list = map.get(contract) ?? [];
         list.push({ capturedAt, priceChangePct: pct });
         map.set(contract, list);
@@ -145,12 +152,17 @@ function buildObsByContract(observationsDir: string): Map<string, ObsEntry[]> {
 export function runRipperPaperAutopilotCycle(
   options: RipperPaperAutopilotCycleOptions = {},
 ): RipperPaperAutopilotCycleResult {
-  const nowMs          = options.nowMs ?? Date.now();
-  const cyclesDir      = options.cyclesDir      ?? DEFAULT_CYCLES_DIR;
+  const nowMs           = options.nowMs ?? Date.now();
+  const cyclesDir       = options.cyclesDir       ?? DEFAULT_CYCLES_DIR;
   const observationsDir = options.observationsDir ?? DEFAULT_OBSERVATIONS_DIR;
-  const intentsPath    = options.intentsPath    ?? DEFAULT_INTENTS_PATH;
-  const maxAgeMinutes  = options.maxAgeMinutes  ?? DEFAULT_MAX_AGE_MINUTES;
-  const dryRun         = options.dryRun ?? false;
+  const intentsPath     = options.intentsPath     ?? DEFAULT_INTENTS_PATH;
+  const maxAgeMinutes   = options.maxAgeMinutes   ?? DEFAULT_MAX_AGE_MINUTES;
+  const dryRun          = options.dryRun ?? false;
+
+  const paperObsPath = path.join(
+    path.dirname(path.resolve(intentsPath)),
+    'paper-intent-observations.jsonl',
+  );
 
   // Step 1: Find latest cycle file
   const latestCycleFile = findLatestCycleFile(cyclesDir);
@@ -170,6 +182,8 @@ export function runRipperPaperAutopilotCycle(
       dueIntentsCount:      0,
       observationsCaptured: 0,
       expiredNoDataCount:   0,
+      paperObsPath,
+      paperObsWritten:      0,
       dryRun,
       reportOnly:           true,
       readOnly:             true,
@@ -182,87 +196,121 @@ export function runRipperPaperAutopilotCycle(
   const cycleSlug = path.basename(latestCycleFile, '.jsonl');
 
   // Step 2: Read and filter fixtures
-  const allFixtures     = readFixturesFromCycle(latestCycleFile);
-  const approved        = extractApproved(allFixtures, cycleSlug);
-  const fixturesRead    = allFixtures.length;
+  const allFixtures      = readFixturesFromCycle(latestCycleFile);
+  const approved         = extractApproved(allFixtures, cycleSlug);
+  const fixturesRead     = allFixtures.length;
   const buyApprovedPaper = approved.length;
 
   // Step 3: Apply policy
-  const newIntents      = approved.map(f => applyPaperDecisionPolicy(f));
-  const enterNowCount   = newIntents.filter(i => i.paperEntryTiming === 'ENTER_NOW').length;
-  const wait10mCount    = newIntents.filter(i => i.paperEntryTiming === 'WAIT_10M').length;
+  const newIntents    = approved.map(f => applyPaperDecisionPolicy(f));
+  const enterNowCount = newIntents.filter(i => i.paperEntryTiming === 'ENTER_NOW').length;
+  const wait10mCount  = newIntents.filter(i => i.paperEntryTiming === 'WAIT_10M').length;
 
   // Step 4 & 5: Append new intents (deduped)
-  let intentsCreated = 0;
+  let intentsCreated      = 0;
   let intentsDeduplicated = 0;
   if (!dryRun && newIntents.length > 0) {
-    const appendResult = appendPaperIntents(intentsPath, newIntents);
-    intentsCreated     = appendResult.appended;
+    const appendResult  = appendPaperIntents(intentsPath, newIntents);
+    intentsCreated      = appendResult.appended;
     intentsDeduplicated = appendResult.deduped;
   } else {
-    // In dry-run or no new intents, compute what would happen
-    const existing      = readPaperIntents(intentsPath);
-    const existingKeys  = new Set(existing.map(i => `${i.contract}::${i.targetEntryAt}::${i.reason}`));
+    const existing     = readPaperIntents(intentsPath);
+    const existingKeys = new Set(existing.map(i => `${i.contract}::${i.targetEntryAt}::${i.reason}`));
     intentsCreated      = newIntents.filter(i => !existingKeys.has(`${i.contract}::${i.targetEntryAt}::${i.reason}`)).length;
     intentsDeduplicated = newIntents.length - intentsCreated;
   }
 
-  // Step 6: Mark due intents as ENTRY_DUE (and expire stale ENTRY_DUE)
-  const allIntents         = readPaperIntents(intentsPath);
-  const maxAgeMs           = maxAgeMinutes * 60_000;
+  // Step 6: Transition PLANNED intents to ENTRY_DUE or EXPIRED_NO_DATA.
+  // ENTRY_DUE intents are handled in Step 7 (obs capture first, then expire if no obs).
+  const allIntents           = readPaperIntents(intentsPath);
+  const maxAgeMs             = maxAgeMinutes * 60_000;
   const totalIntentsInLedger = allIntents.length;
-  const openIntentsCount   = allIntents.filter(i => isPaperIntentOpen(i.status)).length;
-  const dueBeforeUpdate    = allIntents.filter(i => i.status === 'ENTRY_DUE').length;
+  const openIntentsCount     = allIntents.filter(i => isPaperIntentOpen(i.status)).length;
+  const dueBeforeUpdate      = allIntents.filter(i => i.status === 'ENTRY_DUE').length;
 
-  const dueUpdates: StatusUpdate[] = [];
-  const expiredUpdates: StatusUpdate[] = [];
+  const dueUpdates:            StatusUpdate[] = [];
+  const plannedExpiredUpdates: StatusUpdate[] = [];
 
   for (const intent of allIntents) {
-    if (!isPaperIntentOpen(intent.status)) continue;
+    if (intent.status !== 'PLANNED') continue;
     const targetMs = Date.parse(intent.targetEntryAt);
-    if (targetMs <= nowMs) {
+    if (targetMs > nowMs) continue;
+    if (nowMs - targetMs > maxAgeMs) {
+      plannedExpiredUpdates.push({ intentId: intent.intentId, status: 'EXPIRED_NO_DATA' });
+    } else {
+      dueUpdates.push({ intentId: intent.intentId, status: 'ENTRY_DUE' });
+    }
+  }
+
+  if (!dryRun && (dueUpdates.length > 0 || plannedExpiredUpdates.length > 0)) {
+    updateIntentStatuses(intentsPath, [...dueUpdates, ...plannedExpiredUpdates]);
+  }
+
+  const newlyMarkedDue = dueUpdates.length;
+
+  // Step 7: Capture observations for ALL ENTRY_DUE intents (pre-existing + newly-marked).
+  // Scan obs dir AND all cycle files — cycle files contain real priceChangePct data.
+  // ENTRY_DUE intents past maxAge get one chance to find obs; if none found, they expire.
+  const allObsPaths   = listObsPaths(observationsDir);
+  const allCyclePaths = listAllCyclePaths(cyclesDir);
+  const obsByContract = buildObsFromPaths([...allObsPaths, ...allCyclePaths]);
+
+  let observationsCaptured = 0;
+  const observedUpdates:       StatusUpdate[] = [];
+  const dueExpiredUpdates:     StatusUpdate[] = [];
+
+  // Re-read after Step 6 to include newly-marked ENTRY_DUE
+  const postUpdateIntents = dryRun ? allIntents : readPaperIntents(intentsPath);
+  const dueIntents        = postUpdateIntents.filter(i => i.status === 'ENTRY_DUE');
+  const dueIntentsCount   = dueIntents.length;
+
+  for (const intent of dueIntents) {
+    const obsForContract = obsByContract.get(intent.contract) ?? [];
+    const obs = obsForContract.find(o => o.capturedAt >= intent.targetEntryAt && o.priceChangePct != null);
+    if (obs) {
+      observationsCaptured++;
+      observedUpdates.push({
+        intentId:       intent.intentId,
+        status:         'OBSERVED',
+        observedAt:     obs.capturedAt,
+        priceChangePct: obs.priceChangePct,
+      });
+    } else {
+      const targetMs = Date.parse(intent.targetEntryAt);
       if (nowMs - targetMs > maxAgeMs) {
-        expiredUpdates.push({ intentId: intent.intentId, status: 'EXPIRED_NO_DATA' });
-      } else if (intent.status === 'PLANNED') {
-        // Only promote PLANNED → ENTRY_DUE; already-ENTRY_DUE intents stay put
-        dueUpdates.push({ intentId: intent.intentId, status: 'ENTRY_DUE' });
+        dueExpiredUpdates.push({ intentId: intent.intentId, status: 'EXPIRED_NO_DATA' });
       }
     }
   }
 
-  if (!dryRun && (dueUpdates.length > 0 || expiredUpdates.length > 0)) {
-    updateIntentStatuses(intentsPath, [...dueUpdates, ...expiredUpdates]);
-  }
+  const expiredNoDataCount = plannedExpiredUpdates.length + dueExpiredUpdates.length;
 
-  const newlyMarkedDue     = dueUpdates.length;
-  const expiredNoDataCount = expiredUpdates.length;
+  let paperObsWritten = 0;
+  if (!dryRun && (observedUpdates.length > 0 || dueExpiredUpdates.length > 0)) {
+    updateIntentStatuses(intentsPath, [...observedUpdates, ...dueExpiredUpdates]);
 
-  // Step 7: Capture observations for due intents (read-only lookup)
-  const obsByContract = buildObsByContract(observationsDir);
-  let observationsCaptured = 0;
-  const observedUpdates: StatusUpdate[] = [];
-
-  // Re-read after status update to include both pre-existing and newly-marked ENTRY_DUE
-  const postUpdateIntents = dryRun ? allIntents : readPaperIntents(intentsPath);
-  const dueIntents = postUpdateIntents.filter(i => i.status === 'ENTRY_DUE');
-  const dueIntentsCount = dueIntents.length;
-
-  for (const intent of dueIntents) {
-    const obsForContract = obsByContract.get(intent.contract) ?? [];
-    const obs = obsForContract.find(o => o.capturedAt >= intent.targetEntryAt);
-    if (obs) {
-      observationsCaptured++;
-      observedUpdates.push({
-        intentId:      intent.intentId,
-        status:        'OBSERVED',
-        observedAt:    obs.capturedAt,
-        priceChangePct: obs.priceChangePct,
-      });
+    // Write paper observation artifacts so downstream reports can use them
+    const paperObsLines: string[] = [];
+    for (const u of observedUpdates) {
+      const intent = dueIntents.find(i => i.intentId === u.intentId);
+      if (!intent || !u.observedAt) continue;
+      paperObsLines.push(JSON.stringify({
+        capturedAt:        u.observedAt,
+        source:            'paper-intent-obs',
+        sourceKind:        'PAPER_INTENT_OBS',
+        intentId:          u.intentId,
+        normalizedSignal:  { contract: intent.contract, priceChangePct: u.priceChangePct ?? null },
+        raw:               { contract: intent.contract, priceChangePct: u.priceChangePct ?? null },
+        realTradingLocked: true,
+        paperOnly:         true,
+        readOnly:          true,
+      }));
     }
-  }
-
-  if (!dryRun && observedUpdates.length > 0) {
-    updateIntentStatuses(intentsPath, observedUpdates);
+    if (paperObsLines.length > 0) {
+      fs.mkdirSync(path.dirname(path.resolve(paperObsPath)), { recursive: true });
+      fs.appendFileSync(paperObsPath, paperObsLines.join('\n') + '\n', 'utf-8');
+      paperObsWritten = paperObsLines.length;
+    }
   }
 
   return {
@@ -280,6 +328,8 @@ export function runRipperPaperAutopilotCycle(
     dueIntentsCount,
     observationsCaptured,
     expiredNoDataCount,
+    paperObsPath,
+    paperObsWritten,
     dryRun,
     reportOnly:        true,
     readOnly:          true,
@@ -330,6 +380,8 @@ export function renderRipperPaperAutopilotCycle(
   lines.push(`  Due intents total     : ${result.dueIntentsCount}`);
   lines.push(`  Observations captured : ${result.observationsCaptured}`);
   lines.push(`  Expired / no data     : ${result.expiredNoDataCount}`);
+  lines.push(`  Paper obs written     : ${result.paperObsWritten}`);
+  lines.push(`  Paper obs path        : ${result.paperObsPath}`);
   lines.push('');
 
   lines.push(`  ${SEP2}`);

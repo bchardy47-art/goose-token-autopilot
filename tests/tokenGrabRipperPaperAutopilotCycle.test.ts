@@ -435,6 +435,101 @@ describe('new debug fields', () => {
   });
 });
 
+// ── paperObsPath and paperObsWritten fields ───────────────────────────────────
+
+describe('paperObsPath and paperObsWritten', () => {
+  it('result always includes paperObsPath and paperObsWritten', () => {
+    writeCycleFile([]);
+    const result = runRipperPaperAutopilotCycle(makeOptions());
+    expect(typeof result.paperObsPath).toBe('string');
+    expect(result.paperObsPath).toContain('paper-intent-observations.jsonl');
+    expect(result.paperObsWritten).toBe(0);
+  });
+
+  it('paperObsWritten is 0 when no observations captured', () => {
+    writeCycleFile([makeFixture({ capturedAt: at(-5 * 60_000), clusterRisk: 'WATCH' })]);
+    const result = runRipperPaperAutopilotCycle(makeOptions({ nowMs: BASE_MS }));
+    expect(result.observationsCaptured).toBe(0);
+    expect(result.paperObsWritten).toBe(0);
+  });
+
+  it('writes paper-intent-observations.jsonl when obs captured', () => {
+    writeCycleFile([makeFixture({ capturedAt: at(-5 * 60_000), clusterRisk: 'WATCH' })]);
+    writeObsFile([makeObs({ contract: CONTRACT_A, capturedAt: at(-1 * 60_000), priceChangePct: 5 })]);
+    const opts = makeOptions({ nowMs: BASE_MS });
+    const result = runRipperPaperAutopilotCycle(opts);
+    expect(result.observationsCaptured).toBe(1);
+    expect(result.paperObsWritten).toBe(1);
+    expect(fs.existsSync(result.paperObsPath)).toBe(true);
+  });
+
+  it('paper obs file contains contract and capturedAt', () => {
+    writeCycleFile([makeFixture({ capturedAt: at(-5 * 60_000), clusterRisk: 'WATCH' })]);
+    writeObsFile([makeObs({ contract: CONTRACT_A, capturedAt: at(-1 * 60_000), priceChangePct: 5 })]);
+    const opts = makeOptions({ nowMs: BASE_MS });
+    const result = runRipperPaperAutopilotCycle(opts);
+    const lines = fs.readFileSync(result.paperObsPath, 'utf-8').split('\n').filter(l => l.trim());
+    expect(lines.length).toBe(1);
+    const row = JSON.parse(lines[0]) as Record<string, unknown>;
+    const ns = row['normalizedSignal'] as Record<string, unknown>;
+    expect(ns['contract']).toBe(CONTRACT_A);
+    expect(ns['priceChangePct']).toBe(5);
+  });
+
+  it('paperObsWritten is 0 in dry-run mode', () => {
+    writeCycleFile([makeFixture({ capturedAt: at(-5 * 60_000), clusterRisk: 'WATCH' })]);
+    writeObsFile([makeObs({ contract: CONTRACT_A, capturedAt: at(-1 * 60_000), priceChangePct: 5 })]);
+    const result = runRipperPaperAutopilotCycle(makeOptions({ nowMs: BASE_MS, dryRun: true }));
+    expect(result.paperObsWritten).toBe(0);
+  });
+});
+
+// ── Cycle-file obs matching ───────────────────────────────────────────────────
+
+describe('cycle-file obs matching', () => {
+  function writeIntentsDirect(intentsPath: string, intents: object[]): void {
+    fs.writeFileSync(intentsPath, intents.map(i => JSON.stringify(i)).join('\n') + '\n', 'utf-8');
+  }
+
+  it('matches obs from a cycle file for a pre-existing ENTRY_DUE intent', () => {
+    const opts = makeOptions({ nowMs: BASE_MS });
+    // Pre-existing ENTRY_DUE intent (targetEntryAt = T-5min)
+    writeIntentsDirect(opts.intentsPath!, [{
+      intentId:         'cycleobstest123',
+      contract:         CONTRACT_A,
+      symbol:           'TOK',
+      approvedAt:       at(-15 * 60_000),
+      targetEntryAt:    at(-5 * 60_000),
+      paperEntryTiming: 'ENTER_NOW',
+      reason:           'DEFAULT_APPROVED_ENTER_NOW',
+      sourceCycle:      null,
+      clusterRisk:      'WATCH',
+      ripperScore:      90,
+      launchAgeBucket:  'PRIME_WINDOW',
+      entryDecision:    'READY_TO_SNIPE_PAPER',
+      status:           'ENTRY_DUE',
+      realTradingLocked: true,
+      paperOnly:         true,
+      tradingExecuted:   0,
+    }]);
+    // Cycle file has a data row for CONTRACT_A at T-1min with priceChangePct (no obs dir)
+    writeCycleFile([{
+      capturedAt:       at(-1 * 60_000),
+      buyGateDecision:  'BUY_REJECTED',
+      ripperScore:      90,
+      launchAgeBucket:  'PRIME_WINDOW',
+      entryDecision:    'READY_TO_SNIPE_PAPER',
+      normalizedSignal: { contract: CONTRACT_A, symbol: 'TOK', id: 'sig', source: 'test', sourceKind: 'DEX_NEW_POOL', discoveredAt: BASE_ISO, warnings: [], priceChangePct: 8.5 },
+      raw: { clusterRisk: 'WATCH', priceChangePct: 8.5 },
+      realTradingLocked: true, paperOnly: true, readOnly: true,
+    }]);
+    const result = runRipperPaperAutopilotCycle(opts);
+    expect(result.observationsCaptured).toBe(1);
+    const intents = readPaperIntents(opts.intentsPath!);
+    expect(intents[0].status).toBe('OBSERVED');
+  });
+});
+
 // ── Renderer ─────────────────────────────────────────────────────────────────
 
 describe('renderRipperPaperAutopilotCycle', () => {
@@ -475,5 +570,14 @@ describe('renderRipperPaperAutopilotCycle', () => {
     expect(output).toContain('Due before this run');
     expect(output).toContain('Newly marked due');
     expect(output).toContain('Due intents total');
+  });
+
+  it('shows paper obs path and written count', () => {
+    writeCycleFile([]);
+    const result = runRipperPaperAutopilotCycle(makeOptions());
+    const output = renderRipperPaperAutopilotCycle(result);
+    expect(output).toContain('Paper obs written');
+    expect(output).toContain('Paper obs path');
+    expect(output).toContain('paper-intent-observations.jsonl');
   });
 });
