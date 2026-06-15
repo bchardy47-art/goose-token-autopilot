@@ -219,6 +219,7 @@ import { runFlatJunkReducerReport, renderFlatJunkReducerReport } from './token-g
 import { runShadowRejectFilterReport, renderShadowRejectFilterReport } from './token-grab/ripperShadowRejectFilterReport';
 import { runShadowRejectFilterEnrollment, renderShadowRejectFilterEnrollment } from './token-grab/ripperShadowRejectFilterEnrollment';
 import { runShadowEnrolledOutcomeReport, renderShadowEnrolledOutcomeReport } from './token-grab/ripperShadowEnrolledOutcomeReport';
+import { runPaperPolicyTest, renderPaperPolicyTest } from './token-grab/ripperPaperPolicyTest';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -3439,6 +3440,16 @@ async function main(): Promise<void> {
           outPath:          seorOut,
         });
         console.log(renderShadowEnrolledOutcomeReport(seorResult));
+        break;
+      }
+
+      case 'token:ripper-paper-policy-test': {
+        const pptDir = getArgValue('--cycles-dir')
+          ?? 'data/token-grab/ripper/cycles';
+        const pptOut = getArgValue('--out')
+          ?? 'data/token-grab/ripper/paper-policy-test-liq-or-age.jsonl';
+        const pptResult = runPaperPolicyTest({ cyclesDir: pptDir, outPath: pptOut });
+        console.log(renderPaperPolicyTest(pptResult));
         break;
       }
 
