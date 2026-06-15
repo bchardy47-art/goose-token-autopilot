@@ -218,6 +218,7 @@ import { runRipperPaperObservationDiagnostic, renderRipperPaperObservationDiagno
 import { runFlatJunkReducerReport, renderFlatJunkReducerReport } from './token-grab/ripperFlatJunkReducerReport';
 import { runShadowRejectFilterReport, renderShadowRejectFilterReport } from './token-grab/ripperShadowRejectFilterReport';
 import { runShadowRejectFilterEnrollment, renderShadowRejectFilterEnrollment } from './token-grab/ripperShadowRejectFilterEnrollment';
+import { runShadowEnrolledOutcomeReport, renderShadowEnrolledOutcomeReport } from './token-grab/ripperShadowEnrolledOutcomeReport';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -3424,6 +3425,20 @@ async function main(): Promise<void> {
           outPath:   srfeOut,
         });
         console.log(renderShadowRejectFilterEnrollment(srfeResult));
+        break;
+      }
+
+      case 'token:ripper-shadow-enrolled-outcome-report': {
+        const seorEnrollments = getArgValuesMulti('--enrollments');
+        const seorObs         = getArgValuesMulti('--observations');
+        const seorOut         = getArgValue('--out')
+          ?? 'data/token-grab/ripper/shadow-enrolled-outcome-report.jsonl';
+        const seorResult = runShadowEnrolledOutcomeReport({
+          enrollmentPaths:  seorEnrollments,
+          observationPaths: seorObs,
+          outPath:          seorOut,
+        });
+        console.log(renderShadowEnrolledOutcomeReport(seorResult));
         break;
       }
 
