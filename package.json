@@ -138,6 +138,7 @@
     "token:ripper-autopilot-status": "tsx src/cli.ts token:ripper-autopilot-status",
     "token:ripper-paper-observation-diagnostic": "tsx src/cli.ts token:ripper-paper-observation-diagnostic",
     "token:ripper-flat-junk-reducer-report": "tsx src/cli.ts token:ripper-flat-junk-reducer-report",
+    "token:ripper-shadow-reject-filter-report": "tsx src/cli.ts token:ripper-shadow-reject-filter-report",
     "token:prime-gate-audit": "tsx src/cli.ts token:prime-gate-audit",
     "token:holder-risk-audit": "tsx src/cli.ts token:holder-risk-audit",
     "token:fixture-holder-enrich": "tsx src/cli.ts token:fixture-holder-enrich",

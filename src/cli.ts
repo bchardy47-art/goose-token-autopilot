@@ -216,6 +216,7 @@ import { runRipperRealVsFakeAutopsy, renderRipperRealVsFakeAutopsy } from './tok
 import { runRipperAutopilotStatus, renderRipperAutopilotStatus } from './token-grab/ripperAutopilotStatus';
 import { runRipperPaperObservationDiagnostic, renderRipperPaperObservationDiagnostic } from './token-grab/ripperPaperObservationDiagnostic';
 import { runFlatJunkReducerReport, renderFlatJunkReducerReport } from './token-grab/ripperFlatJunkReducerReport';
+import { runShadowRejectFilterReport, renderShadowRejectFilterReport } from './token-grab/ripperShadowRejectFilterReport';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -3395,6 +3396,20 @@ async function main(): Promise<void> {
           outPath:          fjrOut,
         });
         console.log(renderFlatJunkReducerReport(fjrResult));
+        break;
+      }
+
+      case 'token:ripper-shadow-reject-filter-report': {
+        const srfCycles = getArgValuesMulti('--cycles');
+        const srfObs    = getArgValuesMulti('--observations');
+        const srfOut    = getArgValue('--out')
+          ?? 'data/token-grab/ripper/shadow-reject-filter-report.jsonl';
+        const srfResult = runShadowRejectFilterReport({
+          cyclePaths:       srfCycles,
+          observationPaths: srfObs,
+          outPath:          srfOut,
+        });
+        console.log(renderShadowRejectFilterReport(srfResult));
         break;
       }
 
