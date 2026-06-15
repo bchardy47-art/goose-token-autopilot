@@ -11,6 +11,7 @@ import {
   updateIntentStatuses,
   type StatusUpdate,
 } from './ripperPaperIntentLedger';
+import { isPaperIntentOpen } from './ripperPaperIntentDue';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -31,6 +32,10 @@ export interface RipperPaperAutopilotCycleResult {
   intentsDeduplicated:  number;
   enterNowCount:        number;
   wait10mCount:         number;
+  totalIntentsInLedger: number;
+  openIntentsCount:     number;
+  dueBeforeUpdate:      number;
+  newlyMarkedDue:       number;
   dueIntentsCount:      number;
   observationsCaptured: number;
   expiredNoDataCount:   number;
@@ -158,6 +163,10 @@ export function runRipperPaperAutopilotCycle(
       intentsDeduplicated:  0,
       enterNowCount:        0,
       wait10mCount:         0,
+      totalIntentsInLedger: 0,
+      openIntentsCount:     0,
+      dueBeforeUpdate:      0,
+      newlyMarkedDue:       0,
       dueIntentsCount:      0,
       observationsCaptured: 0,
       expiredNoDataCount:   0,
@@ -198,22 +207,24 @@ export function runRipperPaperAutopilotCycle(
     intentsDeduplicated = newIntents.length - intentsCreated;
   }
 
-  // Step 6: Mark due intents as ENTRY_DUE
-  const allIntents = readPaperIntents(intentsPath);
-  const nowIso     = new Date(nowMs).toISOString();
-  const maxAgeMs   = maxAgeMinutes * 60_000;
+  // Step 6: Mark due intents as ENTRY_DUE (and expire stale ENTRY_DUE)
+  const allIntents         = readPaperIntents(intentsPath);
+  const maxAgeMs           = maxAgeMinutes * 60_000;
+  const totalIntentsInLedger = allIntents.length;
+  const openIntentsCount   = allIntents.filter(i => isPaperIntentOpen(i.status)).length;
+  const dueBeforeUpdate    = allIntents.filter(i => i.status === 'ENTRY_DUE').length;
 
   const dueUpdates: StatusUpdate[] = [];
   const expiredUpdates: StatusUpdate[] = [];
 
   for (const intent of allIntents) {
-    if (intent.status !== 'PLANNED') continue;
+    if (!isPaperIntentOpen(intent.status)) continue;
     const targetMs = Date.parse(intent.targetEntryAt);
     if (targetMs <= nowMs) {
-      // Check if expired (too old)
       if (nowMs - targetMs > maxAgeMs) {
         expiredUpdates.push({ intentId: intent.intentId, status: 'EXPIRED_NO_DATA' });
-      } else {
+      } else if (intent.status === 'PLANNED') {
+        // Only promote PLANNED → ENTRY_DUE; already-ENTRY_DUE intents stay put
         dueUpdates.push({ intentId: intent.intentId, status: 'ENTRY_DUE' });
       }
     }
@@ -223,7 +234,7 @@ export function runRipperPaperAutopilotCycle(
     updateIntentStatuses(intentsPath, [...dueUpdates, ...expiredUpdates]);
   }
 
-  const dueIntentsCount    = dueUpdates.length;
+  const newlyMarkedDue     = dueUpdates.length;
   const expiredNoDataCount = expiredUpdates.length;
 
   // Step 7: Capture observations for due intents (read-only lookup)
@@ -231,9 +242,10 @@ export function runRipperPaperAutopilotCycle(
   let observationsCaptured = 0;
   const observedUpdates: StatusUpdate[] = [];
 
-  // Re-read after status update
+  // Re-read after status update to include both pre-existing and newly-marked ENTRY_DUE
   const postUpdateIntents = dryRun ? allIntents : readPaperIntents(intentsPath);
   const dueIntents = postUpdateIntents.filter(i => i.status === 'ENTRY_DUE');
+  const dueIntentsCount = dueIntents.length;
 
   for (const intent of dueIntents) {
     const obsForContract = obsByContract.get(intent.contract) ?? [];
@@ -261,6 +273,10 @@ export function runRipperPaperAutopilotCycle(
     intentsDeduplicated,
     enterNowCount,
     wait10mCount,
+    totalIntentsInLedger,
+    openIntentsCount,
+    dueBeforeUpdate,
+    newlyMarkedDue,
     dueIntentsCount,
     observationsCaptured,
     expiredNoDataCount,
@@ -307,7 +323,11 @@ export function renderRipperPaperAutopilotCycle(
   lines.push(`  ${SEP2}`);
   lines.push('  OBSERVATIONS');
   lines.push(`  ${SEP2}`, '');
-  lines.push(`  Due intents           : ${result.dueIntentsCount}`);
+  lines.push(`  Total in ledger       : ${result.totalIntentsInLedger}`);
+  lines.push(`  Open (PLANNED+DUE)    : ${result.openIntentsCount}`);
+  lines.push(`  Due before this run   : ${result.dueBeforeUpdate}`);
+  lines.push(`  Newly marked due      : ${result.newlyMarkedDue}`);
+  lines.push(`  Due intents total     : ${result.dueIntentsCount}`);
   lines.push(`  Observations captured : ${result.observationsCaptured}`);
   lines.push(`  Expired / no data     : ${result.expiredNoDataCount}`);
   lines.push('');

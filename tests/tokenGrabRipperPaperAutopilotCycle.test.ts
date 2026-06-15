@@ -312,6 +312,129 @@ describe('dry run', () => {
   });
 });
 
+// ── Pre-existing ENTRY_DUE intents (bug fix) ─────────────────────────────────
+
+describe('pre-existing ENTRY_DUE intents', () => {
+  function writeIntentsDirect(intentsPath: string, intents: object[]): void {
+    fs.writeFileSync(intentsPath, intents.map(i => JSON.stringify(i)).join('\n') + '\n', 'utf-8');
+  }
+
+  function makeLedgerIntent(overrides: Partial<Record<string, unknown>> = {}): object {
+    return {
+      intentId:         'eid1234567890ab',
+      contract:         CONTRACT_A,
+      symbol:           'TOK',
+      approvedAt:       at(-15 * 60_000),
+      targetEntryAt:    at(-10 * 60_000),
+      paperEntryTiming: 'ENTER_NOW',
+      reason:           'DEFAULT_APPROVED_ENTER_NOW',
+      sourceCycle:      null,
+      clusterRisk:      'WATCH',
+      ripperScore:      90,
+      launchAgeBucket:  'PRIME_WINDOW',
+      entryDecision:    'READY_TO_SNIPE_PAPER',
+      status:           'ENTRY_DUE',
+      realTradingLocked: true,
+      paperOnly:         true,
+      tradingExecuted:   0,
+      ...overrides,
+    };
+  }
+
+  it('dueIntentsCount includes pre-existing ENTRY_DUE (not just newly-marked)', () => {
+    const opts = makeOptions({ nowMs: BASE_MS });
+    writeIntentsDirect(opts.intentsPath!, [makeLedgerIntent()]);
+    writeCycleFile([]); // empty cycle, no new fixtures
+    const result = runRipperPaperAutopilotCycle(opts);
+    expect(result.dueBeforeUpdate).toBe(1);
+    expect(result.newlyMarkedDue).toBe(0);
+    expect(result.dueIntentsCount).toBe(1);
+  });
+
+  it('captures observation for pre-existing ENTRY_DUE intent', () => {
+    const opts = makeOptions({ nowMs: BASE_MS });
+    writeIntentsDirect(opts.intentsPath!, [makeLedgerIntent()]);
+    writeCycleFile([]);
+    writeObsFile([makeObs({ contract: CONTRACT_A, capturedAt: at(-5 * 60_000), priceChangePct: 7 })]);
+    const result = runRipperPaperAutopilotCycle(opts);
+    expect(result.observationsCaptured).toBe(1);
+  });
+
+  it('marks pre-existing ENTRY_DUE intent as OBSERVED when obs found', () => {
+    const opts = makeOptions({ nowMs: BASE_MS });
+    writeIntentsDirect(opts.intentsPath!, [makeLedgerIntent()]);
+    writeCycleFile([]);
+    writeObsFile([makeObs({ contract: CONTRACT_A, capturedAt: at(-5 * 60_000), priceChangePct: 7 })]);
+    runRipperPaperAutopilotCycle(opts);
+    const intents = readPaperIntents(opts.intentsPath!);
+    expect(intents[0].status).toBe('OBSERVED');
+  });
+
+  it('expires pre-existing ENTRY_DUE intent when past maxAge', () => {
+    const opts = makeOptions({ nowMs: BASE_MS, maxAgeMinutes: 20 });
+    // targetEntryAt = 30 min ago, maxAge = 20 min → should expire
+    writeIntentsDirect(opts.intentsPath!, [makeLedgerIntent({ targetEntryAt: at(-30 * 60_000) })]);
+    writeCycleFile([]);
+    runRipperPaperAutopilotCycle(opts);
+    const intents = readPaperIntents(opts.intentsPath!);
+    expect(intents[0].status).toBe('EXPIRED_NO_DATA');
+    expect(opts && true).toBe(true); // opts used
+  });
+
+  it('dueIntentsCount matches dashboard dueObservations count for same ledger', () => {
+    const opts = makeOptions({ nowMs: BASE_MS });
+    // 3 ENTRY_DUE + 1 PLANNED (future)
+    writeIntentsDirect(opts.intentsPath!, [
+      makeLedgerIntent({ intentId: 'e1', contract: CONTRACT_A }),
+      makeLedgerIntent({ intentId: 'e2', contract: CONTRACT_B }),
+      makeLedgerIntent({ intentId: 'e3', contract: 'CCC', targetEntryAt: at(-8 * 60_000) }),
+      { ...makeLedgerIntent({ intentId: 'p1', contract: 'DDD' }), status: 'PLANNED', targetEntryAt: at(10 * 60_000) },
+    ]);
+    writeCycleFile([]);
+    const result = runRipperPaperAutopilotCycle(opts);
+    expect(result.dueBeforeUpdate).toBe(3);
+    expect(result.dueIntentsCount).toBe(3);
+    expect(result.newlyMarkedDue).toBe(0);
+    expect(result.openIntentsCount).toBe(4);
+  });
+
+  it('totalIntentsInLedger reflects full ledger size', () => {
+    const opts = makeOptions({ nowMs: BASE_MS });
+    writeIntentsDirect(opts.intentsPath!, [
+      makeLedgerIntent({ intentId: 'e1' }),
+      { ...makeLedgerIntent({ intentId: 'o1', contract: CONTRACT_B }), status: 'OBSERVED' },
+    ]);
+    writeCycleFile([]);
+    const result = runRipperPaperAutopilotCycle(opts);
+    expect(result.totalIntentsInLedger).toBe(2);
+    expect(result.openIntentsCount).toBe(1); // only the ENTRY_DUE one
+  });
+});
+
+// ── New debug fields in result ────────────────────────────────────────────────
+
+describe('new debug fields', () => {
+  it('totalIntentsInLedger is 0 when ledger is empty', () => {
+    writeCycleFile([]);
+    const result = runRipperPaperAutopilotCycle(makeOptions());
+    expect(result.totalIntentsInLedger).toBe(0);
+  });
+
+  it('newlyMarkedDue counts only PLANNED → ENTRY_DUE transitions', () => {
+    writeCycleFile([makeFixture({ capturedAt: at(-5 * 60_000), clusterRisk: 'WATCH' })]);
+    const result = runRipperPaperAutopilotCycle(makeOptions({ nowMs: BASE_MS }));
+    expect(result.newlyMarkedDue).toBe(1);
+    expect(result.dueBeforeUpdate).toBe(0);
+    expect(result.dueIntentsCount).toBe(1);
+  });
+
+  it('dueBeforeUpdate is 0 on first run', () => {
+    writeCycleFile([makeFixture({ capturedAt: at(-5 * 60_000), clusterRisk: 'WATCH' })]);
+    const result = runRipperPaperAutopilotCycle(makeOptions({ nowMs: BASE_MS }));
+    expect(result.dueBeforeUpdate).toBe(0);
+  });
+});
+
 // ── Renderer ─────────────────────────────────────────────────────────────────
 
 describe('renderRipperPaperAutopilotCycle', () => {
@@ -342,5 +465,15 @@ describe('renderRipperPaperAutopilotCycle', () => {
     const result = runRipperPaperAutopilotCycle(makeOptions({ dryRun: true }));
     const output = renderRipperPaperAutopilotCycle(result);
     expect(output).toContain('DRY-RUN');
+  });
+
+  it('shows new debug observation fields', () => {
+    writeCycleFile([]);
+    const result = runRipperPaperAutopilotCycle(makeOptions());
+    const output = renderRipperPaperAutopilotCycle(result);
+    expect(output).toContain('Total in ledger');
+    expect(output).toContain('Due before this run');
+    expect(output).toContain('Newly marked due');
+    expect(output).toContain('Due intents total');
   });
 });

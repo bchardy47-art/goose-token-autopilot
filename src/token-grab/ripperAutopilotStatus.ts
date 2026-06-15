@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { readPaperIntents } from './ripperPaperIntentLedger';
+import { isPaperIntentOpen } from './ripperPaperIntentDue';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -177,7 +178,7 @@ export function runRipperAutopilotStatus(
   const { approved, rejected } = countCycleApprovals(cyclesDir);
 
   const intents        = readPaperIntents(intentsPath);
-  const openIntents    = intents.filter(i => i.status === 'PLANNED' || i.status === 'ENTRY_DUE');
+  const openIntents    = intents.filter(i => isPaperIntentOpen(i.status));
   const wait10mIntents = openIntents.filter(i => i.paperEntryTiming === 'WAIT_10M').length;
   const enterNowIntents = openIntents.filter(i => i.paperEntryTiming === 'ENTER_NOW').length;
   const dueObservations = intents.filter(i => i.status === 'ENTRY_DUE').length;
