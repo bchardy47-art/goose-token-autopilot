@@ -199,6 +199,7 @@ import { runRipperApprovalFollowPaperSession, renderRipperApprovalFollowPaperSes
 import { runRipperApprovalFollowPaperSessionReport, renderRipperApprovalFollowPaperSessionReport } from './token-grab/ripperApprovalFollowPaperSessionReport';
 import { runRipperWait5PaperShadow, renderRipperWait5PaperShadow } from './token-grab/ripperWait5PaperShadow';
 import { runRipperGateLoosenShadowReport, renderRipperGateLoosenShadowReport } from './token-grab/ripperGateLoosenShadowReport';
+import { runRipperLooseExtraObservationPlan, renderRipperLooseExtraObservationPlan } from './token-grab/ripperLooseExtraObservationPlan';
 import { runOutcomeTracker, renderOutcomeTrackerReport } from './token-grab/outcomeTracker';
 import { runOutcomeAutopsy, renderOutcomeAutopsyReport } from './token-grab/outcomeAutopsy';
 import { runOutcomeTrackerV2, renderOutcomeTrackerV2Report } from './token-grab/outcomeTrackerV2';
@@ -3883,6 +3884,39 @@ async function main(): Promise<void> {
           observationPaths: rglsrObsPaths,
         });
         console.log(renderRipperGateLoosenShadowReport(rglsrResult));
+        break;
+      }
+
+      case 'token:ripper-loose-extra-observation-plan': {
+        const rleopObsIdx = process.argv.indexOf('--observations');
+        const rleopObsPaths: string[] = [];
+        if (rleopObsIdx !== -1) {
+          for (let i = rleopObsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rleopObsPaths.push(process.argv[i]);
+          }
+        }
+        const rleopApprovalsIdx = process.argv.indexOf('--approvals');
+        const rleopApprovalPaths: string[] = [];
+        if (rleopApprovalsIdx !== -1) {
+          for (let i = rleopApprovalsIdx + 1; i < process.argv.length; i++) {
+            if (process.argv[i].startsWith('--')) break;
+            rleopApprovalPaths.push(process.argv[i]);
+          }
+        }
+        const rleopOutIdx  = process.argv.indexOf('--out');
+        const rleopOutPath = rleopOutIdx !== -1 ? process.argv[rleopOutIdx + 1] : null;
+        if (!rleopOutPath) {
+          console.error('[token:ripper-loose-extra-observation-plan] --out <path> is required.');
+          console.error('  Usage: npm run token:ripper-loose-extra-observation-plan -- --approvals data/token-grab/ripper/cycles/cycle-*.jsonl --observations data/token-grab/ripper/observations/*.jsonl --out data/token-grab/ripper/loose-extra-observation-plan.json');
+          process.exit(1);
+        }
+        const rleopResult = runRipperLooseExtraObservationPlan({
+          approvalPaths:    rleopApprovalPaths,
+          observationPaths: rleopObsPaths,
+          outPath:          rleopOutPath,
+        });
+        console.log(renderRipperLooseExtraObservationPlan(rleopResult));
         break;
       }
 

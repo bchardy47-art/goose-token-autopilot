@@ -125,6 +125,7 @@
     "token:ripper-approval-follow-paper-session-report": "tsx src/cli.ts token:ripper-approval-follow-paper-session-report",
     "token:ripper-wait5-paper-shadow": "tsx src/cli.ts token:ripper-wait5-paper-shadow",
     "token:ripper-gate-loosen-shadow-report": "tsx src/cli.ts token:ripper-gate-loosen-shadow-report",
+    "token:ripper-loose-extra-observation-plan": "tsx src/cli.ts token:ripper-loose-extra-observation-plan",
     "token:ripper-approved-autopsy": "tsx src/cli.ts token:ripper-approved-autopsy",
     "token:ripper-entry-sim": "tsx src/cli.ts token:ripper-entry-sim",
     "token:prime-gate-audit": "tsx src/cli.ts token:prime-gate-audit",
