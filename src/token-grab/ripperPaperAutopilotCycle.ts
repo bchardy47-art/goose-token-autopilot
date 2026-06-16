@@ -19,6 +19,7 @@ import { extractRipperContract, extractRipperPriceChangePct } from './ripperExtr
 export interface RipperPaperAutopilotCycleOptions {
   cyclesDir?:       string;
   observationsDir?: string;
+  dexWatchDir?:     string;
   intentsPath?:     string;
   maxAgeMinutes?:   number;
   nowMs?:           number;
@@ -54,6 +55,7 @@ export interface RipperPaperAutopilotCycleResult {
 
 const DEFAULT_CYCLES_DIR       = 'data/token-grab/ripper/cycles';
 const DEFAULT_OBSERVATIONS_DIR = 'data/token-grab/ripper/observations';
+const DEFAULT_DEX_WATCH_DIR    = 'data/token-grab/dex-watch-runs';
 const DEFAULT_INTENTS_PATH     = 'data/token-grab/ripper/paper-intents.jsonl';
 const DEFAULT_MAX_AGE_MINUTES  = 20;
 
@@ -78,6 +80,40 @@ function listObsPaths(observationsDir: string): string[] {
   return fs.readdirSync(observationsDir)
     .filter(f => f.endsWith('.jsonl'))
     .map(f => path.join(observationsDir, f));
+}
+
+function listDexWatchPaths(dexWatchDir: string): string[] {
+  if (!fs.existsSync(dexWatchDir)) return [];
+  return fs.readdirSync(dexWatchDir)
+    .filter(f => f.startsWith('run-') && f.endsWith('.json'))
+    .map(f => path.join(dexWatchDir, f));
+}
+
+// Extract obs entries from a dex-watch run JSON file (winners/losers/flat/topMovers arrays).
+// Uses final.observedAt as capturedAt so the timestamp is after the watch period.
+function extractDexWatchObs(
+  content: string,
+): Array<{ contract: string; capturedAt: string; priceChangePct: number | null }> {
+  try {
+    const d          = JSON.parse(content) as Record<string, unknown>;
+    const fallbackAt = d['generatedAt'] as string | undefined;
+    const result: Array<{ contract: string; capturedAt: string; priceChangePct: number | null }> = [];
+    for (const key of ['winners', 'losers', 'flat', 'topMovers']) {
+      const arr = d[key];
+      if (!Array.isArray(arr)) continue;
+      for (const item of arr as Record<string, unknown>[]) {
+        const contract = typeof item['contract'] === 'string' ? item['contract'] : null;
+        if (!contract) continue;
+        const pct        = typeof item['priceChangePct'] === 'number' ? (item['priceChangePct'] as number) : null;
+        const finalSnap  = item['final'] as Record<string, unknown> | undefined;
+        const capturedAt = (typeof finalSnap?.['observedAt'] === 'string' ? finalSnap['observedAt'] : null)
+          ?? fallbackAt;
+        if (!capturedAt) continue;
+        result.push({ contract, capturedAt, priceChangePct: pct });
+      }
+    }
+    return result;
+  } catch { return []; }
 }
 
 function readFixturesFromCycle(cycleFile: string): Record<string, unknown>[] {
@@ -122,25 +158,38 @@ interface ObsEntry {
   priceChangePct: number | null;
 }
 
-// Build observation map from arbitrary JSONL file paths (obs dir AND cycle files).
+// Build observation map from JSONL paths and/or dex-watch run JSON paths.
 function buildObsFromPaths(filePaths: string[]): Map<string, ObsEntry[]> {
   const map = new Map<string, ObsEntry[]>();
+
+  function addEntry(contract: string, capturedAt: string, priceChangePct: number | null) {
+    const list = map.get(contract) ?? [];
+    list.push({ capturedAt, priceChangePct });
+    map.set(contract, list);
+  }
+
   for (const filePath of filePaths) {
     if (!fs.existsSync(filePath)) continue;
-    const lines = fs.readFileSync(filePath, 'utf-8').split('\n').filter(l => l.trim().length > 0);
-    for (const line of lines) {
-      try {
-        const f         = JSON.parse(line) as Record<string, unknown>;
-        const contract  = extractRipperContract(f);
-        const capturedAt = f['capturedAt'] as string | undefined;
-        if (!contract || !capturedAt) continue;
-        const pct = extractRipperPriceChangePct(f);
-        const list = map.get(contract) ?? [];
-        list.push({ capturedAt, priceChangePct: pct });
-        map.set(contract, list);
-      } catch { /* skip */ }
+    const content = fs.readFileSync(filePath, 'utf-8');
+    if (filePath.endsWith('.json')) {
+      // dex-watch run JSON format
+      for (const e of extractDexWatchObs(content)) {
+        addEntry(e.contract, e.capturedAt, e.priceChangePct);
+      }
+    } else {
+      // Standard JSONL observation format
+      for (const line of content.split('\n').filter(l => l.trim().length > 0)) {
+        try {
+          const f          = JSON.parse(line) as Record<string, unknown>;
+          const contract   = extractRipperContract(f);
+          const capturedAt = f['capturedAt'] as string | undefined;
+          if (!contract || !capturedAt) continue;
+          addEntry(contract, capturedAt, extractRipperPriceChangePct(f));
+        } catch { /* skip */ }
+      }
     }
   }
+
   for (const list of map.values()) {
     list.sort((a, b) => a.capturedAt.localeCompare(b.capturedAt));
   }
@@ -155,6 +204,7 @@ export function runRipperPaperAutopilotCycle(
   const nowMs           = options.nowMs ?? Date.now();
   const cyclesDir       = options.cyclesDir       ?? DEFAULT_CYCLES_DIR;
   const observationsDir = options.observationsDir ?? DEFAULT_OBSERVATIONS_DIR;
+  const dexWatchDir     = options.dexWatchDir     ?? DEFAULT_DEX_WATCH_DIR;
   const intentsPath     = options.intentsPath     ?? DEFAULT_INTENTS_PATH;
   const maxAgeMinutes   = options.maxAgeMinutes   ?? DEFAULT_MAX_AGE_MINUTES;
   const dryRun          = options.dryRun ?? false;
@@ -251,9 +301,10 @@ export function runRipperPaperAutopilotCycle(
   // Step 7: Capture observations for ALL ENTRY_DUE intents (pre-existing + newly-marked).
   // Scan obs dir AND all cycle files — cycle files contain real priceChangePct data.
   // ENTRY_DUE intents past maxAge get one chance to find obs; if none found, they expire.
-  const allObsPaths   = listObsPaths(observationsDir);
-  const allCyclePaths = listAllCyclePaths(cyclesDir);
-  const obsByContract = buildObsFromPaths([...allObsPaths, ...allCyclePaths]);
+  const allObsPaths    = listObsPaths(observationsDir);
+  const dexWatchPaths  = listDexWatchPaths(dexWatchDir);
+  const allCyclePaths  = listAllCyclePaths(cyclesDir);
+  const obsByContract  = buildObsFromPaths([...allObsPaths, ...dexWatchPaths, ...allCyclePaths]);
 
   let observationsCaptured = 0;
   const observedUpdates:       StatusUpdate[] = [];

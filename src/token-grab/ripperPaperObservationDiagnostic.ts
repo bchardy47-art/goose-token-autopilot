@@ -46,24 +46,61 @@ interface ObsEntry {
   priceChangePct: number | null;
 }
 
+// Extract obs entries from a dex-watch run JSON file (winners/losers/flat/topMovers).
+function extractDexWatchObs(
+  content: string,
+): Array<{ contract: string; capturedAt: string; priceChangePct: number | null }> {
+  try {
+    const d          = JSON.parse(content) as Record<string, unknown>;
+    const fallbackAt = d['generatedAt'] as string | undefined;
+    const result: Array<{ contract: string; capturedAt: string; priceChangePct: number | null }> = [];
+    for (const key of ['winners', 'losers', 'flat', 'topMovers']) {
+      const arr = d[key];
+      if (!Array.isArray(arr)) continue;
+      for (const item of arr as Record<string, unknown>[]) {
+        const contract = typeof item['contract'] === 'string' ? item['contract'] : null;
+        if (!contract) continue;
+        const pct        = typeof item['priceChangePct'] === 'number' ? (item['priceChangePct'] as number) : null;
+        const finalSnap  = item['final'] as Record<string, unknown> | undefined;
+        const capturedAt = (typeof finalSnap?.['observedAt'] === 'string' ? finalSnap['observedAt'] : null)
+          ?? fallbackAt;
+        if (!capturedAt) continue;
+        result.push({ contract, capturedAt, priceChangePct: pct });
+      }
+    }
+    return result;
+  } catch { return []; }
+}
+
 function buildObsMap(paths: string[]): Map<string, ObsEntry[]> {
   const map = new Map<string, ObsEntry[]>();
+
+  function addEntry(contract: string, capturedAt: string, priceChangePct: number | null) {
+    const list = map.get(contract) ?? [];
+    list.push({ capturedAt, priceChangePct });
+    map.set(contract, list);
+  }
+
   for (const p of paths) {
     if (!fs.existsSync(p)) continue;
-    const lines = fs.readFileSync(p, 'utf-8').split('\n').filter(l => l.trim().length > 0);
-    for (const line of lines) {
-      try {
-        const f          = JSON.parse(line) as Record<string, unknown>;
-        const contract   = extractRipperContract(f);
-        const capturedAt = f['capturedAt'] as string | undefined;
-        if (!contract || !capturedAt) continue;
-        const pct  = extractRipperPriceChangePct(f);
-        const list = map.get(contract) ?? [];
-        list.push({ capturedAt, priceChangePct: pct });
-        map.set(contract, list);
-      } catch { /* skip */ }
+    const content = fs.readFileSync(p, 'utf-8');
+    if (p.endsWith('.json')) {
+      for (const e of extractDexWatchObs(content)) {
+        addEntry(e.contract, e.capturedAt, e.priceChangePct);
+      }
+    } else {
+      for (const line of content.split('\n').filter(l => l.trim().length > 0)) {
+        try {
+          const f          = JSON.parse(line) as Record<string, unknown>;
+          const contract   = extractRipperContract(f);
+          const capturedAt = f['capturedAt'] as string | undefined;
+          if (!contract || !capturedAt) continue;
+          addEntry(contract, capturedAt, extractRipperPriceChangePct(f));
+        } catch { /* skip */ }
+      }
     }
   }
+
   for (const list of map.values()) {
     list.sort((a, b) => a.capturedAt.localeCompare(b.capturedAt));
   }
@@ -102,8 +139,12 @@ function countObsRows(paths: string[]): number {
   let total = 0;
   for (const p of paths) {
     if (!fs.existsSync(p)) continue;
-    const lines = fs.readFileSync(p, 'utf-8').split('\n').filter(l => l.trim().length > 0);
-    total += lines.length;
+    const content = fs.readFileSync(p, 'utf-8');
+    if (p.endsWith('.json')) {
+      total += extractDexWatchObs(content).length;
+    } else {
+      total += content.split('\n').filter(l => l.trim().length > 0).length;
+    }
   }
   return total;
 }

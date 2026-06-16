@@ -581,3 +581,126 @@ describe('renderRipperPaperAutopilotCycle', () => {
     expect(output).toContain('paper-intent-observations.jsonl');
   });
 });
+
+// ── Dex-watch run source ──────────────────────────────────────────────────────
+
+function makeDexWatchRun(entries: Array<{
+  contract: string;
+  priceChangePct: number;
+  finalObservedAt: string;
+}>, generatedAt?: string): string {
+  const makeItem = (e: typeof entries[0]) => ({
+    signalId:       `dex-test-${e.contract.slice(-4)}`,
+    contract:       e.contract,
+    symbol:         'TEST',
+    chainId:        'solana',
+    entry:          { contract: e.contract, observedAt: at(-5 * 60_000) },
+    final:          { contract: e.contract, observedAt: e.finalObservedAt },
+    priceChangePct: e.priceChangePct,
+  });
+  return JSON.stringify({
+    generatedAt:   generatedAt ?? at(0),
+    signalsRead:   entries.length,
+    winners:       entries.filter(e => e.priceChangePct >= 5).map(makeItem),
+    losers:        entries.filter(e => e.priceChangePct <= -10).map(makeItem),
+    flat:          entries.filter(e => e.priceChangePct > -10 && e.priceChangePct < 5).map(makeItem),
+    topMovers:     [],
+  });
+}
+
+function writeDexWatchFile(content: string, name = 'run-test.json'): string {
+  const dir = path.join(tmpDir, 'dex-watch');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, name);
+  fs.writeFileSync(file, content, 'utf-8');
+  return dir;
+}
+
+describe('dex-watch run observation source', () => {
+  it('captures due intent observation from dex-watch run after targetEntryAt', () => {
+    const intentsPath = path.join(tmpDir, 'paper-intents.jsonl');
+    const targetAt    = at(-5 * 60_000);
+    const finalObsAt  = at(-2 * 60_000); // after targetEntryAt
+    const intent = {
+      intentId: 'dexwatch-test-001',
+      contract: CONTRACT_A,
+      symbol: 'TOK',
+      approvedAt: at(-10 * 60_000),
+      targetEntryAt: targetAt,
+      paperEntryTiming: 'ENTER_NOW',
+      reason: 'DEFAULT_APPROVED_ENTER_NOW',
+      sourceCycle: null,
+      clusterRisk: 'CLEAN',
+      ripperScore: 90,
+      launchAgeBucket: 'PRIME_WINDOW',
+      entryDecision: 'READY_TO_SNIPE_PAPER',
+      status: 'ENTRY_DUE',
+      realTradingLocked: true, paperOnly: true, tradingExecuted: 0,
+    };
+    fs.writeFileSync(intentsPath, JSON.stringify(intent) + '\n', 'utf-8');
+
+    const dexWatchDir = writeDexWatchFile(makeDexWatchRun([
+      { contract: CONTRACT_A, priceChangePct: 12.5, finalObservedAt: finalObsAt },
+    ]));
+
+    writeCycleFile([]);
+    const result = runRipperPaperAutopilotCycle({
+      ...makeOptions({ intentsPath }),
+      dexWatchDir,
+      dryRun: true,
+    });
+    expect(result.observationsCaptured).toBe(1);
+  });
+
+  it('ignores dex-watch obs whose finalObservedAt is before targetEntryAt', () => {
+    const intentsPath = path.join(tmpDir, 'paper-intents.jsonl');
+    const targetAt    = at(-2 * 60_000);
+    const finalObsAt  = at(-5 * 60_000); // BEFORE targetEntryAt
+    const intent = {
+      intentId: 'dexwatch-test-002',
+      contract: CONTRACT_A,
+      symbol: 'TOK',
+      approvedAt: at(-10 * 60_000),
+      targetEntryAt: targetAt,
+      paperEntryTiming: 'ENTER_NOW',
+      reason: 'DEFAULT_APPROVED_ENTER_NOW',
+      sourceCycle: null,
+      clusterRisk: 'CLEAN',
+      ripperScore: 90,
+      launchAgeBucket: 'PRIME_WINDOW',
+      entryDecision: 'READY_TO_SNIPE_PAPER',
+      status: 'ENTRY_DUE',
+      realTradingLocked: true, paperOnly: true, tradingExecuted: 0,
+    };
+    fs.writeFileSync(intentsPath, JSON.stringify(intent) + '\n', 'utf-8');
+
+    const dexWatchDir = writeDexWatchFile(makeDexWatchRun([
+      { contract: CONTRACT_A, priceChangePct: 8.0, finalObservedAt: finalObsAt },
+    ]));
+
+    writeCycleFile([]);
+    const result = runRipperPaperAutopilotCycle({
+      ...makeOptions({ intentsPath }),
+      dexWatchDir,
+      dryRun: true,
+    });
+    expect(result.observationsCaptured).toBe(0);
+  });
+
+  it('safety flags remain locked when using dex-watch source', () => {
+    const dexWatchDir = writeDexWatchFile(makeDexWatchRun([
+      { contract: CONTRACT_A, priceChangePct: 5.0, finalObservedAt: at(0) },
+    ]));
+    writeCycleFile([]);
+    const result = runRipperPaperAutopilotCycle({
+      ...makeOptions(),
+      dexWatchDir,
+      dryRun: true,
+    });
+    expect(result.reportOnly).toBe(true);
+    expect(result.readOnly).toBe(true);
+    expect(result.tradingExecuted).toBe(0);
+    expect(result.realTradingLocked).toBe(true);
+    expect(result.paperOnly).toBe(true);
+  });
+});

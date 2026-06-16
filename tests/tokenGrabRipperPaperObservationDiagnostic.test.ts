@@ -314,3 +314,106 @@ describe('renderRipperPaperObservationDiagnostic', () => {
     expect(output).toContain('TOP MATCHING');
   });
 });
+
+// ── Dex-watch run source ──────────────────────────────────────────────────────
+
+function makeDexWatchRunContent(entries: Array<{
+  contract: string;
+  priceChangePct: number;
+  finalObservedAt: string;
+}>, generatedAt?: string): string {
+  const makeItem = (e: typeof entries[0]) => ({
+    signalId:       `dex-test-${e.contract.slice(-4)}`,
+    contract:       e.contract,
+    symbol:         'TEST',
+    chainId:        'solana',
+    entry:          { contract: e.contract, observedAt: at(-5 * 60_000) },
+    final:          { contract: e.contract, observedAt: e.finalObservedAt },
+    priceChangePct: e.priceChangePct,
+  });
+  const flat = entries.filter(e => e.priceChangePct > -10 && e.priceChangePct < 5);
+  const winners = entries.filter(e => e.priceChangePct >= 5);
+  return JSON.stringify({
+    generatedAt:   generatedAt ?? at(0),
+    signalsRead:   entries.length,
+    winners:       winners.map(makeItem),
+    losers:        [],
+    flat:          flat.map(makeItem),
+    topMovers:     [],
+  });
+}
+
+function writeDexWatchFile(content: string, name = 'run-test.json'): string {
+  const p = path.join(tmpDir, name);
+  fs.writeFileSync(p, content, 'utf-8');
+  return p;
+}
+
+describe('dex-watch run source in diagnostic', () => {
+  it('dueIntentsWithObsAfterTarget increases when matched via dex-watch run', () => {
+    const targetAt   = at(-5 * 60_000);
+    const finalObsAt = at(-2 * 60_000); // after targetEntryAt
+    const intentsPath = writeIntents([
+      makeIntent({ contract: CONTRACT_A, targetEntryAt: targetAt, status: 'ENTRY_DUE' }),
+    ]);
+    const dexWatchPath = writeDexWatchFile(makeDexWatchRunContent([
+      { contract: CONTRACT_A, priceChangePct: 8.0, finalObservedAt: finalObsAt },
+    ]));
+    const result = runRipperPaperObservationDiagnostic({
+      intentsPath,
+      observationPaths: [dexWatchPath],
+      cyclePaths:       [],
+    });
+    expect(result.dueIntentsWithObsAfterTarget).toBe(1);
+    expect(result.matchingContracts).toBe(1);
+  });
+
+  it('ignores dex-watch obs before targetEntryAt', () => {
+    const targetAt   = at(-2 * 60_000);
+    const finalObsAt = at(-5 * 60_000); // BEFORE targetEntryAt
+    const intentsPath = writeIntents([
+      makeIntent({ contract: CONTRACT_A, targetEntryAt: targetAt, status: 'ENTRY_DUE' }),
+    ]);
+    const dexWatchPath = writeDexWatchFile(makeDexWatchRunContent([
+      { contract: CONTRACT_A, priceChangePct: 8.0, finalObservedAt: finalObsAt },
+    ]));
+    const result = runRipperPaperObservationDiagnostic({
+      intentsPath,
+      observationPaths: [dexWatchPath],
+      cyclePaths:       [],
+    });
+    expect(result.dueIntentsWithObsAfterTarget).toBe(0);
+  });
+
+  it('counts entries from dex-watch JSON in obsRowsRead', () => {
+    const intentsPath = writeIntents([]);
+    const dexWatchPath = writeDexWatchFile(makeDexWatchRunContent([
+      { contract: CONTRACT_A, priceChangePct: 5.0, finalObservedAt: at(0) },
+      { contract: CONTRACT_B, priceChangePct: 0.5, finalObservedAt: at(0) },
+    ]));
+    const result = runRipperPaperObservationDiagnostic({
+      intentsPath,
+      observationPaths: [dexWatchPath],
+      cyclePaths:       [],
+    });
+    expect(result.obsRowsRead).toBe(2);
+    expect(result.uniqueObsContracts).toBe(2);
+  });
+
+  it('safety flags remain locked when using dex-watch source', () => {
+    const intentsPath  = writeIntents([]);
+    const dexWatchPath = writeDexWatchFile(makeDexWatchRunContent([
+      { contract: CONTRACT_A, priceChangePct: 10.0, finalObservedAt: at(0) },
+    ]));
+    const result = runRipperPaperObservationDiagnostic({
+      intentsPath,
+      observationPaths: [dexWatchPath],
+      cyclePaths:       [],
+    });
+    expect(result.reportOnly).toBe(true);
+    expect(result.readOnly).toBe(true);
+    expect(result.tradingExecuted).toBe(0);
+    expect(result.realTradingLocked).toBe(true);
+    expect(result.paperOnly).toBe(true);
+  });
+});
