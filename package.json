@@ -142,6 +142,7 @@
     "token:ripper-shadow-reject-filter-enroll": "tsx src/cli.ts token:ripper-shadow-reject-filter-enroll",
     "token:ripper-shadow-enrolled-outcome-report": "tsx src/cli.ts token:ripper-shadow-enrolled-outcome-report",
     "token:ripper-paper-policy-test": "tsx src/cli.ts token:ripper-paper-policy-test",
+    "token:ripper-paper-learning-loop": "bash scripts/run-token-grab-paper-learning-loop.sh",
     "token:prime-gate-audit": "tsx src/cli.ts token:prime-gate-audit",
     "token:holder-risk-audit": "tsx src/cli.ts token:holder-risk-audit",
     "token:fixture-holder-enrich": "tsx src/cli.ts token:fixture-holder-enrich",
