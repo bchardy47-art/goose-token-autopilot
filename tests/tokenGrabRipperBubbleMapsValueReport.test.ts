@@ -16,10 +16,14 @@ let tmpDir: string;
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bm-value-test-'));
+  delete process.env['TOKEN_GRAB_BUBBLEMAPS_DISABLED'];
+  delete process.env['TOKEN_GRAB_BUBBLEMAPS_MAX_CALLS_PER_RUN'];
 });
 
 afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
+  delete process.env['TOKEN_GRAB_BUBBLEMAPS_DISABLED'];
+  delete process.env['TOKEN_GRAB_BUBBLEMAPS_MAX_CALLS_PER_RUN'];
 });
 
 function writeMemory(filePath: string, rows: object[]): void {
@@ -409,6 +413,140 @@ describe('renderBubbleMapsValueReport', () => {
     const result = runBubbleMapsValueReport(opts);
     const output = renderBubbleMapsValueReport(result);
     expect(output).toContain(result.conclusion);
+  });
+});
+
+// ── BubbleMaps mode enforcement ───────────────────────────────────────────────
+
+function makeHighDeltaRows(): object[] {
+  // score≥80: 40% win;  score<60: 10% win  → delta = 30% → data says KEEP_BUBBLEMAPS
+  return [
+    ...Array.from({ length: 30 }, (_, i) => ({
+      contract: `hi${i}`, capturedAt: '2026-06-17T00:00:00Z',
+      memoryUniverse: 'SHADOW_ENROLLED_APPROVED',
+      bubbleMapsScore: 90, clusterRisk: 'CLEAN',
+      outcomeLabel: 'FLAT_JUNK', liquidityBucket: 'LIQ_10K_30K', vlrBucket: 'VLR_0_5_TO_2',
+    })),
+    ...Array.from({ length: 20 }, (_, i) => ({
+      contract: `hiw${i}`, capturedAt: '2026-06-17T00:00:00Z',
+      memoryUniverse: 'SHADOW_ENROLLED_APPROVED',
+      bubbleMapsScore: 90, clusterRisk: 'CLEAN',
+      outcomeLabel: 'BIG_WINNER', liquidityBucket: 'LIQ_10K_30K', vlrBucket: 'VLR_0_5_TO_2',
+    })),
+    ...Array.from({ length: 45 }, (_, i) => ({
+      contract: `lo${i}`, capturedAt: '2026-06-17T00:00:00Z',
+      memoryUniverse: 'SHADOW_ENROLLED_APPROVED',
+      bubbleMapsScore: 40, clusterRisk: 'CLEAN',
+      outcomeLabel: 'FLAT_JUNK', liquidityBucket: 'LIQ_10K_30K', vlrBucket: 'VLR_LT_0_5',
+    })),
+    ...Array.from({ length: 5 }, (_, i) => ({
+      contract: `low${i}`, capturedAt: '2026-06-17T00:00:00Z',
+      memoryUniverse: 'SHADOW_ENROLLED_APPROVED',
+      bubbleMapsScore: 40, clusterRisk: 'CLEAN',
+      outcomeLabel: 'DUMP', liquidityBucket: 'LIQ_10K_30K', vlrBucket: 'VLR_LT_0_5',
+    })),
+  ];
+}
+
+describe('BubbleMaps mode enforcement', () => {
+  it('LIVE_CAPPED mode allows KEEP_BUBBLEMAPS when evidence supports it', () => {
+    const opts = buildOptions();
+    writeMemory(opts.learningMemoryPath!, makeHighDeltaRows());
+    const result = runBubbleMapsValueReport({ ...opts, bubbleMapsMode: 'LIVE_CAPPED' });
+    expect(result.bubbleMapsWinDelta).toBeGreaterThanOrEqual(5);
+    expect(result.conclusion).toBe('KEEP_BUBBLEMAPS');
+    expect(result.bubbleMapsMode).toBe('LIVE_CAPPED');
+  });
+
+  it('DISABLED mode never returns KEEP_BUBBLEMAPS even when data supports it', () => {
+    const opts = buildOptions();
+    writeMemory(opts.learningMemoryPath!, makeHighDeltaRows());
+    const result = runBubbleMapsValueReport({ ...opts, bubbleMapsMode: 'DISABLED' });
+    expect(result.bubbleMapsWinDelta).toBeGreaterThanOrEqual(5);
+    expect(result.conclusion).not.toBe('KEEP_BUBBLEMAPS');
+    expect(['CACHE_ONLY', 'REMOVE_LIVE_BUBBLEMAPS']).toContain(result.conclusion);
+    expect(result.bubbleMapsMode).toBe('DISABLED');
+  });
+
+  it('DISABLED mode conclusion note mentions disabled', () => {
+    const opts = buildOptions();
+    writeMemory(opts.learningMemoryPath!, makeHighDeltaRows());
+    const result = runBubbleMapsValueReport({ ...opts, bubbleMapsMode: 'DISABLED' });
+    expect(result.conclusionNote).toMatch(/disabled/i);
+  });
+
+  it('DISABLED mode conclusion note mentions historical cached scores', () => {
+    const opts = buildOptions();
+    writeMemory(opts.learningMemoryPath!, makeHighDeltaRows());
+    const result = runBubbleMapsValueReport({ ...opts, bubbleMapsMode: 'DISABLED' });
+    expect(result.conclusionNote).toContain('Historical cached BubbleMaps scores');
+  });
+
+  it('CACHE_ONLY mode (cap=0) never returns KEEP_BUBBLEMAPS', () => {
+    const opts = buildOptions();
+    writeMemory(opts.learningMemoryPath!, makeHighDeltaRows());
+    const result = runBubbleMapsValueReport({ ...opts, bubbleMapsMode: 'CACHE_ONLY' });
+    expect(result.conclusion).not.toBe('KEEP_BUBBLEMAPS');
+    expect(result.bubbleMapsMode).toBe('CACHE_ONLY');
+  });
+
+  it('CACHE_ONLY mode returns CACHE_ONLY when data would say KEEP_BUBBLEMAPS', () => {
+    const opts = buildOptions();
+    writeMemory(opts.learningMemoryPath!, makeHighDeltaRows());
+    const result = runBubbleMapsValueReport({ ...opts, bubbleMapsMode: 'CACHE_ONLY' });
+    expect(result.conclusion).toBe('CACHE_ONLY');
+  });
+
+  it('DISABLED mode via env var TOKEN_GRAB_BUBBLEMAPS_DISABLED=1 never returns KEEP_BUBBLEMAPS', () => {
+    process.env['TOKEN_GRAB_BUBBLEMAPS_DISABLED'] = '1';
+    const opts = buildOptions();
+    writeMemory(opts.learningMemoryPath!, makeHighDeltaRows());
+    const result = runBubbleMapsValueReport(opts);
+    expect(result.conclusion).not.toBe('KEEP_BUBBLEMAPS');
+    expect(result.bubbleMapsMode).toBe('DISABLED');
+  });
+
+  it('cap=0 via env var TOKEN_GRAB_BUBBLEMAPS_MAX_CALLS_PER_RUN=0 returns CACHE_ONLY', () => {
+    process.env['TOKEN_GRAB_BUBBLEMAPS_MAX_CALLS_PER_RUN'] = '0';
+    const opts = buildOptions();
+    writeMemory(opts.learningMemoryPath!, makeHighDeltaRows());
+    const result = runBubbleMapsValueReport(opts);
+    expect(result.conclusion).not.toBe('KEEP_BUBBLEMAPS');
+    expect(result.bubbleMapsMode).toBe('CACHE_ONLY');
+  });
+
+  it('NEEDS_MORE_DATA still fires in disabled mode when data is sparse', () => {
+    const opts = buildOptions();
+    const rows = Array.from({ length: 10 }, () => makeEnrolledRow({ outcomeLabel: 'FLAT_JUNK' }));
+    writeMemory(opts.learningMemoryPath!, rows);
+    const result = runBubbleMapsValueReport({ ...opts, bubbleMapsMode: 'DISABLED' });
+    expect(result.conclusion).toBe('NEEDS_MORE_DATA');
+  });
+
+  it('result.bubbleMapsMode field is present', () => {
+    const opts = buildOptions();
+    writeMemory(opts.learningMemoryPath!, []);
+    const result = runBubbleMapsValueReport(opts);
+    expect(['DISABLED', 'CACHE_ONLY', 'LIVE_CAPPED']).toContain(result.bubbleMapsMode);
+  });
+});
+
+describe('renderer mode line', () => {
+  it('output contains BubbleMaps mode line', () => {
+    const opts = buildOptions();
+    writeMemory(opts.learningMemoryPath!, []);
+    const result = runBubbleMapsValueReport({ ...opts, bubbleMapsMode: 'DISABLED' });
+    const output = renderBubbleMapsValueReport(result);
+    expect(output).toContain('BubbleMaps mode');
+    expect(output).toContain('DISABLED');
+  });
+
+  it('LIVE_CAPPED mode shown in output', () => {
+    const opts = buildOptions();
+    writeMemory(opts.learningMemoryPath!, []);
+    const result = runBubbleMapsValueReport({ ...opts, bubbleMapsMode: 'LIVE_CAPPED' });
+    const output = renderBubbleMapsValueReport(result);
+    expect(output).toContain('LIVE_CAPPED');
   });
 });
 

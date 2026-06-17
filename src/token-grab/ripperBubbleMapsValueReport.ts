@@ -9,8 +9,8 @@ import * as fs from 'fs';
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type BubbleMapsValueConclusion =
-  | 'KEEP_BUBBLEMAPS'          // Score tiers show ≥5% win rate differential
-  | 'CACHE_ONLY'               // Score tiers show <5% delta; non-BM predictors show more signal
+  | 'KEEP_BUBBLEMAPS'          // Score tiers show ≥5% win rate differential AND live calls are enabled
+  | 'CACHE_ONLY'               // Score tiers show <5% delta, OR live calls are disabled/capped
   | 'REMOVE_LIVE_BUBBLEMAPS'   // Essentially 0% delta AND all enrolled are CLEAN → minimal value
   | 'NEEDS_MORE_DATA';         // fewer than 50 observed rows
 
@@ -33,6 +33,8 @@ export interface BubbleMapsValueResult {
   generatedAt:         string;
   totalEnrolledRows:   number;
   totalObservedRows:   number;
+  // ── BubbleMaps mode ───────────────────────────────────────────────────────
+  bubbleMapsMode:      'DISABLED' | 'CACHE_ONLY' | 'LIVE_CAPPED';
   // ── BubbleMaps-based groupings ────────────────────────────────────────────
   scoreTiers:          TierStats[];
   clusterRiskGroups:   TierStats[];
@@ -59,6 +61,8 @@ export interface BubbleMapsValueResult {
 export interface BubbleMapsValueOptions {
   learningMemoryPath?: string;
   nowMs?:              number;
+  /** Override mode detection from env vars (useful for testing). */
+  bubbleMapsMode?:     'DISABLED' | 'CACHE_ONLY' | 'LIVE_CAPPED';
 }
 
 // ── Call site registry (from code survey — no live calls made here) ───────────
@@ -115,6 +119,17 @@ function scoreTier(score: number | null | undefined): string {
   return 'SCORE_LT_60';
 }
 
+// ── Mode detection ────────────────────────────────────────────────────────────
+
+function detectBubbleMapsMode(): BubbleMapsValueResult['bubbleMapsMode'] {
+  const disabledEnv = process.env['TOKEN_GRAB_BUBBLEMAPS_DISABLED'];
+  if (disabledEnv === '1' || disabledEnv?.toLowerCase() === 'true') return 'DISABLED';
+  const capEnvRaw = process.env['TOKEN_GRAB_BUBBLEMAPS_MAX_CALLS_PER_RUN'];
+  const capEnv    = capEnvRaw != null && capEnvRaw.trim() !== '' ? Number(capEnvRaw) : NaN;
+  if (Number.isFinite(capEnv) && capEnv === 0) return 'CACHE_ONLY';
+  return 'LIVE_CAPPED';
+}
+
 // ── Runner ────────────────────────────────────────────────────────────────────
 
 export function runBubbleMapsValueReport(
@@ -124,6 +139,8 @@ export function runBubbleMapsValueReport(
   const generatedAt = new Date(nowMs).toISOString();
   const memoryPath  = options.learningMemoryPath
     ?? 'data/token-grab/ripper/learning-memory.jsonl';
+
+  const bubbleMapsMode = options.bubbleMapsMode ?? detectBubbleMapsMode();
 
   // ── Read enrolled rows ────────────────────────────────────────────────────
   const enrolledRows: Record<string, unknown>[] = [];
@@ -244,10 +261,23 @@ export function runBubbleMapsValueReport(
     conclusionNote =
       `Only ${totalObservedRows} observed rows — need ≥50 for reliable conclusion.`;
   } else if (bubbleMapsWinDelta != null && bubbleMapsWinDelta >= 5) {
-    conclusion = 'KEEP_BUBBLEMAPS';
-    conclusionNote =
-      `BubbleMaps score tiers show ${bubbleMapsWinDelta}% win rate differential — ` +
-      `score is predictive. Keep live calls.`;
+    // Data says score is predictive — but only allow KEEP_BUBBLEMAPS in LIVE_CAPPED mode
+    if (bubbleMapsMode === 'LIVE_CAPPED') {
+      conclusion = 'KEEP_BUBBLEMAPS';
+      conclusionNote =
+        `BubbleMaps score tiers show ${bubbleMapsWinDelta}% win rate differential — ` +
+        `score is predictive. Keep live calls.`;
+    } else {
+      // DISABLED or CACHE_ONLY — score data is predictive but live calls are off
+      conclusion = 'CACHE_ONLY';
+      const modeReason = bubbleMapsMode === 'DISABLED'
+        ? 'live BubbleMaps calls are disabled (TOKEN_GRAB_BUBBLEMAPS_DISABLED=1)'
+        : 'TOKEN_GRAB_BUBBLEMAPS_MAX_CALLS_PER_RUN=0 prevents live calls';
+      conclusionNote =
+        `BubbleMaps score tiers show ${bubbleMapsWinDelta}% win rate differential — score is predictive. ` +
+        `Historical cached BubbleMaps scores may still be useful, but ${modeReason}. ` +
+        `Re-enable live calls to take advantage of this signal.`;
+    }
   } else if (bubbleMapsWinDelta != null && bubbleMapsWinDelta < 1) {
     conclusion = 'REMOVE_LIVE_BUBBLEMAPS';
     conclusionNote =
@@ -256,13 +286,18 @@ export function runBubbleMapsValueReport(
       `Live calls add no observable predictive value within the enrolled cohort. ` +
       `Consider switching to cache-only or removing live calls for enrolled flow.`;
   } else {
+    // Data-driven CACHE_ONLY — also the forced path when mode prevents live calls
     conclusion = 'CACHE_ONLY';
     const bestNonBM = Math.max(liquidityWinDelta ?? 0, vlrWinDelta ?? 0);
+    const modeNote = bubbleMapsMode !== 'LIVE_CAPPED'
+      ? ` Historical cached BubbleMaps scores may still be useful, but live calls are ${bubbleMapsMode === 'DISABLED' ? 'disabled' : 'capped at 0'}.`
+      : '';
     conclusionNote =
       `BubbleMaps score tiers show ${bubbleMapsWinDelta ?? 0}% win delta. ` +
       `Non-BubbleMaps predictors show up to ${bestNonBM}% delta ` +
       `(liq: ${liquidityWinDelta ?? 0}%, VLR: ${vlrWinDelta ?? 0}%). ` +
-      `Live BubbleMaps calls are not clearly adding predictive value within the enrolled cohort. ` +
+      `Live BubbleMaps calls are not clearly adding predictive value within the enrolled cohort.` +
+      `${modeNote} ` +
       `Persistent cache preserves existing scoring; live calls can be capped at the default ` +
       `TOKEN_GRAB_BUBBLEMAPS_MAX_CALLS_PER_RUN limit with no expected loss of signal.`;
   }
@@ -271,6 +306,7 @@ export function runBubbleMapsValueReport(
     generatedAt,
     totalEnrolledRows,
     totalObservedRows,
+    bubbleMapsMode,
     scoreTiers,
     clusterRiskGroups,
     bubbleMapsWinDelta,
@@ -311,6 +347,7 @@ export function renderBubbleMapsValueReport(result: BubbleMapsValueResult): stri
   lines.push(`  ${SEP2}`);
   lines.push('  OVERVIEW');
   lines.push(`  ${SEP2}`, '');
+  lines.push(`  BubbleMaps mode     : ${result.bubbleMapsMode}`);
   lines.push(`  Enrolled rows       : ${result.totalEnrolledRows}`);
   lines.push(`  Observed rows       : ${result.totalObservedRows}`);
   lines.push(`  % with BM score     : ${fmtRate(result.pctWithScore)}`);
