@@ -144,6 +144,7 @@
     "token:ripper-shadow-filter-candidate-comparison": "tsx src/cli.ts token:ripper-shadow-filter-candidate-comparison",
     "token:ripper-paper-policy-test": "tsx src/cli.ts token:ripper-paper-policy-test",
     "token:ripper-paper-learning-loop": "bash scripts/run-token-grab-paper-learning-loop.sh",
+    "token:ripper-learning-cron": "bash scripts/run-token-grab-learning-cron.sh",
     "token:ripper-learning-memory": "tsx src/cli.ts token:ripper-learning-memory",
     "token:ripper-learning-summary": "tsx src/cli.ts token:ripper-learning-summary",
     "token:prime-gate-audit": "tsx src/cli.ts token:prime-gate-audit",
