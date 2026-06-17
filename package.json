@@ -141,6 +141,7 @@
     "token:ripper-shadow-reject-filter-report": "tsx src/cli.ts token:ripper-shadow-reject-filter-report",
     "token:ripper-shadow-reject-filter-enroll": "tsx src/cli.ts token:ripper-shadow-reject-filter-enroll",
     "token:ripper-shadow-enrolled-outcome-report": "tsx src/cli.ts token:ripper-shadow-enrolled-outcome-report",
+    "token:ripper-shadow-filter-candidate-comparison": "tsx src/cli.ts token:ripper-shadow-filter-candidate-comparison",
     "token:ripper-paper-policy-test": "tsx src/cli.ts token:ripper-paper-policy-test",
     "token:ripper-paper-learning-loop": "bash scripts/run-token-grab-paper-learning-loop.sh",
     "token:ripper-learning-memory": "tsx src/cli.ts token:ripper-learning-memory",

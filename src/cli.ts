@@ -219,6 +219,7 @@ import { runFlatJunkReducerReport, renderFlatJunkReducerReport } from './token-g
 import { runShadowRejectFilterReport, renderShadowRejectFilterReport } from './token-grab/ripperShadowRejectFilterReport';
 import { runShadowRejectFilterEnrollment, renderShadowRejectFilterEnrollment } from './token-grab/ripperShadowRejectFilterEnrollment';
 import { runShadowEnrolledOutcomeReport, renderShadowEnrolledOutcomeReport } from './token-grab/ripperShadowEnrolledOutcomeReport';
+import { runShadowFilterCandidateComparison, renderShadowFilterCandidateComparison } from './token-grab/ripperShadowFilterCandidateComparison';
 import { runPaperPolicyTest, renderPaperPolicyTest } from './token-grab/ripperPaperPolicyTest';
 import { runRipperLearningMemory, renderRipperLearningMemoryResult } from './token-grab/ripperLearningMemory';
 import { runRipperLearningSummary, renderRipperLearningSummary } from './token-grab/ripperLearningSummaryReport';
@@ -3442,6 +3443,38 @@ async function main(): Promise<void> {
           outPath:          seorOut,
         });
         console.log(renderShadowEnrolledOutcomeReport(seorResult));
+        break;
+      }
+
+      case 'token:ripper-shadow-filter-candidate-comparison': {
+        // SAFETY: report-only / read-only. No trading, no wallet, no swap.
+        // DO NOT change production gates. DO NOT wire into autopilot decisions.
+        const sfccEnrollments = getArgValue('--enrollments')
+          ?? 'data/token-grab/ripper/shadow-reject-filter-enrollments.jsonl';
+        const sfccPaperIntents = getArgValue('--paper-intents')
+          ?? 'data/token-grab/ripper/paper-intents.jsonl';
+        const sfccObsPaths: string[] = [];
+        const sfccObsArgs = getArgValuesMulti('--observations');
+        if (sfccObsArgs.length > 0) {
+          sfccObsPaths.push(...sfccObsArgs);
+        } else {
+          // Default: obs-*.jsonl from observations dir + paper-intent-observations
+          const sfccObsDir = 'data/token-grab/ripper/observations';
+          if (fs.existsSync(sfccObsDir)) {
+            const obsFiles = fs.readdirSync(sfccObsDir)
+              .filter(f => f.startsWith('obs-') && f.endsWith('.jsonl'))
+              .map(f => path.join(sfccObsDir, f));
+            sfccObsPaths.push(...obsFiles);
+          }
+          const sfccPaperIntentObs = 'data/token-grab/ripper/paper-intent-observations.jsonl';
+          if (fs.existsSync(sfccPaperIntentObs)) sfccObsPaths.push(sfccPaperIntentObs);
+        }
+        const sfccResult = runShadowFilterCandidateComparison({
+          enrollmentsPath:  sfccEnrollments,
+          paperIntentsPath: sfccPaperIntents,
+          observationPaths: sfccObsPaths,
+        });
+        console.log(renderShadowFilterCandidateComparison(sfccResult));
         break;
       }
 
