@@ -45,6 +45,15 @@ export interface ClusterRiskProvider {
   fetchClusterRisk(tokenMint: string): Promise<ClusterRiskResult>;
 }
 
+// ── Cache stats (optional — surfaced by caching providers only) ───────────────
+
+export interface ClusterRiskCacheStats {
+  liveCallsThisRun:  number;
+  cacheHitsThisRun:  number;
+  skippedDueToCap:   number;
+  capLimit:          number;
+}
+
 // ── Thresholds ────────────────────────────────────────────────────────────────
 
 export const CLUSTER_RISK_THRESHOLDS = {

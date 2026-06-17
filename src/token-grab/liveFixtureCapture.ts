@@ -14,7 +14,7 @@ import {
   type RipperConfig,
 } from './dexRipperEngine';
 import { loadEarSignals, type EarsInputFormat } from './ripperEarsReport';
-import { type ClusterRiskProvider, type ClusterRiskResult } from './clusterRiskProvider';
+import { type ClusterRiskProvider, type ClusterRiskResult, type ClusterRiskCacheStats } from './clusterRiskProvider';
 
 // ── Shadow policy ─────────────────────────────────────────────────────────────────────────
 
@@ -249,6 +249,8 @@ export interface CaptureResult {
   inputMissing: boolean;
   loadWarnings: string[];
   fixtures: LiveRipperFixture[];
+  /** Populated when the provider is a caching wrapper (BubbleMapsCache) */
+  bubbleMapsStats?: ClusterRiskCacheStats;
   tradingExecuted: 0;
   noRealTradeSent: true;
   paperOnly: true;
@@ -327,6 +329,14 @@ export async function runLiveFixtureCapture(options: CaptureOptions): Promise<Ca
     appendFixtureToJsonl(fixture, options.outputPath);
   }
 
+  // Extract cache stats if the provider supports it (duck-typed — no hard dep on BubbleMapsCache)
+  type MaybeStats = ClusterRiskProvider & { getStats?: () => ClusterRiskCacheStats };
+  const bubbleMapsStats =
+    options.clusterRiskProvider &&
+    typeof (options.clusterRiskProvider as MaybeStats).getStats === 'function'
+      ? (options.clusterRiskProvider as MaybeStats).getStats!()
+      : undefined;
+
   return {
     capturedCount: signals.length,
     skippedCount,
@@ -335,6 +345,7 @@ export async function runLiveFixtureCapture(options: CaptureOptions): Promise<Ca
     inputMissing: false,
     loadWarnings,
     fixtures,
+    bubbleMapsStats,
     tradingExecuted: 0,
     noRealTradeSent: true,
     paperOnly: true,
@@ -593,6 +604,18 @@ export function renderCaptureResult(result: CaptureResult, debug = false): strin
       const sym = f.normalizedSignal.symbol ? `$${f.normalizedSignal.symbol}` : '(no sym)';
       lines.push(`  ${sym.padEnd(10)} score=${fmtScore(f.ripperScore)}  ${(f.entryDecision ?? 'n/a').padEnd(22)}  age=${fmtAge(f.ageMinutes)}`);
       for (const b of f.blockers.slice(0, 2)) lines.push(`    ✗ ${b}`);
+    }
+    lines.push('');
+  }
+
+  if (result.bubbleMapsStats) {
+    const bms = result.bubbleMapsStats;
+    lines.push(`  BubbleMaps live calls : ${bms.liveCallsThisRun} / ${bms.capLimit} (cap)`);
+    lines.push(`  BubbleMaps cache hits : ${bms.cacheHitsThisRun}`);
+    if (bms.skippedDueToCap > 0) {
+      lines.push(`  BubbleMaps cap skips  : ${bms.skippedDueToCap}  ← BubbleMaps calls skipped due to cap`);
+    } else {
+      lines.push(`  BubbleMaps cap skips  : 0`);
     }
     lines.push('');
   }

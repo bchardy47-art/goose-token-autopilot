@@ -3,7 +3,7 @@ import * as path from 'path';
 import type { ClusterRisk } from './dexRipperEngine';
 import { runFreshPoolFeed } from './freshPoolFeed';
 import { runLiveFixtureCapture, type LiveRipperFixture } from './liveFixtureCapture';
-import type { ClusterRiskProvider } from './clusterRiskProvider';
+import type { ClusterRiskProvider, ClusterRiskCacheStats } from './clusterRiskProvider';
 import type { RipperEarSignal } from './ripperEars';
 
 const DEFAULT_RUNS_DIR         = 'data/token-grab/dex-watch-runs';
@@ -52,6 +52,8 @@ export interface RipperPaperCycleResult {
   postApprovalObservedCount: number;
   /** Path to observation JSONL artifact (null if no observations this cycle) */
   observationOutputPath: string | null;
+  /** BubbleMaps cache/cap stats for this cycle (present when using BubbleMapsCache provider) */
+  bubbleMapsStats?: ClusterRiskCacheStats;
   realTradingLocked: true;
   tradingExecuted: 0;
   noRealTradeSent: true;
@@ -380,6 +382,7 @@ export async function runRipperPaperCycle(
     feedOutputPath,
     postApprovalObservedCount,
     observationOutputPath,
+    bubbleMapsStats: 'bubbleMapsStats' in captureResult ? captureResult.bubbleMapsStats : undefined,
     ...safetyFields,
   };
 }
@@ -419,7 +422,18 @@ export function renderRipperPaperCycleResult(result: RipperPaperCycleResult): st
     lines.push(`    WATCH        : ${result.clusterRiskCounts.WATCH}`);
     lines.push(`    RISKY        : ${result.clusterRiskCounts.RISKY}`);
     lines.push(`    UNKNOWN      : ${result.clusterRiskCounts.UNKNOWN}`);
-    lines.push(`    BubbleMaps   : ${result.bubblemapsProviderCount} (live API calls)`);
+    if (result.bubbleMapsStats) {
+      const bms = result.bubbleMapsStats;
+      lines.push(`    BubbleMaps live calls : ${bms.liveCallsThisRun} / ${bms.capLimit} (cap)`);
+      lines.push(`    BubbleMaps cache hits : ${bms.cacheHitsThisRun}`);
+      if (bms.skippedDueToCap > 0) {
+        lines.push(`    BubbleMaps cap skips  : ${bms.skippedDueToCap}  ← BubbleMaps calls skipped due to cap`);
+      } else {
+        lines.push(`    BubbleMaps cap skips  : 0`);
+      }
+    } else {
+      lines.push(`    BubbleMaps   : ${result.bubblemapsProviderCount} (provider count)`);
+    }
     lines.push('');
     lines.push('  Gate decisions:');
     lines.push(`    BUY_APPROVED_PAPER : ${result.buyApprovedPaper}`);

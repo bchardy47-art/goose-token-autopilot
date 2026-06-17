@@ -172,6 +172,7 @@ import { runFixtureClusterEnrich, renderFixtureClusterEnrichReport, renderFixtur
 import { runClusterRiskAudit, renderClusterRiskAuditReport } from './token-grab/clusterRiskAudit';
 import { runBubbleMapsObservationReport, renderBubbleMapsObservationReport } from './token-grab/bubbleMapsObservationReport';
 import { createClusterRiskProvider } from './token-grab/clusterRiskProvider';
+import { createBubbleMapsCachedProvider } from './token-grab/bubbleMapsCache';
 import { runRipperPaperCycle, renderRipperPaperCycleResult, renderRipperPaperCycleUsage } from './token-grab/ripperPaperCycle';
 import { runRipperPaperLoop, renderLoopCycleLine, renderRipperPaperLoopResult, renderRipperPaperLoopUsage } from './token-grab/ripperPaperLoop';
 import { runRipperNearMissReport as runCycleNearMissReport, renderRipperNearMissReport as renderCycleNearMissReport, renderRipperNearMissReportUsage } from './token-grab/ripperNearMissReport';
@@ -224,6 +225,7 @@ import { runPaperPolicyTest, renderPaperPolicyTest } from './token-grab/ripperPa
 import { runRipperLearningMemory, renderRipperLearningMemoryResult } from './token-grab/ripperLearningMemory';
 import { runRipperLearningSummary, renderRipperLearningSummary } from './token-grab/ripperLearningSummaryReport';
 import { runBrainDashboard, renderBrainDashboard } from './token-grab/ripperBrainDashboardReport';
+import { runBubbleMapsValueReport, renderBubbleMapsValueReport } from './token-grab/ripperBubbleMapsValueReport';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -2794,9 +2796,10 @@ async function main(): Promise<void> {
         const rpcRunsDir   = getArgValue('--runs-dir')   ?? 'data/token-grab/dex-watch-runs';
         const rpcCyclesDir = getArgValue('--cycles-dir') ?? 'data/token-grab/ripper/cycles';
 
-        const { provider: rpcClusterProvider, configNote: rpcClusterNote } =
+        const { provider: rpcRawProvider, configNote: rpcClusterNote } =
           createClusterRiskProvider();
         if (rpcClusterNote) console.warn(`[cluster-risk] ${rpcClusterNote}`);
+        const rpcClusterProvider = createBubbleMapsCachedProvider(rpcRawProvider);
 
         const rpcResult = await runRipperPaperCycle({
           runsDir:             rpcRunsDir,
@@ -2819,9 +2822,10 @@ async function main(): Promise<void> {
         const rplMaxCycles    = parseNumberArg('--max-cycles',       10,  { min: 1 });
         const rplRefreshSrc   = process.argv.includes('--refresh-source');
 
-        const { provider: rplClusterProvider, configNote: rplClusterNote } =
+        const { provider: rplRawProvider, configNote: rplClusterNote } =
           createClusterRiskProvider();
         if (rplClusterNote) console.warn(`[cluster-risk] ${rplClusterNote}`);
+        const rplClusterProvider = createBubbleMapsCachedProvider(rplRawProvider);
 
         console.log('');
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -2921,9 +2925,10 @@ async function main(): Promise<void> {
         const lfcReset   = process.argv.includes('--reset');
         const lfcDebug   = process.argv.includes('--debug');
 
-        const { provider: lfcClusterProvider, configNote: lfcClusterNote } =
+        const { provider: lfcRawProvider, configNote: lfcClusterNote } =
           createClusterRiskProvider();
         if (lfcClusterNote) console.warn(`[cluster-risk] ${lfcClusterNote}`);
+        const lfcClusterProvider = createBubbleMapsCachedProvider(lfcRawProvider);
 
         const lfcResult = await runLiveFixtureCapture({
           inputPath: lfcInput,
@@ -3543,6 +3548,16 @@ async function main(): Promise<void> {
             ?? 'logs/token-grab-learning',
         });
         console.log(renderBrainDashboard(bdResult));
+        break;
+      }
+
+      case 'token:ripper-bubblemaps-value-report': {
+        // SAFETY: report-only / read-only. No API calls. No gate changes.
+        const bmvrResult = runBubbleMapsValueReport({
+          learningMemoryPath: getArgValue('--memory')
+            ?? 'data/token-grab/ripper/learning-memory.jsonl',
+        });
+        console.log(renderBubbleMapsValueReport(bmvrResult));
         break;
       }
 
