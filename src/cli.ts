@@ -223,6 +223,7 @@ import { runShadowFilterCandidateComparison, renderShadowFilterCandidateComparis
 import { runPaperPolicyTest, renderPaperPolicyTest } from './token-grab/ripperPaperPolicyTest';
 import { runRipperLearningMemory, renderRipperLearningMemoryResult } from './token-grab/ripperLearningMemory';
 import { runRipperLearningSummary, renderRipperLearningSummary } from './token-grab/ripperLearningSummaryReport';
+import { runBrainDashboard, renderBrainDashboard } from './token-grab/ripperBrainDashboardReport';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -3521,6 +3522,27 @@ async function main(): Promise<void> {
           ?? 'data/token-grab/ripper/learning-memory.jsonl';
         const rlsResult = runRipperLearningSummary({ memoryPath: rlsMemory });
         console.log(renderRipperLearningSummary(rlsResult));
+        break;
+      }
+
+      case 'token:ripper-brain-dashboard': {
+        // SAFETY: report-only / read-only. No trades, no wallet, no gate changes.
+        // DO NOT change production gates. DO NOT wire into autopilot decisions.
+        const bdResult = runBrainDashboard({
+          learningMemoryPath: getArgValue('--memory')
+            ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          enrollmentsPath: getArgValue('--enrollments')
+            ?? 'data/token-grab/ripper/shadow-reject-filter-enrollments.jsonl',
+          outcomeReportPath: getArgValue('--outcome-report')
+            ?? 'data/token-grab/ripper/shadow-enrolled-outcome-report.jsonl',
+          paperIntentsPath: getArgValue('--paper-intents')
+            ?? 'data/token-grab/ripper/paper-intents.jsonl',
+          cyclesDir: getArgValue('--cycles-dir')
+            ?? 'data/token-grab/ripper/cycles',
+          logsDir: getArgValue('--logs-dir')
+            ?? 'logs/token-grab-learning',
+        });
+        console.log(renderBrainDashboard(bdResult));
         break;
       }
 
