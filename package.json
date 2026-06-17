@@ -149,6 +149,7 @@
     "token:ripper-learning-summary": "tsx src/cli.ts token:ripper-learning-summary",
     "token:ripper-brain-dashboard": "tsx src/cli.ts token:ripper-brain-dashboard",
     "token:ripper-bubblemaps-value-report": "tsx src/cli.ts token:ripper-bubblemaps-value-report",
+    "token:ripper-winner-profile-report": "tsx src/cli.ts token:ripper-winner-profile-report",
     "token:prime-gate-audit": "tsx src/cli.ts token:prime-gate-audit",
     "token:holder-risk-audit": "tsx src/cli.ts token:holder-risk-audit",
     "token:fixture-holder-enrich": "tsx src/cli.ts token:fixture-holder-enrich",

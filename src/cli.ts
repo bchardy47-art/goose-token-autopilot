@@ -226,6 +226,7 @@ import { runRipperLearningMemory, renderRipperLearningMemoryResult } from './tok
 import { runRipperLearningSummary, renderRipperLearningSummary } from './token-grab/ripperLearningSummaryReport';
 import { runBrainDashboard, renderBrainDashboard } from './token-grab/ripperBrainDashboardReport';
 import { runBubbleMapsValueReport, renderBubbleMapsValueReport } from './token-grab/ripperBubbleMapsValueReport';
+import { runWinnerProfileReport, renderWinnerProfileReport } from './token-grab/ripperWinnerProfileReport';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -3558,6 +3559,20 @@ async function main(): Promise<void> {
             ?? 'data/token-grab/ripper/learning-memory.jsonl',
         });
         console.log(renderBubbleMapsValueReport(bmvrResult));
+        break;
+      }
+
+      case 'token:ripper-winner-profile-report': {
+        // SAFETY: report-only / read-only. No trades, no API calls, no gate changes.
+        // DO NOT wire into autopilot decisions. DO NOT enable real trading.
+        const wprResult = runWinnerProfileReport({
+          learningMemoryPath: getArgValue('--memory')
+            ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          minSample: getArgValue('--min-sample') != null
+            ? Number(getArgValue('--min-sample'))
+            : undefined,
+        });
+        console.log(renderWinnerProfileReport(wprResult));
         break;
       }
 
