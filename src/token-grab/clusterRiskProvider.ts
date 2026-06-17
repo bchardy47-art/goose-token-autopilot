@@ -52,6 +52,7 @@ export interface ClusterRiskCacheStats {
   cacheHitsThisRun:  number;
   skippedDueToCap:   number;
   capLimit:          number;
+  mode:              'DISABLED' | 'CACHE_ONLY' | 'LIVE_CAPPED';
 }
 
 // ── Thresholds ────────────────────────────────────────────────────────────────

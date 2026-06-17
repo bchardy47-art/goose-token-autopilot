@@ -610,12 +610,16 @@ export function renderCaptureResult(result: CaptureResult, debug = false): strin
 
   if (result.bubbleMapsStats) {
     const bms = result.bubbleMapsStats;
+    lines.push(`  BubbleMaps mode       : ${bms.mode}`);
     lines.push(`  BubbleMaps live calls : ${bms.liveCallsThisRun} / ${bms.capLimit} (cap)`);
     lines.push(`  BubbleMaps cache hits : ${bms.cacheHitsThisRun}`);
     if (bms.skippedDueToCap > 0) {
-      lines.push(`  BubbleMaps cap skips  : ${bms.skippedDueToCap}  ← BubbleMaps calls skipped due to cap`);
+      const label = bms.mode === 'DISABLED'
+        ? '← BubbleMaps disabled — no live calls'
+        : '← BubbleMaps calls skipped due to cap';
+      lines.push(`  BubbleMaps skipped    : ${bms.skippedDueToCap}  ${label}`);
     } else {
-      lines.push(`  BubbleMaps cap skips  : 0`);
+      lines.push(`  BubbleMaps skipped    : 0`);
     }
     lines.push('');
   }

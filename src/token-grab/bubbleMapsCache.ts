@@ -1,7 +1,7 @@
 // DO_NOT_ENABLE_REAL_TRADING  reportOnly=true  paperOnly=true  readOnly=true  tradingExecuted=0
 // HOLD_CURRENT_GATES  NO_POLICY_CHANGE
 //
-// Persistent per-contract BubbleMaps cache with per-run call cap.
+// Persistent per-contract BubbleMaps cache with per-run call cap and optional disable mode.
 // Wraps any ClusterRiskProvider; does NOT change scoring or gate logic.
 // Only controls IF and WHEN the API is called — never the result interpretation.
 
@@ -34,7 +34,9 @@ export class BubbleMapsCache implements ClusterRiskProvider {
   readonly name = 'bubblemaps-cached';
 
   private readonly memCache = new Map<string, BubbleMapsCacheEntry>();
-  private readonly stats: ClusterRiskCacheStats;
+  private liveCallsThisRun  = 0;
+  private cacheHitsThisRun  = 0;
+  private skippedThisRun    = 0;
 
   constructor(
     private readonly provider:        ClusterRiskProvider,
@@ -42,13 +44,8 @@ export class BubbleMapsCache implements ClusterRiskProvider {
     private readonly maxCallsPerRun:  number,
     private readonly ttlMs:           number,
     private readonly nowMs:           () => number = () => Date.now(),
+    private readonly disabled:        boolean = false,
   ) {
-    this.stats = {
-      liveCallsThisRun: 0,
-      cacheHitsThisRun: 0,
-      skippedDueToCap:  0,
-      capLimit:         maxCallsPerRun,
-    };
     this.loadFromDisk();
   }
 
@@ -56,13 +53,28 @@ export class BubbleMapsCache implements ClusterRiskProvider {
     // 1. Check in-memory cache (loaded from disk + entries written this run)
     const cached = this.memCache.get(tokenMint);
     if (cached && !this.isExpired(cached)) {
-      this.stats.cacheHitsThisRun++;
+      this.cacheHitsThisRun++;
       return { ...cached.result };
     }
 
-    // 2. Per-run cap check — degrade gracefully, never block the cycle
-    if (this.stats.liveCallsThisRun >= this.maxCallsPerRun) {
-      this.stats.skippedDueToCap++;
+    // 2. Disabled mode — no live calls; return UNKNOWN if no cache hit
+    if (this.disabled) {
+      this.skippedThisRun++;
+      return {
+        clusterRisk:       'UNKNOWN',
+        clusterProvider:   'bubblemaps-cached',
+        clusterCheckedAt:  new Date(this.nowMs()).toISOString(),
+        clusterConfidence: 'UNKNOWN',
+        clusterNotes: [
+          'BubbleMaps disabled (TOKEN_GRAB_BUBBLEMAPS_DISABLED=1)',
+          'No live calls will be made; set TOKEN_GRAB_BUBBLEMAPS_DISABLED=0 to re-enable',
+        ],
+      };
+    }
+
+    // 3. Per-run cap check — degrade gracefully, never block the cycle
+    if (this.liveCallsThisRun >= this.maxCallsPerRun) {
+      this.skippedThisRun++;
       return {
         clusterRisk:       'UNKNOWN',
         clusterProvider:   'bubblemaps-cached',
@@ -75,8 +87,8 @@ export class BubbleMapsCache implements ClusterRiskProvider {
       };
     }
 
-    // 3. Live API call through wrapped provider
-    this.stats.liveCallsThisRun++;
+    // 4. Live API call through wrapped provider
+    this.liveCallsThisRun++;
     let result: ClusterRiskResult;
     try {
       result = await this.provider.fetchClusterRisk(tokenMint);
@@ -92,7 +104,7 @@ export class BubbleMapsCache implements ClusterRiskProvider {
       };
     }
 
-    // 4. Persist only clean results — don't cache transient errors (429, 401, network)
+    // 5. Persist only clean results — don't cache transient errors (429, 401, network)
     if (!result.clusterFetchError) {
       const entry: BubbleMapsCacheEntry = {
         contract: tokenMint,
@@ -107,7 +119,16 @@ export class BubbleMapsCache implements ClusterRiskProvider {
   }
 
   getStats(): ClusterRiskCacheStats {
-    return { ...this.stats };
+    const mode: ClusterRiskCacheStats['mode'] =
+      this.disabled             ? 'DISABLED'   :
+      this.maxCallsPerRun === 0 ? 'CACHE_ONLY' : 'LIVE_CAPPED';
+    return {
+      liveCallsThisRun: this.liveCallsThisRun,
+      cacheHitsThisRun: this.cacheHitsThisRun,
+      skippedDueToCap:  this.skippedThisRun,
+      capLimit:         this.maxCallsPerRun,
+      mode,
+    };
   }
 
   // ── Private helpers ─────────────────────────────────────────────────────────
@@ -160,8 +181,12 @@ export function createBubbleMapsCachedProvider(
     maxCallsPerRun?: number;
     ttlMs?:          number;
     nowMs?:          () => number;
+    disabled?:       boolean;
   } = {},
 ): BubbleMapsCache {
+  const disabledEnv = process.env['TOKEN_GRAB_BUBBLEMAPS_DISABLED'];
+  const disabled = opts.disabled ?? (disabledEnv === '1' || disabledEnv?.toLowerCase() === 'true');
+
   const rawEnv = process.env['TOKEN_GRAB_BUBBLEMAPS_MAX_CALLS_PER_RUN'];
   const envCap = rawEnv != null && rawEnv.trim() !== '' ? Number(rawEnv) : NaN;
   const maxCallsPerRun =
@@ -174,5 +199,6 @@ export function createBubbleMapsCachedProvider(
     maxCallsPerRun,
     opts.ttlMs     ?? BUBBLEMAPS_CACHE_TTL_MS,
     opts.nowMs,
+    disabled,
   );
 }

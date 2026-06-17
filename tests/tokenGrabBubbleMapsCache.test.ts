@@ -361,6 +361,7 @@ describe('getStats', () => {
       cacheHitsThisRun: 0,
       skippedDueToCap:  0,
       capLimit:         20,
+      mode:             'LIVE_CAPPED',
     });
   });
 

@@ -81,6 +81,7 @@ export interface BrainDashboardResult {
   timingEdge:         TimingEdge;
   openIntents:        OpenIntents;
   overallCall:        string;
+  bubbleMapsMode:     'DISABLED' | 'CACHE_ONLY' | 'LIVE_CAPPED';
   reportOnly:         true;
   readOnly:           true;
   tradingExecuted:    0;
@@ -522,6 +523,14 @@ export function runBrainDashboard(
   const openIntents  = loadOpenIntents(paperIntentsPath, logsDir);
   const overallCall  = buildOverallCall(topCandidate, rejectedCandidates);
 
+  const disabledEnv = process.env['TOKEN_GRAB_BUBBLEMAPS_DISABLED'];
+  const capEnvRaw   = process.env['TOKEN_GRAB_BUBBLEMAPS_MAX_CALLS_PER_RUN'];
+  const capEnv      = capEnvRaw != null && capEnvRaw.trim() !== '' ? Number(capEnvRaw) : NaN;
+  const bubbleMapsMode: BrainDashboardResult['bubbleMapsMode'] =
+    (disabledEnv === '1' || disabledEnv?.toLowerCase() === 'true') ? 'DISABLED' :
+    (Number.isFinite(capEnv) && capEnv === 0)                      ? 'CACHE_ONLY' :
+    'LIVE_CAPPED';
+
   return {
     generatedAt,
     brainStatus,
@@ -531,6 +540,7 @@ export function runBrainDashboard(
     timingEdge,
     openIntents,
     overallCall,
+    bubbleMapsMode,
     reportOnly:        _reportOnly,
     readOnly:          _readOnly,
     tradingExecuted:   _tradingExecuted,
@@ -684,6 +694,7 @@ export function renderBrainDashboard(result: BrainDashboardResult): string {
   lines.push('  reportOnly=true  readOnly=true  tradingExecuted=0');
   lines.push('  realTradingLocked=true  paperOnly=true');
   lines.push('  HOLD_CURRENT_GATES  NO_POLICY_CHANGE  DO_NOT_ENABLE_REAL_TRADING');
+  lines.push(`  BubbleMaps mode   : ${result.bubbleMapsMode}`);
   lines.push('');
 
   // ── Overall call ───────────────────────────────────────────────────────────
