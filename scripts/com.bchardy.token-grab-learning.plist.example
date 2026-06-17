@@ -25,10 +25,20 @@
   <key>RunAtLoad</key>
   <false/>
 
+  <!--
+    PATH must include the NVM-managed node/npm binaries. launchd does NOT
+    source ~/.bashrc or ~/.zshrc, so NVM is not on PATH by default.
+
+    Run `which node` in your terminal to get the exact path, then set:
+      /Users/brianhardy/.nvm/versions/node/<version>/bin
+
+    Current node version on this machine: v22.22.2
+    Update the PATH below when you upgrade node via nvm.
+  -->
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+    <string>/Users/brianhardy/.nvm/versions/node/v22.22.2/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
   </dict>
 </dict>
 </plist>

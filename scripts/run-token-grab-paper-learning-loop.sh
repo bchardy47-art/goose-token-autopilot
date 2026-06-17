@@ -76,32 +76,50 @@ echo "  (reportOnly=true — no trades during wait)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 sleep 660
 
-# ── 7-8. Observation watcher + autopilot cycle ───────────────────────────────
-echo ""
-echo "  [STEP 7/9] Running observation watcher (--cycles 1 --minutes 3)..."
-npm run token:dex-day-watch -- \
-  --cycles 1 \
-  --minutes 3 \
-  --interval-seconds 30 \
-  --sleep-between-cycles-minutes 0
+# ── 7-9. Closeout phase with timeout guard ────────────────────────────────────
+# Wrap watcher + autopilot cycle + report in a timed subshell so a hung
+# watcher cannot block future cron runs. 10 min is ample for 3-min watcher.
+CLOSEOUT_TIMEOUT_SECS=600
+CLOSEOUT_FLAG="/tmp/token-grab-closeout-$$"
 
-echo ""
-echo "  [STEP 8/9] Running paper autopilot cycle (observation closeout)..."
-npm run token:ripper-paper-autopilot-cycle
+(
+  echo ""
+  echo "  [STEP 7/9] Running observation watcher (--cycles 1 --minutes 3)..."
+  npm run token:dex-day-watch -- \
+    --cycles 1 \
+    --minutes 3 \
+    --interval-seconds 30 \
+    --sleep-between-cycles-minutes 0
 
-# ── 9. Shadow enrolled outcome report ────────────────────────────────────────
-echo ""
-echo "  [STEP 9/9] Running shadow enrolled outcome report..."
-npm run token:ripper-shadow-enrolled-outcome-report -- \
-  --enrollments data/token-grab/ripper/shadow-reject-filter-enrollments.jsonl \
-  --observations data/token-grab/ripper/observations/*.jsonl \
-    data/token-grab/ripper/paper-intent-observations.jsonl \
-    data/token-grab/dex-watch-runs/run-*.json \
-  --out data/token-grab/ripper/shadow-enrolled-outcome-report.jsonl
+  echo ""
+  echo "  [STEP 8/9] Running paper autopilot cycle (observation closeout)..."
+  npm run token:ripper-paper-autopilot-cycle
 
-echo ""
-echo "  Running final autopilot status..."
-npm run token:ripper-autopilot-status
+  echo ""
+  echo "  [STEP 9/9] Running shadow enrolled outcome report..."
+  npm run token:ripper-shadow-enrolled-outcome-report -- \
+    --enrollments data/token-grab/ripper/shadow-reject-filter-enrollments.jsonl \
+    --observations data/token-grab/ripper/observations/*.jsonl \
+      data/token-grab/ripper/paper-intent-observations.jsonl \
+      data/token-grab/dex-watch-runs/run-*.json \
+    --out data/token-grab/ripper/shadow-enrolled-outcome-report.jsonl
+
+  echo ""
+  echo "  Running final autopilot status..."
+  npm run token:ripper-autopilot-status
+) &
+CLOSEOUT_PID=$!
+( sleep "$CLOSEOUT_TIMEOUT_SECS" && touch "$CLOSEOUT_FLAG" && kill "$CLOSEOUT_PID" 2>/dev/null ) &
+CLOSEOUT_KILLER=$!
+wait  "$CLOSEOUT_PID"    || true
+kill  "$CLOSEOUT_KILLER" 2>/dev/null || true
+wait  "$CLOSEOUT_KILLER" 2>/dev/null || true
+
+if [ -f "$CLOSEOUT_FLAG" ]; then
+  rm -f "$CLOSEOUT_FLAG"
+  echo ""
+  echo "  [TIMEOUT] Closeout phase exceeded ${CLOSEOUT_TIMEOUT_SECS}s — stopped."
+fi
 
 # ── Final summary ─────────────────────────────────────────────────────────────
 echo ""

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
+import { execSync } from 'child_process';
 
 const REPO_ROOT  = path.join(__dirname, '..');
 const SCRIPT_PATH = path.join(REPO_ROOT, 'scripts', 'run-token-grab-learning-cron.sh');
@@ -123,6 +124,82 @@ describe('final status reporting', () => {
 
   it('prints log path in footer', () => {
     expect(script).toContain('Log path');
+  });
+});
+
+// ── Lock guard ────────────────────────────────────────────────────────────────
+
+describe('lock guard — prevent overlapping runs', () => {
+  it('contains a LOCK_DIR variable', () => {
+    expect(script).toContain('LOCK_DIR=');
+  });
+
+  it('uses mkdir atomically for the lock', () => {
+    expect(script).toMatch(/mkdir.*LOCK_DIR|mkdir.*lock/);
+  });
+
+  it('writes current PID into lock dir', () => {
+    expect(script).toContain('$$ > "$LOCK_DIR/pid"');
+  });
+
+  it('registers a cleanup trap on EXIT INT TERM', () => {
+    expect(script).toMatch(/trap\s+cleanup\s+EXIT\s+INT\s+TERM/);
+  });
+
+  it('removes lock dir in cleanup function', () => {
+    expect(script).toContain('rm -rf "$LOCK_DIR"');
+  });
+
+  it('prints a SKIP message when lock is held', () => {
+    expect(script).toContain('[SKIP]');
+  });
+
+  it('prints instructions to kill and reset stuck run', () => {
+    expect(script).toContain('rm -rf');
+    expect(script).toContain('LOCK_DIR');
+  });
+});
+
+// ── Timeout guard ─────────────────────────────────────────────────────────────
+
+describe('timeout guard — prevents stuck learning loop', () => {
+  it('defines LEARN_LOOP_TIMEOUT_SECS', () => {
+    expect(script).toContain('LEARN_LOOP_TIMEOUT_SECS=');
+  });
+
+  it('timeout is set to ~25 minutes (1500 seconds)', () => {
+    expect(script).toContain('LEARN_LOOP_TIMEOUT_SECS=1500');
+  });
+
+  it('uses a TIMEOUT_FLAG file to communicate timeout across subshell', () => {
+    expect(script).toContain('TIMEOUT_FLAG=');
+    expect(script).toContain('touch "$TIMEOUT_FLAG"');
+  });
+
+  it('backgrounds the learning loop and waits on the PID', () => {
+    expect(script).toContain('LEARN_PID=$!');
+    expect(script).toMatch(/wait\s+"\$LEARN_PID"/);
+  });
+
+  it('kills the killer process after learning loop finishes', () => {
+    expect(script).toContain('KILLER_PID=$!');
+    expect(script).toMatch(/kill\s+.*KILLER_PID/);
+  });
+
+  it('sets TIMED_OUT=true when flag file is present', () => {
+    expect(script).toContain('TIMED_OUT=true');
+  });
+
+  it('prints TIMED_OUT in final status when timeout fires', () => {
+    expect(script).toContain('Status    : TIMED_OUT');
+  });
+});
+
+// ── Bash syntax ───────────────────────────────────────────────────────────────
+
+describe('bash syntax', () => {
+  it('passes bash -n syntax check', () => {
+    expect(() => execSync(`bash -n "${SCRIPT_PATH}"`)).not.toThrow();
   });
 });
 

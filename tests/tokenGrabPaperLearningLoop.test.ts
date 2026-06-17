@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
+import { execSync } from 'child_process';
 
 const SCRIPT_PATH = path.resolve(__dirname, '../scripts/run-token-grab-paper-learning-loop.sh');
 
@@ -101,5 +102,51 @@ describe('package.json — learning loop script registered', () => {
     const pkg = fs.readFileSync(path.resolve(__dirname, '../package.json'), 'utf-8');
     expect(pkg).toContain('token:ripper-paper-learning-loop');
     expect(pkg).toContain('run-token-grab-paper-learning-loop.sh');
+  });
+});
+
+// ── Closeout timeout guard ────────────────────────────────────────────────────
+
+describe('run-token-grab-paper-learning-loop.sh — closeout timeout guard', () => {
+  it('defines CLOSEOUT_TIMEOUT_SECS', () => {
+    expect(readScript()).toContain('CLOSEOUT_TIMEOUT_SECS=');
+  });
+
+  it('closeout timeout is 600 seconds (10 minutes)', () => {
+    expect(readScript()).toContain('CLOSEOUT_TIMEOUT_SECS=600');
+  });
+
+  it('backgrounds the closeout subshell and stores its PID', () => {
+    expect(readScript()).toContain('CLOSEOUT_PID=$!');
+  });
+
+  it('uses a flag file to detect closeout timeout', () => {
+    expect(readScript()).toContain('CLOSEOUT_FLAG=');
+    expect(readScript()).toContain('touch "$CLOSEOUT_FLAG"');
+  });
+
+  it('kills the closeout killer process after closeout finishes', () => {
+    expect(readScript()).toContain('CLOSEOUT_KILLER=$!');
+    expect(readScript()).toMatch(/kill\s+.*CLOSEOUT_KILLER/);
+  });
+
+  it('cleans up the flag file after timeout', () => {
+    expect(readScript()).toContain('rm -f "$CLOSEOUT_FLAG"');
+  });
+
+  it('prints a TIMEOUT message when closeout is stopped', () => {
+    expect(readScript()).toContain('[TIMEOUT]');
+  });
+
+  it('still contains sleep 660 for the 11-minute observation wait', () => {
+    expect(readScript()).toContain('sleep 660');
+  });
+});
+
+// ── Bash syntax ───────────────────────────────────────────────────────────────
+
+describe('run-token-grab-paper-learning-loop.sh — bash syntax', () => {
+  it('passes bash -n syntax check', () => {
+    expect(() => execSync(`bash -n "${SCRIPT_PATH}"`)).not.toThrow();
   });
 });
