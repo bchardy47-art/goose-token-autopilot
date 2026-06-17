@@ -220,6 +220,8 @@ import { runShadowRejectFilterReport, renderShadowRejectFilterReport } from './t
 import { runShadowRejectFilterEnrollment, renderShadowRejectFilterEnrollment } from './token-grab/ripperShadowRejectFilterEnrollment';
 import { runShadowEnrolledOutcomeReport, renderShadowEnrolledOutcomeReport } from './token-grab/ripperShadowEnrolledOutcomeReport';
 import { runPaperPolicyTest, renderPaperPolicyTest } from './token-grab/ripperPaperPolicyTest';
+import { runRipperLearningMemory, renderRipperLearningMemoryResult } from './token-grab/ripperLearningMemory';
+import { runRipperLearningSummary, renderRipperLearningSummary } from './token-grab/ripperLearningSummaryReport';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -3450,6 +3452,42 @@ async function main(): Promise<void> {
           ?? 'data/token-grab/ripper/paper-policy-test-liq-or-age.jsonl';
         const pptResult = runPaperPolicyTest({ cyclesDir: pptDir, outPath: pptOut });
         console.log(renderPaperPolicyTest(pptResult));
+        break;
+      }
+
+      case 'token:ripper-learning-memory': {
+        // SAFETY: report-only / read-only / append-only learning evidence.
+        // No trade execution, no swap, no wallet/signing code is invoked.
+        const rlmCyclesDir   = getArgValue('--cycles-dir')
+          ?? 'data/token-grab/ripper/cycles';
+        const rlmEnrollments = getArgValue('--enrollments')
+          ?? 'data/token-grab/ripper/shadow-reject-filter-enrollments.jsonl';
+        const rlmPaperIntent = getArgValue('--paper-intent')
+          ?? 'data/token-grab/ripper/paper-intent-observations.jsonl';
+        const rlmObsDir      = getArgValue('--observations-dir')
+          ?? 'data/token-grab/ripper/observations';
+        const rlmDexRunsDir  = getArgValue('--dex-watch-dir')
+          ?? 'data/token-grab/dex-watch-runs';
+        const rlmOut         = getArgValue('--out')
+          ?? 'data/token-grab/ripper/learning-memory.jsonl';
+        const rlmResult = runRipperLearningMemory({
+          cyclesDir:          rlmCyclesDir,
+          enrollmentsPath:    rlmEnrollments,
+          paperIntentObsPath: rlmPaperIntent,
+          observationsDir:    rlmObsDir,
+          dexWatchRunsDir:    rlmDexRunsDir,
+          outPath:            rlmOut,
+        });
+        console.log(renderRipperLearningMemoryResult(rlmResult));
+        break;
+      }
+
+      case 'token:ripper-learning-summary': {
+        // SAFETY: report-only / read-only dashboard.
+        const rlsMemory = getArgValue('--memory')
+          ?? 'data/token-grab/ripper/learning-memory.jsonl';
+        const rlsResult = runRipperLearningSummary({ memoryPath: rlsMemory });
+        console.log(renderRipperLearningSummary(rlsResult));
         break;
       }
 
