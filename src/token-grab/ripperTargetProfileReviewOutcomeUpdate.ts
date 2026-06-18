@@ -41,30 +41,36 @@ export interface UpdatedCandidate {
 }
 
 export interface OutcomeUpdateResult {
-  ledgerPath:         string;
-  memoryPath:         string;
-  ledgerRowsRead:     number;
-  memoryRowsRead:     number;
-  unknownBefore:      number;
-  matchedOutcomes:    number;
-  updatedRows:        number;
-  stillUnknown:       number;
-  dryRun:             boolean;
-  writeEnabled:       boolean;
-  outcomeLabelCounts: Record<string, number>;
-  updatedCandidates:  UpdatedCandidate[];
-  reportOnly:         true;
-  readOnly:           true;
-  paperOnly:          true;
-  realTradingLocked:  true;
-  tradingExecuted:    0;
+  ledgerPath:              string;
+  memoryPath:              string;
+  ledgerRowsRead:          number;
+  memoryRowsRead:          number;
+  unknownBefore:           number;
+  matchedOutcomes:         number;
+  contractTimeMatches:     number;
+  fallbackMatchesSkipped:  number;
+  fallbackMatchesApplied:  number;
+  updatedRows:             number;
+  stillUnknown:            number;
+  dryRun:                  boolean;
+  writeEnabled:            boolean;
+  allowContractFallback:   boolean;
+  fallbackObservedWarning: boolean;
+  outcomeLabelCounts:      Record<string, number>;
+  updatedCandidates:       UpdatedCandidate[];
+  reportOnly:              true;
+  readOnly:                true;
+  paperOnly:               true;
+  realTradingLocked:       true;
+  tradingExecuted:         0;
 }
 
 export interface OutcomeUpdateOptions {
-  ledgerPath?: string;
-  memoryPath?: string;
-  write?:      boolean;
-  updatedAt?:  string;  // injectable for tests; defaults to new Date().toISOString()
+  ledgerPath?:            string;
+  memoryPath?:            string;
+  write?:                 boolean;
+  allowContractFallback?: boolean;  // default false; pass true for manual backfill only
+  updatedAt?:             string;   // injectable for tests; defaults to new Date().toISOString()
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -93,6 +99,7 @@ function findBestMatch(
   contract: string,
   ledgerCapturedAt: string,
   memByContract: Map<string, MemoryRow[]>,
+  allowFallback: boolean,
 ): { memory: MemoryRow; matchQuality: MatchQuality } | null {
   const allForContract = memByContract.get(contract) ?? [];
   const observed = allForContract.filter(
@@ -113,21 +120,39 @@ function findBestMatch(
     return { memory: sorted[0]!, matchQuality: 'CONTRACT_AND_TIME' };
   }
 
-  // Fallback: latest available memory row (before ledger capturedAt)
+  // No CONTRACT_AND_TIME match — only older rows exist.
+  // Return a fallback only when explicitly allowed (--allow-contract-fallback).
+  if (!allowFallback) return null;
+
   const sorted = [...observed].sort((a, b) =>
     (b.capturedAt ?? '').localeCompare(a.capturedAt ?? ''),
   );
   return { memory: sorted[0]!, matchQuality: 'CONTRACT_ONLY_FALLBACK' };
 }
 
+// Returns true when only older (pre-capturedAt) observed rows exist for this contract.
+function hasFallbackOnlyCandidate(
+  contract: string,
+  ledgerCapturedAt: string,
+  memByContract: Map<string, MemoryRow[]>,
+): boolean {
+  const observed = (memByContract.get(contract) ?? []).filter(
+    m => m.outcomeLabel && m.outcomeLabel !== 'UNKNOWN',
+  );
+  if (observed.length === 0) return false;
+  const afterRows = observed.filter(m => (m.capturedAt ?? '') >= ledgerCapturedAt);
+  return afterRows.length === 0;  // has candidates but all are before capturedAt
+}
+
 // ── Main function ──────────────────────────────────────────────────────────────
 export function runTargetProfileReviewOutcomeUpdate(
   options: OutcomeUpdateOptions = {},
 ): OutcomeUpdateResult {
-  const ledgerPath = options.ledgerPath ?? DEFAULT_LEDGER_PATH;
-  const memoryPath = options.memoryPath ?? DEFAULT_MEMORY_PATH;
-  const write      = options.write      ?? false;
-  const updatedAt  = options.updatedAt  ?? new Date().toISOString();
+  const ledgerPath            = options.ledgerPath            ?? DEFAULT_LEDGER_PATH;
+  const memoryPath            = options.memoryPath            ?? DEFAULT_MEMORY_PATH;
+  const write                 = options.write                 ?? false;
+  const allowContractFallback = options.allowContractFallback ?? false;
+  const updatedAt             = options.updatedAt             ?? new Date().toISOString();
 
   const ledgerRows = readJsonl<LedgerRow>(ledgerPath);
   const memoryRows = readJsonl<MemoryRow>(memoryPath);
@@ -144,6 +169,14 @@ export function runTargetProfileReviewOutcomeUpdate(
   const updatedCandidates: UpdatedCandidate[]      = [];
   const outcomeLabelCounts: Record<string, number> = {};
   const outputRows: LedgerRow[]                    = [];
+  let contractTimeMatches    = 0;
+  let fallbackMatchesSkipped = 0;
+  let fallbackMatchesApplied = 0;
+
+  // Warn if any existing OBSERVED rows were recorded via CONTRACT_ONLY_FALLBACK
+  const fallbackObservedWarning = ledgerRows.some(
+    r => r.outcomeStatus === 'OBSERVED' && (r as Record<string, unknown>)['matchQuality'] === 'CONTRACT_ONLY_FALLBACK',
+  );
 
   for (const row of ledgerRows) {
     if (row.outcomeStatus !== 'UNKNOWN') {
@@ -151,16 +184,23 @@ export function runTargetProfileReviewOutcomeUpdate(
       continue;
     }
 
-    const match = findBestMatch(row.contract, row.capturedAt, memByContract);
+    const match = findBestMatch(row.contract, row.capturedAt, memByContract, allowContractFallback);
     if (!match) {
+      // Count skipped fallback candidates (had older memory rows but fallback not allowed)
+      if (!allowContractFallback && hasFallbackOnlyCandidate(row.contract, row.capturedAt, memByContract)) {
+        fallbackMatchesSkipped++;
+      }
       outputRows.push(row);
       continue;
     }
 
     const { memory, matchQuality } = match;
-    const outcomeLabel  = memory.outcomeLabel!;
+    const outcomeLabel   = memory.outcomeLabel!;
     const priceChangePct = memory.priceChangePct ?? null;
-    const observedAt    = memory.observedAt ?? null;
+    const observedAt     = memory.observedAt ?? null;
+
+    if (matchQuality === 'CONTRACT_AND_TIME')    contractTimeMatches++;
+    if (matchQuality === 'CONTRACT_ONLY_FALLBACK') fallbackMatchesApplied++;
 
     outcomeLabelCounts[outcomeLabel] = (outcomeLabelCounts[outcomeLabel] ?? 0) + 1;
     updatedCandidates.push({
@@ -204,14 +244,19 @@ export function runTargetProfileReviewOutcomeUpdate(
   return {
     ledgerPath,
     memoryPath,
-    ledgerRowsRead:    ledgerRows.length,
-    memoryRowsRead:    memoryRows.length,
+    ledgerRowsRead:          ledgerRows.length,
+    memoryRowsRead:          memoryRows.length,
     unknownBefore,
     matchedOutcomes,
-    updatedRows:       write ? matchedOutcomes : 0,
+    contractTimeMatches,
+    fallbackMatchesSkipped,
+    fallbackMatchesApplied,
+    updatedRows:             write ? matchedOutcomes : 0,
     stillUnknown,
-    dryRun:            !write,
-    writeEnabled:      write,
+    dryRun:                  !write,
+    writeEnabled:            write,
+    allowContractFallback,
+    fallbackObservedWarning,
     outcomeLabelCounts,
     updatedCandidates,
     ...SAFETY,
@@ -233,13 +278,22 @@ export function renderTargetProfileReviewOutcomeUpdate(
   L.push(`  ${SEP2}`, '');
   L.push(`  Ledger path      : ${result.ledgerPath}`);
   L.push(`  Memory path      : ${result.memoryPath}`);
-  L.push(`  Ledger rows read : ${result.ledgerRowsRead}`);
-  L.push(`  Memory rows read : ${result.memoryRowsRead}`);
-  L.push(`  UNKNOWN before   : ${result.unknownBefore}`);
-  L.push(`  Matched outcomes : ${result.matchedOutcomes}`);
-  L.push(`  Updated rows     : ${result.updatedRows}${result.dryRun ? '  (dry-run — pass --write to apply)' : ''}`);
-  L.push(`  Still unknown    : ${result.stillUnknown}`);
-  L.push(`  Mode             : ${result.dryRun ? 'DRY-RUN (read-only preview)' : 'WRITE ENABLED'}`);
+  L.push(`  Ledger rows read         : ${result.ledgerRowsRead}`);
+  L.push(`  Memory rows read         : ${result.memoryRowsRead}`);
+  L.push(`  UNKNOWN before           : ${result.unknownBefore}`);
+  L.push(`  Contract-time matches    : ${result.contractTimeMatches}`);
+  L.push(`  Fallback matches skipped : ${result.fallbackMatchesSkipped}${!result.allowContractFallback ? '  (pass --allow-contract-fallback to include)' : ''}`);
+  L.push(`  Fallback matches applied : ${result.fallbackMatchesApplied}`);
+  L.push(`  Matched outcomes total   : ${result.matchedOutcomes}`);
+  L.push(`  Updated rows             : ${result.updatedRows}${result.dryRun ? '  (dry-run — pass --write to apply)' : ''}`);
+  L.push(`  Still unknown            : ${result.stillUnknown}`);
+  L.push(`  Fallback enabled         : ${result.allowContractFallback}`);
+  L.push(`  Mode                     : ${result.dryRun ? 'DRY-RUN (read-only preview)' : 'WRITE ENABLED'}`);
+  if (result.fallbackObservedWarning) {
+    L.push('');
+    L.push('  ⚠  WARNING: ledger contains OBSERVED rows with matchQuality=CONTRACT_ONLY_FALLBACK');
+    L.push('     Row-level stats may be polluted. Use unique-contract stats as decision metric.');
+  }
   L.push('');
 
   // Outcome label counts
@@ -274,8 +328,9 @@ export function renderTargetProfileReviewOutcomeUpdate(
   L.push('  SAFETY');
   L.push(`  ${SEP2}`, '');
   L.push('  PAPER_ONLY=true  NO_REAL_TRADING  NO_WALLET  NO_POLICY_CHANGE');
-  L.push('  DO_NOT_MUTATE_LEARNING_MEMORY  tradingExecuted=0  realTradingLocked=true');
-  L.push(`  Ledger mutated: ${result.writeEnabled && result.updatedRows > 0 ? 'YES (--write passed)' : 'NO'}`);
+  L.push('  DO_NOT_MUTATE_LEARNING_MEMORY  DO_NOT_MUTATE_CYCLES  tradingExecuted=0  realTradingLocked=true');
+  L.push(`  Ledger mutated        : ${result.writeEnabled && result.updatedRows > 0 ? 'YES (--write passed)' : 'NO'}`);
+  L.push(`  Contract fallback     : ${result.allowContractFallback ? 'ENABLED (--allow-contract-fallback)' : 'disabled (default)'}`);
   L.push(SEP, '');
 
   return L.join('\n');

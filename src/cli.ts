@@ -3740,9 +3740,10 @@ async function main(): Promise<void> {
 
       case 'token:ripper-target-profile-review-outcome-update': {
         const tpRouResult = runTargetProfileReviewOutcomeUpdate({
-          ledgerPath: getArgValue('--ledger-path') ?? 'data/token-grab/ripper/target-profile-review-ledger.jsonl',
-          memoryPath: getArgValue('--memory-path') ?? 'data/token-grab/ripper/learning-memory.jsonl',
-          write:      process.argv.includes('--write'),
+          ledgerPath:            getArgValue('--ledger-path') ?? 'data/token-grab/ripper/target-profile-review-ledger.jsonl',
+          memoryPath:            getArgValue('--memory-path') ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          write:                 process.argv.includes('--write'),
+          allowContractFallback: process.argv.includes('--allow-contract-fallback'),
         });
         console.log(renderTargetProfileReviewOutcomeUpdate(tpRouResult));
         break;

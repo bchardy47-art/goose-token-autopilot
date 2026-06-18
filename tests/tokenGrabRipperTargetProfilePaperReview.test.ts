@@ -708,8 +708,8 @@ describe('runTargetProfileReviewOutcomeUpdate', () => {
     expect(result.updatedCandidates[0]!.outcomeLabel).toBe('BIG_WINNER');
   });
 
-  // Test 22: CONTRACT_ONLY_FALLBACK when no memory row has capturedAt >= ledger capturedAt
-  it('falls back to CONTRACT_ONLY_FALLBACK when no after-capturedAt match exists', () => {
+  // Test 22 (updated): default mode leaves row UNKNOWN when only older memory rows exist
+  it('default mode leaves row UNKNOWN and counts fallback skipped when only older memory rows exist', () => {
     const ledgerPath = path.join(dir, 'ledger.jsonl');
     const memoryPath = path.join(dir, 'memory.jsonl');
     writeLedger(ledgerPath, [makeOutcomeLedgerRow({ capturedAt: '2026-06-18T10:00:00.000Z' })]);
@@ -719,8 +719,12 @@ describe('runTargetProfileReviewOutcomeUpdate', () => {
     ]);
 
     const result = runTargetProfileReviewOutcomeUpdate({ ledgerPath, memoryPath });
-    expect(result.matchedOutcomes).toBe(1);
-    expect(result.updatedCandidates[0]!.matchQuality).toBe('CONTRACT_ONLY_FALLBACK');
+    expect(result.matchedOutcomes).toBe(0);
+    expect(result.stillUnknown).toBe(1);
+    expect(result.fallbackMatchesSkipped).toBe(1);
+    expect(result.contractTimeMatches).toBe(0);
+    expect(result.allowContractFallback).toBe(false);
+    expect(result.updatedCandidates.length).toBe(0);
   });
 
   // Test 23: no match when no memory rows exist for contract
@@ -833,5 +837,151 @@ describe('runTargetProfileReviewOutcomeUpdate', () => {
     expect(rendered).toContain('NO REAL TRADING');
     expect(rendered).toContain('realTradingLocked=true');
     expect(rendered).toContain('tradingExecuted=0');
+  });
+
+  // ── Strict-time (CONTRACT_AND_TIME default) tests ──────────────────────────
+
+  // Test 30: default --write does NOT update older-only memory row
+  it('default --write leaves row UNKNOWN when only older memory rows exist', () => {
+    const ledgerPath = path.join(dir, 'ledger.jsonl');
+    const memoryPath = path.join(dir, 'memory.jsonl');
+    writeLedger(ledgerPath, [makeOutcomeLedgerRow({ capturedAt: '2026-06-18T10:00:00.000Z' })]);
+    writeMemory(memoryPath, [
+      makeMemoryRow({ capturedAt: '2026-06-18T08:00:00.000Z', outcomeLabel: 'FLAT_JUNK' }),
+    ]);
+    const before = fs.readFileSync(ledgerPath, 'utf-8');
+    const result = runTargetProfileReviewOutcomeUpdate({ ledgerPath, memoryPath, write: true });
+    expect(result.updatedRows).toBe(0);
+    expect(result.stillUnknown).toBe(1);
+    expect(result.fallbackMatchesSkipped).toBe(1);
+    expect(fs.readFileSync(ledgerPath, 'utf-8')).toBe(before);  // not mutated
+  });
+
+  // Test 31: --allow-contract-fallback dry-run shows fallback candidate
+  it('--allow-contract-fallback dry-run exposes fallback candidate', () => {
+    const ledgerPath = path.join(dir, 'ledger.jsonl');
+    const memoryPath = path.join(dir, 'memory.jsonl');
+    writeLedger(ledgerPath, [makeOutcomeLedgerRow({ capturedAt: '2026-06-18T10:00:00.000Z' })]);
+    writeMemory(memoryPath, [
+      makeMemoryRow({ capturedAt: '2026-06-18T08:00:00.000Z', outcomeLabel: 'BIG_WINNER' }),
+    ]);
+    const before = fs.readFileSync(ledgerPath, 'utf-8');
+    const result = runTargetProfileReviewOutcomeUpdate({ ledgerPath, memoryPath, allowContractFallback: true });
+    expect(result.allowContractFallback).toBe(true);
+    expect(result.matchedOutcomes).toBe(1);
+    expect(result.fallbackMatchesApplied).toBe(1);
+    expect(result.fallbackMatchesSkipped).toBe(0);
+    expect(result.updatedCandidates[0]!.matchQuality).toBe('CONTRACT_ONLY_FALLBACK');
+    expect(fs.readFileSync(ledgerPath, 'utf-8')).toBe(before);  // still dry-run, no write
+  });
+
+  // Test 32: --allow-contract-fallback --write applies the fallback update
+  it('--allow-contract-fallback --write applies fallback outcome to ledger row', () => {
+    const ledgerPath = path.join(dir, 'ledger.jsonl');
+    const memoryPath = path.join(dir, 'memory.jsonl');
+    writeLedger(ledgerPath, [makeOutcomeLedgerRow({ capturedAt: '2026-06-18T10:00:00.000Z' })]);
+    writeMemory(memoryPath, [
+      makeMemoryRow({ capturedAt: '2026-06-18T08:00:00.000Z', outcomeLabel: 'FLAT_JUNK', priceChangePct: 0 }),
+    ]);
+    const result = runTargetProfileReviewOutcomeUpdate({
+      ledgerPath, memoryPath,
+      allowContractFallback: true, write: true,
+      updatedAt: '2026-06-18T14:00:00.000Z',
+    });
+    expect(result.updatedRows).toBe(1);
+    expect(result.fallbackMatchesApplied).toBe(1);
+    const rows = readLedger(ledgerPath) as Record<string, unknown>[];
+    expect(rows[0]!['outcomeStatus']).toBe('OBSERVED');
+    expect(rows[0]!['matchQuality']).toBe('CONTRACT_ONLY_FALLBACK');
+    expect(rows[0]!['outcomeLabel']).toBe('FLAT_JUNK');
+  });
+
+  // Test 33: CONTRACT_AND_TIME still works normally (unaffected by strict-time change)
+  it('CONTRACT_AND_TIME match still works when memory capturedAt equals ledger capturedAt', () => {
+    const ledgerPath = path.join(dir, 'ledger.jsonl');
+    const memoryPath = path.join(dir, 'memory.jsonl');
+    writeLedger(ledgerPath, [makeOutcomeLedgerRow({ capturedAt: '2026-06-18T10:00:00.000Z' })]);
+    writeMemory(memoryPath, [
+      makeMemoryRow({ capturedAt: '2026-06-18T10:00:00.000Z', outcomeLabel: 'BIG_WINNER' }),
+    ]);
+    const result = runTargetProfileReviewOutcomeUpdate({ ledgerPath, memoryPath });
+    expect(result.matchedOutcomes).toBe(1);
+    expect(result.contractTimeMatches).toBe(1);
+    expect(result.fallbackMatchesSkipped).toBe(0);
+    expect(result.updatedCandidates[0]!.matchQuality).toBe('CONTRACT_AND_TIME');
+  });
+
+  // Test 34: mixed — one CONTRACT_AND_TIME, one fallback skipped
+  it('correctly separates CONTRACT_AND_TIME matches from skipped fallback rows', () => {
+    const ledgerPath = path.join(dir, 'ledger.jsonl');
+    const memoryPath = path.join(dir, 'memory.jsonl');
+    writeLedger(ledgerPath, [
+      makeOutcomeLedgerRow({ contract: 'C_AT',       capturedAt: '2026-06-18T10:00:00.000Z' }),
+      makeOutcomeLedgerRow({ contract: 'C_FALLBACK', capturedAt: '2026-06-18T10:00:00.000Z' }),
+    ]);
+    writeMemory(memoryPath, [
+      makeMemoryRow({ contract: 'C_AT',       capturedAt: '2026-06-18T10:00:00.000Z', outcomeLabel: 'BIG_WINNER' }),
+      makeMemoryRow({ contract: 'C_FALLBACK', capturedAt: '2026-06-18T08:00:00.000Z', outcomeLabel: 'FLAT_JUNK' }),
+    ]);
+    const result = runTargetProfileReviewOutcomeUpdate({ ledgerPath, memoryPath });
+    expect(result.contractTimeMatches).toBe(1);
+    expect(result.fallbackMatchesSkipped).toBe(1);
+    expect(result.matchedOutcomes).toBe(1);
+    expect(result.stillUnknown).toBe(1);
+  });
+
+  // Test 35: fallbackObservedWarning when ledger has OBSERVED rows with CONTRACT_ONLY_FALLBACK
+  it('fallbackObservedWarning=true when ledger has OBSERVED rows with CONTRACT_ONLY_FALLBACK matchQuality', () => {
+    const ledgerPath = path.join(dir, 'ledger.jsonl');
+    const memoryPath = path.join(dir, 'memory.jsonl');
+    writeLedger(ledgerPath, [{
+      ...makeOutcomeLedgerRow({ contract: 'C_ALREADY' }),
+      outcomeStatus: 'OBSERVED',
+      outcomeLabel:  'FLAT_JUNK',
+      matchQuality:  'CONTRACT_ONLY_FALLBACK',
+    }]);
+    writeMemory(memoryPath, [makeMemoryRow()]);
+    const result = runTargetProfileReviewOutcomeUpdate({ ledgerPath, memoryPath });
+    expect(result.fallbackObservedWarning).toBe(true);
+  });
+
+  // Test 36: fallbackObservedWarning=false when all OBSERVED rows are CONTRACT_AND_TIME
+  it('fallbackObservedWarning=false when all OBSERVED rows are CONTRACT_AND_TIME', () => {
+    const ledgerPath = path.join(dir, 'ledger.jsonl');
+    const memoryPath = path.join(dir, 'memory.jsonl');
+    writeLedger(ledgerPath, [{
+      ...makeOutcomeLedgerRow({ contract: 'C_CLEAN' }),
+      outcomeStatus: 'OBSERVED',
+      outcomeLabel:  'BIG_WINNER',
+      matchQuality:  'CONTRACT_AND_TIME',
+    }]);
+    writeMemory(memoryPath, [makeMemoryRow()]);
+    const result = runTargetProfileReviewOutcomeUpdate({ ledgerPath, memoryPath });
+    expect(result.fallbackObservedWarning).toBe(false);
+  });
+
+  // Test 37: render shows fallback enabled field
+  it('render shows fallback enabled false by default and true when set', () => {
+    const ledgerPath = path.join(dir, 'ledger.jsonl');
+    const memoryPath = path.join(dir, 'memory.jsonl');
+    writeLedger(ledgerPath, [makeOutcomeLedgerRow()]);
+    writeMemory(memoryPath, [makeMemoryRow()]);
+
+    const r1 = runTargetProfileReviewOutcomeUpdate({ ledgerPath, memoryPath });
+    expect(renderTargetProfileReviewOutcomeUpdate(r1)).toContain('Fallback enabled         : false');
+
+    const r2 = runTargetProfileReviewOutcomeUpdate({ ledgerPath, memoryPath, allowContractFallback: true });
+    expect(renderTargetProfileReviewOutcomeUpdate(r2)).toContain('Fallback enabled         : true');
+  });
+
+  // Test 38: memory and cycle files are not mutated (no output files written)
+  it('memory file is not mutated by outcome update', () => {
+    const ledgerPath = path.join(dir, 'ledger.jsonl');
+    const memoryPath = path.join(dir, 'memory.jsonl');
+    writeLedger(ledgerPath, [makeOutcomeLedgerRow()]);
+    writeMemory(memoryPath, [makeMemoryRow()]);
+    const memBefore = fs.readFileSync(memoryPath, 'utf-8');
+    runTargetProfileReviewOutcomeUpdate({ ledgerPath, memoryPath, write: true });
+    expect(fs.readFileSync(memoryPath, 'utf-8')).toBe(memBefore);
   });
 });
