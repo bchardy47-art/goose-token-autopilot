@@ -163,6 +163,7 @@
     "token:ripper-target-profile-paper-review": "tsx src/cli.ts token:ripper-target-profile-paper-review",
     "token:ripper-target-profile-review-ledger-report": "tsx src/cli.ts token:ripper-target-profile-review-ledger-report",
     "token:ripper-target-profile-review-outcome-update": "tsx src/cli.ts token:ripper-target-profile-review-outcome-update",
+    "token:ripper-target-profile-ledger-unique-stats": "tsx src/cli.ts token:ripper-target-profile-ledger-unique-stats",
     "token:prime-gate-audit": "tsx src/cli.ts token:prime-gate-audit",
     "token:holder-risk-audit": "tsx src/cli.ts token:holder-risk-audit",
     "token:fixture-holder-enrich": "tsx src/cli.ts token:fixture-holder-enrich",
