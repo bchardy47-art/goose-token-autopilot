@@ -78,6 +78,8 @@ export interface SnapshotRow {
   priceChangePct:     number | null;
   snapshotSource:     string;
   snapshotAvailable:  boolean;
+  sourceFile:         string | null;
+  minutesFromTarget:  number | null;
   reportOnly:         true;
   readOnly:           true;
   paperOnly:          true;
@@ -121,6 +123,7 @@ export interface WatchObservationCloseoutResult {
   snapshotsWritten:  number;
   snapshotsSkipped:  number;
   ledgerRowsUpdated: number;
+  sourceBreakdown:   Record<string, number>;
   reportOnly:        true;
   readOnly:          true;
   paperOnly:         true;
@@ -129,23 +132,25 @@ export interface WatchObservationCloseoutResult {
 }
 
 export interface WatchObservationReportResult {
-  totalEnrolled:       number;
-  snap2mCaptured:      number;
-  snap2mMissing:       number;
-  snap5mCaptured:      number;
-  snap5mMissing:       number;
-  classifications:     Record<WatchClassification, number>;
-  candidates:          ClassifiedCandidate[];
-  strongestCandidates: ClassifiedCandidate[];
-  fakeSpikeExamples:   ClassifiedCandidate[];
-  dataGapExamples:     ClassifiedCandidate[];
-  recommendation:      FinalRecommendation;
-  recommendationNote:  string;
-  reportOnly:          true;
-  readOnly:            true;
-  paperOnly:           true;
-  realTradingLocked:   true;
-  tradingExecuted:     0;
+  totalEnrolled:        number;
+  snap2mCaptured:       number;
+  snap2mMissing:        number;
+  snap5mCaptured:       number;
+  snap5mMissing:        number;
+  classifications:      Record<WatchClassification, number>;
+  candidates:           ClassifiedCandidate[];
+  strongestCandidates:  ClassifiedCandidate[];
+  fakeSpikeExamples:    ClassifiedCandidate[];
+  dataGapExamples:      ClassifiedCandidate[];
+  recommendation:       FinalRecommendation;
+  recommendationNote:   string;
+  sourceBreakdown:      Record<string, number>;
+  avgMinutesFromTarget: number | null;
+  reportOnly:           true;
+  readOnly:             true;
+  paperOnly:            true;
+  realTradingLocked:    true;
+  tradingExecuted:      0;
 }
 
 export interface WatchObservationEnrollOptions {
@@ -156,9 +161,13 @@ export interface WatchObservationEnrollOptions {
 }
 
 export interface WatchObservationCloseoutOptions {
-  ledgerPath?:    string;
-  snapshotsPath?: string;
-  nowMs?:         number;
+  ledgerPath?:         string;
+  snapshotsPath?:      string;
+  nowMs?:              number;
+  ripperObsDir?:       string;
+  dexWatchRunDir?:     string;
+  paperIntentObsPath?: string;
+  cycleDir?:           string;
 }
 
 export interface WatchObservationReportOptions {
@@ -291,28 +300,358 @@ const SAFETY = {
   tradingExecuted:   0     as const,
 };
 
-function makeSnapshot(
+// ── Snapshot source resolver ───────────────────────────────────────────────────
+
+const DEFAULT_RIPPER_OBS_DIR        = 'data/token-grab/ripper/observations';
+const DEFAULT_DEX_WATCH_RUN_DIR     = 'data/token-grab/dex-watch-runs';
+const DEFAULT_PAPER_INTENT_OBS_PATH = 'data/token-grab/ripper/paper-intent-observations.jsonl';
+
+const MAX_SKEW_MS = 15 * 60 * 1000;  // 15 minutes
+
+function deriveLiqBucket(liqUsd: number | null): string {
+  if (liqUsd == null || !Number.isFinite(liqUsd)) return 'LIQ_UNKNOWN';
+  if (liqUsd < 10_000)  return 'LIQ_LT_10K';
+  if (liqUsd < 30_000)  return 'LIQ_10K_30K';
+  if (liqUsd < 100_000) return 'LIQ_30K_100K';
+  return 'LIQ_GTE_100K';
+}
+
+function deriveVlrBucket(vlr: number | null): string {
+  if (vlr == null || !Number.isFinite(vlr)) return 'VLR_UNKNOWN';
+  if (vlr < 0.5) return 'VLR_LT_0_5';
+  if (vlr < 2)   return 'VLR_0_5_TO_2';
+  return 'VLR_GTE_2';
+}
+
+function parseBubbleMapsScore(clusterNotes: unknown): number | null {
+  if (!Array.isArray(clusterNotes)) return null;
+  for (const note of clusterNotes) {
+    const m = String(note).match(/bubbleMapsScore\s+([\d.]+)/);
+    if (m) return parseFloat(m[1]!);
+  }
+  return null;
+}
+
+// Filename timestamp parsers — used for pre-filtering files by proximity to target
+
+function parseCycleFileMs(name: string): number | null {
+  const m = name.match(/^cycle-(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})/);
+  if (!m) return null;
+  return Date.parse(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z`);
+}
+
+function parseDexRunFileMs(name: string): number | null {
+  const m = name.match(/^run-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/);
+  if (!m) return null;
+  return Date.parse(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z`);
+}
+
+function parseObsFileMs(name: string): number | null {
+  const m = name.match(/^(?:loose-extra-)?obs-(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})/);
+  if (!m) return null;
+  return Date.parse(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z`);
+}
+
+interface SnapshotCandidate {
+  capturedAtMs:    number;
+  liquidityUsd:    number | null;
+  liquidityBucket: string | null;
+  vlrBucket:       string | null;
+  bubbleMapsScore: number | null;
+  clusterRisk:     string | null;
+  ripperScore:     number | null;
+  ageMinutes:      number | null;
+  priceChangePct:  number | null;
+  sourceTag:       string;
+  sourceFile:      string;
+}
+
+function searchRipperObservations(
+  contract: string,
+  targetMs: number,
+  obsDir: string,
+): SnapshotCandidate | null {
+  if (!fs.existsSync(obsDir)) return null;
+  const files = fs.readdirSync(obsDir)
+    .filter(f => f.endsWith('.jsonl'))
+    .filter(f => {
+      const fMs = parseObsFileMs(f);
+      return fMs != null && Math.abs(fMs - targetMs) <= MAX_SKEW_MS;
+    });
+
+  let best: SnapshotCandidate | null = null;
+  let bestSkew = Infinity;
+
+  for (const fname of files) {
+    for (const line of readLines(path.join(obsDir, fname))) {
+      let row: Record<string, unknown>;
+      try { row = JSON.parse(line) as Record<string, unknown>; } catch { continue; }
+
+      const ns = row.normalizedSignal as Record<string, unknown> | undefined;
+      if ((ns?.contract as string | undefined) !== contract) continue;
+
+      const capturedAt = row.capturedAt as string | undefined;
+      if (!capturedAt) continue;
+      const capturedAtMs = Date.parse(capturedAt);
+      if (!Number.isFinite(capturedAtMs)) continue;
+
+      const skew = Math.abs(capturedAtMs - targetMs);
+      if (skew > MAX_SKEW_MS || skew >= bestSkew) continue;
+
+      const liqUsd = ns?.liquidityUsd as number | null | undefined;
+      const vlr    = ns?.volumeLiquidityRatio as number | null | undefined;
+      const raw    = row.raw as Record<string, unknown> | undefined;
+
+      bestSkew = skew;
+      best = {
+        capturedAtMs,
+        liquidityUsd:    typeof liqUsd === 'number' ? liqUsd : null,
+        liquidityBucket: deriveLiqBucket(typeof liqUsd === 'number' ? liqUsd : null),
+        vlrBucket:       deriveVlrBucket(typeof vlr   === 'number' ? vlr   : null),
+        bubbleMapsScore: parseBubbleMapsScore(raw?.clusterNotes),
+        clusterRisk:     (raw?.clusterRisk as string | undefined) ?? null,
+        ripperScore:     typeof row.ripperScore === 'number' ? row.ripperScore : null,
+        ageMinutes:      typeof row.ageMinutes  === 'number' ? row.ageMinutes  : null,
+        priceChangePct:  typeof ns?.priceChangePct === 'number' ? (ns.priceChangePct as number) : null,
+        sourceTag:       'RIPPER_OBS',
+        sourceFile:      fname,
+      };
+    }
+  }
+  return best;
+}
+
+function searchDexWatchRuns(
+  contract: string,
+  targetMs: number,
+  runDir: string,
+): SnapshotCandidate | null {
+  if (!fs.existsSync(runDir)) return null;
+  const files = fs.readdirSync(runDir)
+    .filter(f => f.startsWith('run-') && f.endsWith('.json'))
+    .filter(f => {
+      const fMs = parseDexRunFileMs(f);
+      return fMs != null && Math.abs(fMs - targetMs) <= MAX_SKEW_MS;
+    });
+
+  let best: SnapshotCandidate | null = null;
+  let bestSkew = Infinity;
+
+  for (const fname of files) {
+    let runData: Record<string, unknown>;
+    try { runData = JSON.parse(fs.readFileSync(path.join(runDir, fname), 'utf-8')) as Record<string, unknown>; } catch { continue; }
+
+    const generatedAt = runData.generatedAt as string | undefined;
+    const fileMs      = parseDexRunFileMs(fname)!;
+    const fileTimeMs  = generatedAt ? (Date.parse(generatedAt) || fileMs) : fileMs;
+
+    const arrays = [
+      ...((runData.winners as unknown[]) ?? []),
+      ...((runData.losers  as unknown[]) ?? []),
+      ...((runData.flat    as unknown[]) ?? []),
+    ];
+
+    for (const item of arrays) {
+      const rec = item as Record<string, unknown>;
+      if (rec.contract !== contract) continue;
+
+      const final = rec.final as Record<string, unknown> | undefined;
+      const capturedAtMs = final?.observedAt
+        ? (Date.parse(final.observedAt as string) || fileTimeMs)
+        : fileTimeMs;
+
+      const skew = Math.abs(capturedAtMs - targetMs);
+      if (skew > MAX_SKEW_MS || skew >= bestSkew) continue;
+
+      const entry  = rec.entry as Record<string, unknown> | undefined;
+      const liqUsd = entry?.liquidityUsd as number | null | undefined;
+      const vlr    = rec.volumeToLiquidityRatio as number | null | undefined;
+
+      bestSkew = skew;
+      best = {
+        capturedAtMs,
+        liquidityUsd:    typeof liqUsd === 'number' ? liqUsd : null,
+        liquidityBucket: deriveLiqBucket(typeof liqUsd === 'number' ? liqUsd : null),
+        vlrBucket:       deriveVlrBucket(typeof vlr    === 'number' ? vlr    : null),
+        bubbleMapsScore: null,
+        clusterRisk:     null,
+        ripperScore:     null,
+        ageMinutes:      null,
+        priceChangePct:  typeof rec.priceChangePct === 'number' ? rec.priceChangePct : null,
+        sourceTag:       'DEX_WATCH_RUN',
+        sourceFile:      fname,
+      };
+    }
+  }
+  return best;
+}
+
+function searchPaperIntentObs(
+  contract: string,
+  targetMs: number,
+  obsPath: string,
+): SnapshotCandidate | null {
+  if (!fs.existsSync(obsPath)) return null;
+
+  let best: SnapshotCandidate | null = null;
+  let bestSkew = Infinity;
+
+  for (const line of readLines(obsPath)) {
+    let row: Record<string, unknown>;
+    try { row = JSON.parse(line) as Record<string, unknown>; } catch { continue; }
+
+    const ns = row.normalizedSignal as Record<string, unknown> | undefined;
+    const rowContract = (ns?.contract ?? (row.raw as Record<string, unknown> | undefined)?.contract) as string | undefined;
+    if (rowContract !== contract) continue;
+
+    const capturedAt = row.capturedAt as string | undefined;
+    if (!capturedAt) continue;
+    const capturedAtMs = Date.parse(capturedAt);
+    if (!Number.isFinite(capturedAtMs)) continue;
+
+    const skew = Math.abs(capturedAtMs - targetMs);
+    if (skew > MAX_SKEW_MS || skew >= bestSkew) continue;
+
+    bestSkew = skew;
+    best = {
+      capturedAtMs,
+      liquidityUsd:    null,
+      liquidityBucket: null,
+      vlrBucket:       null,
+      bubbleMapsScore: null,
+      clusterRisk:     null,
+      ripperScore:     null,
+      ageMinutes:      null,
+      priceChangePct:  typeof ns?.priceChangePct === 'number' ? (ns.priceChangePct as number) : null,
+      sourceTag:       'PAPER_INTENT_OBS',
+      sourceFile:      path.basename(obsPath),
+    };
+  }
+  return best;
+}
+
+function searchCycleRows(
+  contract: string,
+  targetMs: number,
+  cycleDir: string,
+): SnapshotCandidate | null {
+  if (!fs.existsSync(cycleDir)) return null;
+  const files = fs.readdirSync(cycleDir)
+    .filter(f => f.endsWith('.jsonl'))
+    .filter(f => {
+      const fMs = parseCycleFileMs(f);
+      return fMs != null && Math.abs(fMs - targetMs) <= MAX_SKEW_MS;
+    });
+
+  let best: SnapshotCandidate | null = null;
+  let bestSkew = Infinity;
+
+  for (const fname of files) {
+    for (const line of readLines(path.join(cycleDir, fname))) {
+      let row: CycleRow;
+      try { row = JSON.parse(line) as CycleRow; } catch { continue; }
+
+      if (getContract(row) !== contract) continue;
+
+      const capturedAt = row.capturedAt;
+      if (!capturedAt) continue;
+      const capturedAtMs = Date.parse(capturedAt);
+      if (!Number.isFinite(capturedAtMs)) continue;
+
+      const skew = Math.abs(capturedAtMs - targetMs);
+      if (skew > MAX_SKEW_MS || skew >= bestSkew) continue;
+
+      const rawTyped = row.raw as (Record<string, unknown> & { entry?: { liquidityUsd?: number } }) | undefined;
+      const liqUsd = cycleNum(row, 'liquidityUsd') ?? rawTyped?.entry?.liquidityUsd ?? null;
+      const vlr    = cycleNum(row, 'volumeToLiquidityRatio');
+
+      bestSkew = skew;
+      best = {
+        capturedAtMs,
+        liquidityUsd:    liqUsd,
+        liquidityBucket: cycleStr(row, 'liquidityBucket') ?? deriveLiqBucket(liqUsd),
+        vlrBucket:       cycleStr(row, 'vlrBucket')       ?? deriveVlrBucket(vlr),
+        bubbleMapsScore: cycleNum(row, 'bubbleMapsScore')  ?? parseBubbleMapsScore(rawTyped?.clusterNotes),
+        clusterRisk:     cycleStr(row, 'clusterRisk'),
+        ripperScore:     cycleNum(row, 'ripperScore'),
+        ageMinutes:      cycleNum(row, 'ageMinutes'),
+        priceChangePct:  cycleNum(row, 'priceChangePct'),
+        sourceTag:       'CYCLE_ROW',
+        sourceFile:      fname,
+      };
+    }
+  }
+  return best;
+}
+
+function resolveLocalSnapshot(
   row: LedgerRow,
   window: SnapshotWindow,
   snapshotAt: string,
+  sources: {
+    ripperObsDir?:       string;
+    dexWatchRunDir?:     string;
+    paperIntentObsPath?: string;
+    cycleDir?:           string;
+  },
 ): SnapshotRow {
+  const targetMs = window === 'RECHECK_2M' ? Date.parse(row.dueAt2m) : Date.parse(row.dueAt5m);
+
+  const candidate =
+    (sources.ripperObsDir       ? searchRipperObservations(row.contract, targetMs, sources.ripperObsDir)      : null) ??
+    (sources.dexWatchRunDir     ? searchDexWatchRuns(row.contract, targetMs, sources.dexWatchRunDir)           : null) ??
+    (sources.paperIntentObsPath ? searchPaperIntentObs(row.contract, targetMs, sources.paperIntentObsPath)     : null) ??
+    (sources.cycleDir           ? searchCycleRows(row.contract, targetMs, sources.cycleDir)                    : null);
+
+  if (!candidate) {
+    return {
+      contract:           row.contract,
+      originalCapturedAt: row.capturedAt,
+      snapshotAt,
+      window,
+      liquidityUsd:       null,
+      liquidityBucket:    null,
+      vlrBucket:          null,
+      bubbleMapsScore:    null,
+      clusterRisk:        null,
+      ripperScore:        null,
+      ageMinutes:         null,
+      priceChangePct:     null,
+      snapshotSource:     'NO_LOCAL_DATA',
+      snapshotAvailable:  false,
+      sourceFile:         null,
+      minutesFromTarget:  null,
+      ...SAFETY,
+    };
+  }
+
   return {
     contract:           row.contract,
     originalCapturedAt: row.capturedAt,
     snapshotAt,
     window,
-    liquidityUsd:       null,
-    liquidityBucket:    null,
-    vlrBucket:          null,
-    bubbleMapsScore:    null,
-    clusterRisk:        null,
-    ripperScore:        null,
-    ageMinutes:         null,
-    priceChangePct:     null,
-    snapshotSource:     'NO_LOCAL_DATA',
-    snapshotAvailable:  false,
+    liquidityUsd:       candidate.liquidityUsd,
+    liquidityBucket:    candidate.liquidityBucket,
+    vlrBucket:          candidate.vlrBucket,
+    bubbleMapsScore:    candidate.bubbleMapsScore,
+    clusterRisk:        candidate.clusterRisk,
+    ripperScore:        candidate.ripperScore,
+    ageMinutes:         candidate.ageMinutes,
+    priceChangePct:     candidate.priceChangePct,
+    snapshotSource:     candidate.sourceTag,
+    snapshotAvailable:  true,
+    sourceFile:         candidate.sourceFile,
+    minutesFromTarget:  parseFloat((Math.abs(candidate.capturedAtMs - targetMs) / 60_000).toFixed(2)),
     ...SAFETY,
   };
+}
+
+function makeSnapshot(
+  row: LedgerRow,
+  window: SnapshotWindow,
+  snapshotAt: string,
+): SnapshotRow {
+  return resolveLocalSnapshot(row, window, snapshotAt, {});
 }
 
 // ── Command 1: Enroll ─────────────────────────────────────────────────────────
@@ -422,6 +761,13 @@ export function runWatchObservationCloseout(
   const nowMs         = options.nowMs         ?? Date.now();
   const snapshotAt    = new Date(nowMs).toISOString();
 
+  const sourceDirs = {
+    ripperObsDir:       options.ripperObsDir       ?? DEFAULT_RIPPER_OBS_DIR,
+    dexWatchRunDir:     options.dexWatchRunDir      ?? DEFAULT_DEX_WATCH_RUN_DIR,
+    paperIntentObsPath: options.paperIntentObsPath  ?? DEFAULT_PAPER_INTENT_OBS_PATH,
+    cycleDir:           options.cycleDir            ?? DEFAULT_CYCLE_DIR,
+  };
+
   const rawLedger  = readLedger(ledgerPath);
   const ledger     = mergeLedgerRows(rawLedger);
   const existing   = readSnapshots(snapshotsPath);
@@ -431,6 +777,7 @@ export function runWatchObservationCloseout(
 
   let dueFor2m = 0, dueFor5m = 0;
   let snapshotsWritten = 0, snapshotsSkipped = 0, ledgerRowsUpdated = 0;
+  const sourceBreakdown: Record<string, number> = {};
   const newSnapshots: SnapshotRow[] = [];
   const updatedLedger: LedgerRow[]  = [];
 
@@ -447,7 +794,9 @@ export function runWatchObservationCloseout(
       if (snapKeys.has(k2m)) {
         snapshotsSkipped++;
       } else {
-        newSnapshots.push(makeSnapshot(row, 'RECHECK_2M', snapshotAt));
+        const snap = resolveLocalSnapshot(row, 'RECHECK_2M', snapshotAt, sourceDirs);
+        sourceBreakdown[snap.snapshotSource] = (sourceBreakdown[snap.snapshotSource] ?? 0) + 1;
+        newSnapshots.push(snap);
         snapshotsWritten++;
         snapKeys.add(k2m);
       }
@@ -462,7 +811,9 @@ export function runWatchObservationCloseout(
       if (snapKeys.has(k5m)) {
         snapshotsSkipped++;
       } else {
-        newSnapshots.push(makeSnapshot(row, 'RECHECK_5M', snapshotAt));
+        const snap = resolveLocalSnapshot(row, 'RECHECK_5M', snapshotAt, sourceDirs);
+        sourceBreakdown[snap.snapshotSource] = (sourceBreakdown[snap.snapshotSource] ?? 0) + 1;
+        newSnapshots.push(snap);
         snapshotsWritten++;
         snapKeys.add(k5m);
       }
@@ -496,6 +847,7 @@ export function runWatchObservationCloseout(
     snapshotsWritten,
     snapshotsSkipped,
     ledgerRowsUpdated,
+    sourceBreakdown,
     ...SAFETY,
   };
 }
@@ -675,6 +1027,20 @@ export function runWatchObservationReport(
     classCounts.WATCH_IMPROVING,
   );
 
+  // Aggregate source breakdown and avg minutes from target across all snapshots
+  const sourceBreakdown: Record<string, number> = {};
+  let minutesSum = 0, minutesCount = 0;
+  for (const s of snapshots) {
+    sourceBreakdown[s.snapshotSource] = (sourceBreakdown[s.snapshotSource] ?? 0) + 1;
+    if (s.snapshotAvailable && s.minutesFromTarget != null) {
+      minutesSum += s.minutesFromTarget;
+      minutesCount++;
+    }
+  }
+  const avgMinutesFromTarget = minutesCount > 0
+    ? parseFloat((minutesSum / minutesCount).toFixed(2))
+    : null;
+
   try {
     ensureDir(reportPath);
     fs.appendFileSync(reportPath, JSON.stringify({
@@ -693,6 +1059,8 @@ export function runWatchObservationReport(
     dataGapExamples,
     recommendation,
     recommendationNote,
+    sourceBreakdown,
+    avgMinutesFromTarget,
     ...SAFETY,
   };
 }
@@ -739,9 +1107,16 @@ export function renderWatchObservationCloseout(result: WatchObservationCloseoutR
   L.push(`  Ledger rows read      : ${result.ledgerRowsRead}`);
   L.push(`  Due for 2m snapshot   : ${result.dueFor2m}`);
   L.push(`  Due for 5m snapshot   : ${result.dueFor5m}`);
-  L.push(`  Snapshots written     : ${result.snapshotsWritten}  (snapshotAvailable=false — no live data)`);
+  L.push(`  Snapshots written     : ${result.snapshotsWritten}`);
   L.push(`  Snapshots skipped     : ${result.snapshotsSkipped}  (already captured)`);
   L.push(`  Ledger rows updated   : ${result.ledgerRowsUpdated}`);
+  if (Object.keys(result.sourceBreakdown).length > 0) {
+    L.push('');
+    L.push('  Source breakdown:');
+    for (const [src, count] of Object.entries(result.sourceBreakdown).sort()) {
+      L.push(`    ${src.padEnd(22)}: ${count}`);
+    }
+  }
   L.push('');
   L.push(...safetyFooter());
   return L.join('\n');
@@ -759,6 +1134,15 @@ export function renderWatchObservationReport(result: WatchObservationReportResul
   L.push(`  Total enrolled      : ${result.totalEnrolled}`);
   L.push(`  2m snapshots        : ${result.snap2mCaptured} captured / ${result.snap2mMissing} missing`);
   L.push(`  5m snapshots        : ${result.snap5mCaptured} captured / ${result.snap5mMissing} missing`);
+  if (result.avgMinutesFromTarget != null) {
+    L.push(`  Avg minutes from target: ${result.avgMinutesFromTarget.toFixed(1)} min`);
+  }
+  if (Object.keys(result.sourceBreakdown).length > 0) {
+    L.push('  Source breakdown:');
+    for (const [src, count] of Object.entries(result.sourceBreakdown).sort()) {
+      L.push(`    ${src.padEnd(22)}: ${count}`);
+    }
+  }
   L.push('');
 
   L.push(`  ${SEP2}`);

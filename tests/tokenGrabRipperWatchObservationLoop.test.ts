@@ -100,6 +100,8 @@ function makeSnapshot(o: Partial<SnapshotRow> = {}): SnapshotRow {
     priceChangePct:     null,
     snapshotSource:     'NO_LOCAL_DATA',
     snapshotAvailable:  false,
+    sourceFile:         null,
+    minutesFromTarget:  null,
     reportOnly:         true,
     readOnly:           true,
     paperOnly:          true,
@@ -687,5 +689,265 @@ describe('ripperWatchObservationLoop — safety flags', () => {
       expect(s.realTradingLocked).toBe(true);
       expect(s.tradingExecuted).toBe(0);
     }
+  });
+});
+
+// ── Snapshot source resolver ──────────────────────────────────────────────────
+// T0 = 1_700_000_000_000  →  2023-11-14T22:13:20.000Z
+// dueAt2m = T0+2m  →  2023-11-14T22:15:20.000Z  →  obs-2023-11-14-221520.jsonl
+// dueAt5m = T0+5m  →  2023-11-14T22:18:20.000Z  →  obs-2023-11-14-221820.jsonl
+// All real data files are from 2026, so timestamp filter excludes them in existing tests.
+
+describe('ripperWatchObservationLoop — snapshot source resolver', () => {
+  let dir: string;
+  beforeEach(() => { dir = tmpDir(); });
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+
+  function makeObsRow(overrides: Record<string, unknown> = {}): string {
+    const capturedAt = new Date(T0 + 2 * 60 * 1000).toISOString();
+    return JSON.stringify({
+      capturedAt,
+      normalizedSignal: {
+        contract:            'CONTRACTaaaaaaaaaaaaaaaaaaaaa',
+        priceChangePct:      20.0,
+        liquidityUsd:        50000,
+        volumeLiquidityRatio: 3.0,
+      },
+      ripperScore: 85,
+      ageMinutes:  2.5,
+      ...overrides,
+    });
+  }
+
+  it('resolves snapshot from ripper observation row', () => {
+    const obsDir = path.join(dir, 'obs');
+    fs.mkdirSync(obsDir);
+    fs.writeFileSync(path.join(obsDir, 'obs-2023-11-14-221520.jsonl'), makeObsRow() + '\n');
+
+    const ledger    = path.join(dir, 'ledger.jsonl');
+    const snapshots = path.join(dir, 'snaps.jsonl');
+    writeLines(ledger, [makeLedgerRow()]);
+    const result = runWatchObservationCloseout({
+      ledgerPath:    ledger,
+      snapshotsPath: snapshots,
+      nowMs:         T0 + 3 * 60 * 1000,
+      ripperObsDir:  obsDir,
+    });
+
+    expect(result.snapshotsWritten).toBe(1);
+    const snaps = readLines(snapshots).map(l => JSON.parse(l)) as SnapshotRow[];
+    const snap = snaps[0]!;
+    expect(snap.snapshotAvailable).toBe(true);
+    expect(snap.snapshotSource).toBe('RIPPER_OBS');
+    expect(snap.priceChangePct).toBe(20.0);
+    expect(snap.liquidityUsd).toBe(50000);
+    expect(snap.ripperScore).toBe(85);
+    expect(snap.sourceFile).toBe('obs-2023-11-14-221520.jsonl');
+    expect(snap.minutesFromTarget).toBe(0);
+  });
+
+  it('resolves snapshot from dex-watch run', () => {
+    const runDir = path.join(dir, 'runs');
+    fs.mkdirSync(runDir);
+    const target2mIso = new Date(T0 + 2 * 60 * 1000).toISOString();
+    fs.writeFileSync(
+      path.join(runDir, 'run-20231114-221520.json'),
+      JSON.stringify({
+        generatedAt: target2mIso,
+        winners: [{
+          contract:               'CONTRACTaaaaaaaaaaaaaaaaaaaaa',
+          priceChangePct:         18.0,
+          volumeToLiquidityRatio: 2.5,
+          entry: { liquidityUsd: 40000, observedAt: target2mIso },
+          final: { liquidityUsd: 40000, observedAt: target2mIso },
+        }],
+        losers: [],
+        flat:   [],
+      }),
+    );
+
+    const ledger    = path.join(dir, 'ledger.jsonl');
+    const snapshots = path.join(dir, 'snaps.jsonl');
+    writeLines(ledger, [makeLedgerRow()]);
+    const result = runWatchObservationCloseout({
+      ledgerPath:     ledger,
+      snapshotsPath:  snapshots,
+      nowMs:          T0 + 3 * 60 * 1000,
+      dexWatchRunDir: runDir,
+    });
+
+    expect(result.snapshotsWritten).toBe(1);
+    const snaps = readLines(snapshots).map(l => JSON.parse(l)) as SnapshotRow[];
+    const snap = snaps[0]!;
+    expect(snap.snapshotAvailable).toBe(true);
+    expect(snap.snapshotSource).toBe('DEX_WATCH_RUN');
+    expect(snap.priceChangePct).toBe(18.0);
+    expect(snap.liquidityUsd).toBe(40000);
+    expect(snap.sourceFile).toBe('run-20231114-221520.json');
+  });
+
+  it('ripper obs takes priority over dex-watch run', () => {
+    const obsDir = path.join(dir, 'obs');
+    const runDir = path.join(dir, 'runs');
+    fs.mkdirSync(obsDir);
+    fs.mkdirSync(runDir);
+    const target2mIso = new Date(T0 + 2 * 60 * 1000).toISOString();
+
+    fs.writeFileSync(path.join(obsDir, 'obs-2023-11-14-221520.jsonl'), makeObsRow({ ripperScore: 90 }) + '\n');
+    fs.writeFileSync(
+      path.join(runDir, 'run-20231114-221520.json'),
+      JSON.stringify({
+        generatedAt: target2mIso,
+        winners: [{ contract: 'CONTRACTaaaaaaaaaaaaaaaaaaaaa', priceChangePct: 10.0, volumeToLiquidityRatio: 1.0, entry: { liquidityUsd: 20000, observedAt: target2mIso }, final: { liquidityUsd: 20000, observedAt: target2mIso } }],
+        losers: [], flat: [],
+      }),
+    );
+
+    const ledger    = path.join(dir, 'ledger.jsonl');
+    const snapshots = path.join(dir, 'snaps.jsonl');
+    writeLines(ledger, [makeLedgerRow()]);
+    runWatchObservationCloseout({
+      ledgerPath:     ledger,
+      snapshotsPath:  snapshots,
+      nowMs:          T0 + 3 * 60 * 1000,
+      ripperObsDir:   obsDir,
+      dexWatchRunDir: runDir,
+    });
+
+    const snaps = readLines(snapshots).map(l => JSON.parse(l)) as SnapshotRow[];
+    expect(snaps[0]!.snapshotSource).toBe('RIPPER_OBS');
+    expect(snaps[0]!.priceChangePct).toBe(20.0);
+  });
+
+  it('minutesFromTarget reflects skew from ideal window', () => {
+    const obsDir = path.join(dir, 'obs');
+    fs.mkdirSync(obsDir);
+    // Data is 1 minute past the 2m window (at 3m mark)
+    const oneMinuteLate = new Date(T0 + 3 * 60 * 1000).toISOString();
+    fs.writeFileSync(
+      path.join(obsDir, 'obs-2023-11-14-221620.jsonl'),
+      JSON.stringify({
+        capturedAt: oneMinuteLate,
+        normalizedSignal: { contract: 'CONTRACTaaaaaaaaaaaaaaaaaaaaa', priceChangePct: 12.0, liquidityUsd: 40000, volumeLiquidityRatio: 2.0 },
+        ripperScore: 80,
+        ageMinutes:  3.0,
+      }) + '\n',
+    );
+
+    const ledger    = path.join(dir, 'ledger.jsonl');
+    const snapshots = path.join(dir, 'snaps.jsonl');
+    writeLines(ledger, [makeLedgerRow()]);
+    runWatchObservationCloseout({
+      ledgerPath:    ledger,
+      snapshotsPath: snapshots,
+      nowMs:         T0 + 4 * 60 * 1000,
+      ripperObsDir:  obsDir,
+    });
+
+    const snaps = readLines(snapshots).map(l => JSON.parse(l)) as SnapshotRow[];
+    const snap  = snaps[0]!;
+    expect(snap.snapshotAvailable).toBe(true);
+    expect(snap.minutesFromTarget).toBeCloseTo(1.0, 1);
+  });
+
+  it('nearest timestamp wins when two rows in same file', () => {
+    const obsDir = path.join(dir, 'obs');
+    fs.mkdirSync(obsDir);
+    const target2mMs  = T0 + 2 * 60 * 1000;
+    const closeIso    = new Date(target2mMs + 30_000).toISOString();   // 30s after target
+    const farIso      = new Date(target2mMs + 5 * 60 * 1000).toISOString();  // 5m after target
+
+    fs.writeFileSync(
+      path.join(obsDir, 'obs-2023-11-14-221520.jsonl'),
+      [
+        JSON.stringify({ capturedAt: closeIso, normalizedSignal: { contract: 'CONTRACTaaaaaaaaaaaaaaaaaaaaa', priceChangePct: 22.0, liquidityUsd: 50000, volumeLiquidityRatio: 3.0 }, ripperScore: 85, ageMinutes: 2.5 }),
+        JSON.stringify({ capturedAt: farIso,   normalizedSignal: { contract: 'CONTRACTaaaaaaaaaaaaaaaaaaaaa', priceChangePct: 5.0,  liquidityUsd: 50000, volumeLiquidityRatio: 3.0 }, ripperScore: 60, ageMinutes: 7.0 }),
+      ].join('\n') + '\n',
+    );
+
+    const ledger    = path.join(dir, 'ledger.jsonl');
+    const snapshots = path.join(dir, 'snaps.jsonl');
+    writeLines(ledger, [makeLedgerRow()]);
+    runWatchObservationCloseout({
+      ledgerPath:    ledger,
+      snapshotsPath: snapshots,
+      nowMs:         T0 + 3 * 60 * 1000,
+      ripperObsDir:  obsDir,
+    });
+
+    const snaps = readLines(snapshots).map(l => JSON.parse(l)) as SnapshotRow[];
+    expect(snaps[0]!.priceChangePct).toBe(22.0);  // closer one wins
+  });
+
+  it('sourceBreakdown in closeout result tracks resolved sources', () => {
+    const obsDir = path.join(dir, 'obs');
+    fs.mkdirSync(obsDir);
+    fs.writeFileSync(path.join(obsDir, 'obs-2023-11-14-221520.jsonl'), makeObsRow() + '\n');
+
+    const ledger    = path.join(dir, 'ledger.jsonl');
+    const snapshots = path.join(dir, 'snaps.jsonl');
+    writeLines(ledger, [makeLedgerRow()]);
+    const result = runWatchObservationCloseout({
+      ledgerPath:    ledger,
+      snapshotsPath: snapshots,
+      nowMs:         T0 + 10 * 60 * 1000,  // past both windows
+      ripperObsDir:  obsDir,
+    });
+
+    // Both 2m and 5m windows pick up the obs file (it's within 15m of both targets)
+    expect(result.sourceBreakdown['RIPPER_OBS']).toBe(2);
+    expect(result.sourceBreakdown['NO_LOCAL_DATA']).toBeUndefined();
+  });
+
+  it('classification WATCH_CONFIRMED_RIPPER when resolved snapshot shows price ≥10%', () => {
+    const obsDir = path.join(dir, 'obs');
+    fs.mkdirSync(obsDir);
+    const target5mIso = new Date(T0 + 5 * 60 * 1000).toISOString();
+    fs.writeFileSync(
+      path.join(obsDir, 'obs-2023-11-14-221820.jsonl'),
+      JSON.stringify({ capturedAt: target5mIso, normalizedSignal: { contract: 'CONTRACTaaaaaaaaaaaaaaaaaaaaa', priceChangePct: 18.0, liquidityUsd: 40000, volumeLiquidityRatio: 2.0 }, ripperScore: 80, ageMinutes: 5.0 }) + '\n',
+    );
+
+    const ledger    = path.join(dir, 'ledger.jsonl');
+    const snapshots = path.join(dir, 'snaps.jsonl');
+    writeLines(ledger, [makeLedgerRow({ priceChangePct: 5.0 })]);
+    runWatchObservationCloseout({
+      ledgerPath:    ledger,
+      snapshotsPath: snapshots,
+      nowMs:         T0 + 10 * 60 * 1000,
+      ripperObsDir:  obsDir,
+    });
+
+    const report = runWatchObservationReport({
+      ledgerPath:    ledger,
+      snapshotsPath: snapshots,
+      reportPath:    path.join(dir, 'report.jsonl'),
+    });
+    expect(report.classifications.WATCH_CONFIRMED_RIPPER).toBe(1);
+    expect(report.sourceBreakdown['RIPPER_OBS']).toBeGreaterThanOrEqual(1);
+  });
+
+  it('data outside MAX_SKEW_MS window is not used', () => {
+    const obsDir = path.join(dir, 'obs');
+    fs.mkdirSync(obsDir);
+    // File is 20 minutes away from target — beyond the 15m max skew
+    fs.writeFileSync(
+      path.join(obsDir, 'obs-2023-11-14-223520.jsonl'),  // T0 + 22m
+      JSON.stringify({ capturedAt: new Date(T0 + 22 * 60 * 1000).toISOString(), normalizedSignal: { contract: 'CONTRACTaaaaaaaaaaaaaaaaaaaaa', priceChangePct: 99.0, liquidityUsd: 100000, volumeLiquidityRatio: 5.0 }, ripperScore: 99, ageMinutes: 22.0 }) + '\n',
+    );
+
+    const ledger    = path.join(dir, 'ledger.jsonl');
+    const snapshots = path.join(dir, 'snaps.jsonl');
+    writeLines(ledger, [makeLedgerRow()]);
+    runWatchObservationCloseout({
+      ledgerPath:    ledger,
+      snapshotsPath: snapshots,
+      nowMs:         T0 + 3 * 60 * 1000,
+      ripperObsDir:  obsDir,
+    });
+
+    const snaps = readLines(snapshots).map(l => JSON.parse(l)) as SnapshotRow[];
+    expect(snaps[0]!.snapshotAvailable).toBe(false);
+    expect(snaps[0]!.snapshotSource).toBe('NO_LOCAL_DATA');
   });
 });
