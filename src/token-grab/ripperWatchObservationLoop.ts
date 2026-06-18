@@ -38,6 +38,8 @@ export type FinalRecommendation =
   | 'WATCH_OBSERVATION_READY_FOR_PAPER_REVIEW'
   | 'WATCH_OBSERVATION_TOO_MUCH_DATA_GAP';
 
+export type ReportScope = 'ALL_TIME' | 'CYCLE_ID' | 'CYCLE_FILE' | 'SINCE' | 'LATEST_CYCLE';
+
 export interface LedgerRow {
   contract:          string;
   cycleId:           string;
@@ -132,6 +134,8 @@ export interface WatchObservationCloseoutResult {
 }
 
 export interface WatchObservationReportResult {
+  scope:                ReportScope;
+  scopeValue:           string | null;
   totalEnrolled:        number;
   snap2mCaptured:       number;
   snap2mMissing:        number;
@@ -146,6 +150,7 @@ export interface WatchObservationReportResult {
   recommendationNote:   string;
   sourceBreakdown:      Record<string, number>;
   avgMinutesFromTarget: number | null;
+  pendingSnapshots:     boolean;
   reportOnly:           true;
   readOnly:             true;
   paperOnly:            true;
@@ -174,6 +179,11 @@ export interface WatchObservationReportOptions {
   ledgerPath?:    string;
   snapshotsPath?: string;
   reportPath?:    string;
+  cycleId?:       string;
+  cycleFile?:     string;
+  since?:         string;
+  latestCycle?:   boolean;
+  cycleDir?:      string;
 }
 
 // ── Cycle row (flexible schema — top-level fields may also live in raw.*) ─────
@@ -963,8 +973,52 @@ export function runWatchObservationReport(
   const snapshotsPath = options.snapshotsPath ?? DEFAULT_SNAPSHOTS_PATH;
   const reportPath    = options.reportPath    ?? DEFAULT_REPORT_PATH;
 
-  const ledger    = mergeLedgerRows(readLedger(ledgerPath));
-  const snapshots = readSnapshots(snapshotsPath);
+  // ── Resolve scope ────────────────────────────────────────────────────────────
+  let scope: ReportScope            = 'ALL_TIME';
+  let scopeValue: string | null     = null;
+  let filterCycleId: string | null  = null;
+  let filterSinceMs: number | null  = null;
+
+  if (options.cycleFile) {
+    scope = 'CYCLE_FILE';
+    const fname = path.basename(options.cycleFile);
+    scopeValue = fname;
+    filterCycleId = fname.replace(/\.jsonl$/, '');
+  } else if (options.cycleId) {
+    scope = 'CYCLE_ID';
+    scopeValue = options.cycleId;
+    filterCycleId = options.cycleId;
+  } else if (options.since) {
+    scope = 'SINCE';
+    scopeValue = options.since;
+    filterSinceMs = Date.parse(options.since);
+  } else if (options.latestCycle) {
+    scope = 'LATEST_CYCLE';
+    const cycleDir  = options.cycleDir ?? DEFAULT_CYCLE_DIR;
+    const latest    = findLatestCycleFile(cycleDir);
+    if (latest) {
+      const fname   = path.basename(latest);
+      filterCycleId = fname.replace(/\.jsonl$/, '');
+      scopeValue    = filterCycleId;
+    }
+  }
+
+  // ── Read and filter ledger ───────────────────────────────────────────────────
+  const allLedger = mergeLedgerRows(readLedger(ledgerPath));
+  let filteredLedger: LedgerRow[];
+  if (filterCycleId != null) {
+    filteredLedger = allLedger.filter(r => r.cycleId === filterCycleId);
+  } else if (filterSinceMs != null) {
+    const sinceMs = filterSinceMs;
+    filteredLedger = allLedger.filter(r => Date.parse(r.enrolledAt) >= sinceMs);
+  } else {
+    filteredLedger = allLedger;
+  }
+
+  // ── Read and scope snapshots ─────────────────────────────────────────────────
+  const allSnapshots   = readSnapshots(snapshotsPath);
+  const scopedKeys     = new Set(filteredLedger.map(r => `${r.contract}::${r.capturedAt}`));
+  const snapshots      = allSnapshots.filter(s => scopedKeys.has(`${s.contract}::${s.originalCapturedAt}`));
 
   const snap2mIdx = new Map<string, SnapshotRow>();
   const snap5mIdx = new Map<string, SnapshotRow>();
@@ -987,8 +1041,8 @@ export function runWatchObservationReport(
 
   const candidates: ClassifiedCandidate[] = [];
 
-  for (const row of ledger) {
-    const key   = `${row.contract}::${row.capturedAt}`;
+  for (const row of filteredLedger) {
+    const key    = `${row.contract}::${row.capturedAt}`;
     const snap2m = snap2mIdx.get(key) ?? null;
     const snap5m = snap5mIdx.get(key) ?? null;
 
@@ -1027,7 +1081,7 @@ export function runWatchObservationReport(
     classCounts.WATCH_IMPROVING,
   );
 
-  // Aggregate source breakdown and avg minutes from target across all snapshots
+  // Aggregate source breakdown and avg minutes from target across scoped snapshots
   const sourceBreakdown: Record<string, number> = {};
   let minutesSum = 0, minutesCount = 0;
   for (const s of snapshots) {
@@ -1041,14 +1095,21 @@ export function runWatchObservationReport(
     ? parseFloat((minutesSum / minutesCount).toFixed(2))
     : null;
 
+  const pendingSnapshots = filteredLedger.some(
+    r => r.status === 'PLANNED' || r.status === 'DUE_2M_CAPTURED',
+  );
+
   try {
     ensureDir(reportPath);
     fs.appendFileSync(reportPath, JSON.stringify({
-      totalEnrolled: candidates.length, classifications: classCounts, recommendation, ...SAFETY,
+      scope, scopeValue, totalEnrolled: candidates.length,
+      classifications: classCounts, recommendation, ...SAFETY,
     }) + '\n');
   } catch { /* fail-soft */ }
 
   return {
+    scope,
+    scopeValue,
     totalEnrolled: candidates.length,
     snap2mCaptured, snap2mMissing,
     snap5mCaptured, snap5mMissing,
@@ -1061,6 +1122,7 @@ export function runWatchObservationReport(
     recommendationNote,
     sourceBreakdown,
     avgMinutesFromTarget,
+    pendingSnapshots,
     ...SAFETY,
   };
 }
@@ -1110,6 +1172,11 @@ export function renderWatchObservationCloseout(result: WatchObservationCloseoutR
   L.push(`  Snapshots written     : ${result.snapshotsWritten}`);
   L.push(`  Snapshots skipped     : ${result.snapshotsSkipped}  (already captured)`);
   L.push(`  Ledger rows updated   : ${result.ledgerRowsUpdated}`);
+  if (result.ledgerRowsRead > 0 && result.dueFor2m === 0 && result.dueFor5m === 0) {
+    L.push('');
+    L.push('  No rows were due this run — all rows are either PLANNED (windows not yet passed),');
+    L.push('  DUE_2M_CAPTURED (awaiting 5m window), or at terminal status (COMPLETE / EXPIRED_NO_DATA).');
+  }
   if (Object.keys(result.sourceBreakdown).length > 0) {
     L.push('');
     L.push('  Source breakdown:');
@@ -1127,6 +1194,19 @@ export function renderWatchObservationReport(result: WatchObservationReportResul
   L.push('  TOKEN GRAB — WATCH OBSERVATION REPORT v1');
   L.push('  [REPORT ONLY — NO TRADES — NO POLICY CHANGES — READ ONLY]');
   L.push(SEP, '');
+
+  // Scope header
+  const scopeLabel = result.scopeValue
+    ? `${result.scope}  (${result.scopeValue})`
+    : result.scope;
+  L.push(`  Scope               : ${scopeLabel}`);
+  L.push('');
+
+  if (result.pendingSnapshots) {
+    L.push('  WARNING: Some scoped rows have not yet been through closeout (status=PLANNED or DUE_2M_CAPTURED).');
+    L.push('    Run token:ripper-watch-observation-closeout to capture snapshot data.');
+    L.push('');
+  }
 
   L.push(`  ${SEP2}`);
   L.push('  OVERVIEW');

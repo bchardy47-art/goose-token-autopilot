@@ -3683,9 +3683,14 @@ async function main(): Promise<void> {
 
       case 'token:ripper-watch-observation-report': {
         const worResult = runWatchObservationReport({
-          ledgerPath:    getArgValue('--ledger')    ?? 'data/token-grab/ripper/watch-observations/watch-observation-ledger.jsonl',
-          snapshotsPath: getArgValue('--snapshots') ?? 'data/token-grab/ripper/watch-observations/watch-observation-snapshots.jsonl',
-          reportPath:    getArgValue('--out')       ?? 'data/token-grab/ripper/watch-observations/watch-observation-report.jsonl',
+          ledgerPath:    getArgValue('--ledger')     ?? 'data/token-grab/ripper/watch-observations/watch-observation-ledger.jsonl',
+          snapshotsPath: getArgValue('--snapshots')  ?? 'data/token-grab/ripper/watch-observations/watch-observation-snapshots.jsonl',
+          reportPath:    getArgValue('--out')        ?? 'data/token-grab/ripper/watch-observations/watch-observation-report.jsonl',
+          cycleId:       getArgValue('--cycle-id'),
+          cycleFile:     getArgValue('--cycle-file'),
+          since:         getArgValue('--since'),
+          latestCycle:   process.argv.includes('--latest-cycle'),
+          cycleDir:      getArgValue('--cycle-dir')  ?? 'data/token-grab/ripper/cycles',
         });
         console.log(renderWatchObservationReport(worResult));
         break;

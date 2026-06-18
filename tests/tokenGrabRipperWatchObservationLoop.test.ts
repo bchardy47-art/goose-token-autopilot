@@ -951,3 +951,194 @@ describe('ripperWatchObservationLoop — snapshot source resolver', () => {
     expect(snaps[0]!.snapshotSource).toBe('NO_LOCAL_DATA');
   });
 });
+
+// ── Report scoping / fresh-scope ──────────────────────────────────────────────
+
+describe('ripperWatchObservationLoop — report scoping', () => {
+  let dir: string;
+  beforeEach(() => { dir = tmpDir(); });
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+
+  function makeLedgerRowWithCycle(o: Partial<LedgerRow> & { cycleId: string; enrolledAt?: string }): LedgerRow {
+    return makeLedgerRow({
+      ...o,
+      enrolledAt: o.enrolledAt ?? new Date(T0).toISOString(),
+    });
+  }
+
+  it('no filter returns all rows (ALL_TIME scope)', () => {
+    const ledger    = path.join(dir, 'ledger.jsonl');
+    const snapshots = path.join(dir, 'snaps.jsonl');
+    writeLines(ledger, [
+      makeLedgerRowWithCycle({ contract: 'OLD111', capturedAt: new Date(T0).toISOString(),     cycleId: 'cycle-A' }),
+      makeLedgerRowWithCycle({ contract: 'NEW111', capturedAt: new Date(T0 + 1).toISOString(), cycleId: 'cycle-B' }),
+    ]);
+    const result = runWatchObservationReport({ ledgerPath: ledger, snapshotsPath: snapshots, reportPath: path.join(dir, 'r.jsonl') });
+    expect(result.scope).toBe('ALL_TIME');
+    expect(result.scopeValue).toBeNull();
+    expect(result.totalEnrolled).toBe(2);
+  });
+
+  it('cycleId filter returns only matching rows', () => {
+    const ledger    = path.join(dir, 'ledger.jsonl');
+    const snapshots = path.join(dir, 'snaps.jsonl');
+    writeLines(ledger, [
+      makeLedgerRowWithCycle({ contract: 'OLD111', capturedAt: new Date(T0).toISOString(),     cycleId: 'cycle-old' }),
+      makeLedgerRowWithCycle({ contract: 'NEW111', capturedAt: new Date(T0 + 1).toISOString(), cycleId: 'cycle-new' }),
+      makeLedgerRowWithCycle({ contract: 'NEW222', capturedAt: new Date(T0 + 2).toISOString(), cycleId: 'cycle-new' }),
+    ]);
+    const result = runWatchObservationReport({
+      ledgerPath:    ledger,
+      snapshotsPath: snapshots,
+      reportPath:    path.join(dir, 'r.jsonl'),
+      cycleId:       'cycle-new',
+    });
+    expect(result.scope).toBe('CYCLE_ID');
+    expect(result.scopeValue).toBe('cycle-new');
+    expect(result.totalEnrolled).toBe(2);
+    expect(result.candidates.every(c => c.contract !== 'OLD111')).toBe(true);
+  });
+
+  it('cycleFile filter derives cycleId from filename', () => {
+    const ledger    = path.join(dir, 'ledger.jsonl');
+    const snapshots = path.join(dir, 'snaps.jsonl');
+    const cycleFile = path.join(dir, 'cycles', 'cycle-2024-01-01-120000.jsonl');
+    writeLines(ledger, [
+      makeLedgerRowWithCycle({ contract: 'OLD111', capturedAt: new Date(T0).toISOString(),     cycleId: 'cycle-other' }),
+      makeLedgerRowWithCycle({ contract: 'NEW111', capturedAt: new Date(T0 + 1).toISOString(), cycleId: 'cycle-2024-01-01-120000' }),
+    ]);
+    const result = runWatchObservationReport({
+      ledgerPath:    ledger,
+      snapshotsPath: snapshots,
+      reportPath:    path.join(dir, 'r.jsonl'),
+      cycleFile,
+    });
+    expect(result.scope).toBe('CYCLE_FILE');
+    expect(result.scopeValue).toBe('cycle-2024-01-01-120000.jsonl');
+    expect(result.totalEnrolled).toBe(1);
+    expect(result.candidates[0]!.contract).toBe('NEW111');
+  });
+
+  it('since filter keeps only rows with enrolledAt >= threshold', () => {
+    const ledger    = path.join(dir, 'ledger.jsonl');
+    const snapshots = path.join(dir, 'snaps.jsonl');
+    const early     = new Date(T0).toISOString();
+    const late      = new Date(T0 + 60_000).toISOString();
+    writeLines(ledger, [
+      makeLedgerRowWithCycle({ contract: 'EARLY1', capturedAt: new Date(T0).toISOString(),     cycleId: 'cycle-A', enrolledAt: early }),
+      makeLedgerRowWithCycle({ contract: 'LATE_1', capturedAt: new Date(T0 + 1).toISOString(), cycleId: 'cycle-B', enrolledAt: late }),
+    ]);
+    const result = runWatchObservationReport({
+      ledgerPath:    ledger,
+      snapshotsPath: snapshots,
+      reportPath:    path.join(dir, 'r.jsonl'),
+      since:         late,
+    });
+    expect(result.scope).toBe('SINCE');
+    expect(result.scopeValue).toBe(late);
+    expect(result.totalEnrolled).toBe(1);
+    expect(result.candidates[0]!.contract).toBe('LATE_1');
+  });
+
+  it('latestCycle selects newest cycle file from cycleDir', () => {
+    const cycleDir  = path.join(dir, 'cycles');
+    const ledger    = path.join(dir, 'ledger.jsonl');
+    const snapshots = path.join(dir, 'snaps.jsonl');
+    fs.mkdirSync(cycleDir);
+    // Create two cycle files; sorted lexicographically, B is latest
+    fs.writeFileSync(path.join(cycleDir, 'cycle-2024-01-01-120000.jsonl'), '\n');
+    fs.writeFileSync(path.join(cycleDir, 'cycle-2024-06-01-120000.jsonl'), '\n');
+    writeLines(ledger, [
+      makeLedgerRowWithCycle({ contract: 'OLD111', capturedAt: new Date(T0).toISOString(),     cycleId: 'cycle-2024-01-01-120000' }),
+      makeLedgerRowWithCycle({ contract: 'NEW111', capturedAt: new Date(T0 + 1).toISOString(), cycleId: 'cycle-2024-06-01-120000' }),
+    ]);
+    const result = runWatchObservationReport({
+      ledgerPath:    ledger,
+      snapshotsPath: snapshots,
+      reportPath:    path.join(dir, 'r.jsonl'),
+      latestCycle:   true,
+      cycleDir,
+    });
+    expect(result.scope).toBe('LATEST_CYCLE');
+    expect(result.scopeValue).toBe('cycle-2024-06-01-120000');
+    expect(result.totalEnrolled).toBe(1);
+    expect(result.candidates[0]!.contract).toBe('NEW111');
+  });
+
+  it('scoped source breakdown excludes old pre-resolver rows', () => {
+    const ledger    = path.join(dir, 'ledger.jsonl');
+    const snapshots = path.join(dir, 'snaps.jsonl');
+    const oldCapturedAt = new Date(T0).toISOString();
+    const newCapturedAt = new Date(T0 + 1).toISOString();
+    writeLines(ledger, [
+      makeLedgerRowWithCycle({ contract: 'OLD111', capturedAt: oldCapturedAt, cycleId: 'cycle-old' }),
+      makeLedgerRowWithCycle({ contract: 'NEW111', capturedAt: newCapturedAt, cycleId: 'cycle-new' }),
+    ]);
+    // Snapshots: old row has NO_LOCAL_DATA, new row has RIPPER_OBS
+    writeLines(snapshots, [
+      makeSnapshot({ contract: 'OLD111', originalCapturedAt: oldCapturedAt, window: 'RECHECK_5M', snapshotAvailable: false, snapshotSource: 'NO_LOCAL_DATA' }),
+      makeSnapshot({ contract: 'NEW111', originalCapturedAt: newCapturedAt, window: 'RECHECK_5M', snapshotAvailable: true,  snapshotSource: 'RIPPER_OBS',    priceChangePct: 20.0 }),
+    ]);
+    const result = runWatchObservationReport({
+      ledgerPath:    ledger,
+      snapshotsPath: snapshots,
+      reportPath:    path.join(dir, 'r.jsonl'),
+      cycleId:       'cycle-new',
+    });
+    expect(result.sourceBreakdown['RIPPER_OBS']).toBe(1);
+    expect(result.sourceBreakdown['NO_LOCAL_DATA']).toBeUndefined();
+    expect(result.classifications.WATCH_CONFIRMED_RIPPER).toBe(1);
+  });
+
+  it('safety footer still renders in scoped report', () => {
+    const ledger = path.join(dir, 'ledger.jsonl');
+    writeLines(ledger, [makeLedgerRowWithCycle({ cycleId: 'cycle-A', capturedAt: new Date(T0).toISOString() })]);
+    const result = runWatchObservationReport({
+      ledgerPath:    ledger,
+      snapshotsPath: path.join(dir, 's.jsonl'),
+      reportPath:    path.join(dir, 'r.jsonl'),
+      cycleId:       'cycle-A',
+    });
+    const out = renderWatchObservationReport(result);
+    expect(out).toContain('REPORT_ONLY=true');
+    expect(out).toContain('DO_NOT_ENABLE_REAL_TRADING');
+    expect(out).toContain('CYCLE_ID');
+    expect(out).toContain('cycle-A');
+  });
+
+  it('report does not mutate ledger or snapshot files', () => {
+    const ledger    = path.join(dir, 'ledger.jsonl');
+    const snapshots = path.join(dir, 'snaps.jsonl');
+    writeLines(ledger, [makeLedgerRowWithCycle({ contract: 'C1', capturedAt: new Date(T0).toISOString(), cycleId: 'cycle-X' })]);
+    writeLines(snapshots, [makeSnapshot({ contract: 'C1', originalCapturedAt: new Date(T0).toISOString(), window: 'RECHECK_5M' })]);
+    const ledgerBefore    = fs.readFileSync(ledger, 'utf-8');
+    const snapshotsBefore = fs.readFileSync(snapshots, 'utf-8');
+
+    runWatchObservationReport({
+      ledgerPath:    ledger,
+      snapshotsPath: snapshots,
+      reportPath:    path.join(dir, 'r.jsonl'),
+      cycleId:       'cycle-X',
+    });
+
+    expect(fs.readFileSync(ledger, 'utf-8')).toBe(ledgerBefore);
+    expect(fs.readFileSync(snapshots, 'utf-8')).toBe(snapshotsBefore);
+  });
+
+  it('pendingSnapshots=true when scoped rows are still PLANNED', () => {
+    const ledger = path.join(dir, 'ledger.jsonl');
+    writeLines(ledger, [
+      makeLedgerRowWithCycle({ contract: 'C1', capturedAt: new Date(T0).toISOString(), cycleId: 'cycle-fresh', status: 'PLANNED' }),
+    ]);
+    const result = runWatchObservationReport({
+      ledgerPath:    ledger,
+      snapshotsPath: path.join(dir, 's.jsonl'),
+      reportPath:    path.join(dir, 'r.jsonl'),
+      cycleId:       'cycle-fresh',
+    });
+    expect(result.pendingSnapshots).toBe(true);
+    const out = renderWatchObservationReport(result);
+    expect(out).toContain('WARNING');
+    expect(out).toContain('PLANNED');
+  });
+});
