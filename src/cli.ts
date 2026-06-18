@@ -233,6 +233,14 @@ import { runRipperWatchSignalValidation, renderRipperWatchSignalValidation } fro
 import { runHistoricalWinnerBrain, renderHistoricalWinnerBrain } from './token-grab/ripperHistoricalWinnerBrain';
 import { runHistoricalWinnerReplay, renderHistoricalWinnerReplay } from './token-grab/ripperHistoricalWinnerReplay';
 import { runWatchEnrichmentPlan, renderWatchEnrichmentPlan } from './token-grab/ripperWatchEnrichmentPlan';
+import {
+  runWatchObservationEnroll,
+  runWatchObservationCloseout,
+  runWatchObservationReport,
+  renderWatchObservationEnroll,
+  renderWatchObservationCloseout,
+  renderWatchObservationReport,
+} from './token-grab/ripperWatchObservationLoop';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -3651,6 +3659,35 @@ async function main(): Promise<void> {
             ?? 'data/token-grab/ripper/learning-memory.jsonl',
         });
         console.log(renderWatchEnrichmentPlan(wepResult));
+        break;
+      }
+
+      case 'token:ripper-watch-observation-enroll': {
+        const woeResult = runWatchObservationEnroll({
+          cycleDir:   getArgValue('--cycle-dir')  ?? 'data/token-grab/ripper/cycles',
+          cycleFile:  getArgValue('--cycle-file'),
+          ledgerPath: getArgValue('--ledger')     ?? 'data/token-grab/ripper/watch-observations/watch-observation-ledger.jsonl',
+        });
+        console.log(renderWatchObservationEnroll(woeResult));
+        break;
+      }
+
+      case 'token:ripper-watch-observation-closeout': {
+        const wocResult = runWatchObservationCloseout({
+          ledgerPath:    getArgValue('--ledger')    ?? 'data/token-grab/ripper/watch-observations/watch-observation-ledger.jsonl',
+          snapshotsPath: getArgValue('--snapshots') ?? 'data/token-grab/ripper/watch-observations/watch-observation-snapshots.jsonl',
+        });
+        console.log(renderWatchObservationCloseout(wocResult));
+        break;
+      }
+
+      case 'token:ripper-watch-observation-report': {
+        const worResult = runWatchObservationReport({
+          ledgerPath:    getArgValue('--ledger')    ?? 'data/token-grab/ripper/watch-observations/watch-observation-ledger.jsonl',
+          snapshotsPath: getArgValue('--snapshots') ?? 'data/token-grab/ripper/watch-observations/watch-observation-snapshots.jsonl',
+          reportPath:    getArgValue('--out')       ?? 'data/token-grab/ripper/watch-observations/watch-observation-report.jsonl',
+        });
+        console.log(renderWatchObservationReport(worResult));
         break;
       }
 
