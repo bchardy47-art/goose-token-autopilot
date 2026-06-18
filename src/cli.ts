@@ -227,6 +227,8 @@ import { runRipperLearningSummary, renderRipperLearningSummary } from './token-g
 import { runBrainDashboard, renderBrainDashboard } from './token-grab/ripperBrainDashboardReport';
 import { runBubbleMapsValueReport, renderBubbleMapsValueReport } from './token-grab/ripperBubbleMapsValueReport';
 import { runWinnerProfileReport, renderWinnerProfileReport } from './token-grab/ripperWinnerProfileReport';
+import { runWatchProfileEnrollment, renderWatchProfileEnrollment } from './token-grab/ripperWatchProfileEnrollment';
+import { runWatchProfileOutcomeReport, renderWatchProfileOutcomeReport } from './token-grab/ripperWatchProfileOutcomeReport';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -3573,6 +3575,32 @@ async function main(): Promise<void> {
             : undefined,
         });
         console.log(renderWinnerProfileReport(wprResult));
+        break;
+      }
+
+      case 'token:ripper-watch-profile-enroll': {
+        // SAFETY: report-only / append-only tagging. No trades, no gate changes.
+        // DO NOT wire into autopilot decisions. DO NOT enable real trading.
+        const wpeResult = runWatchProfileEnrollment({
+          learningMemoryPath: getArgValue('--memory')
+            ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          outPath: getArgValue('--out')
+            ?? 'data/token-grab/ripper/watch-profile-enrollments.jsonl',
+        });
+        console.log(renderWatchProfileEnrollment(wpeResult));
+        break;
+      }
+
+      case 'token:ripper-watch-profile-outcome-report': {
+        // SAFETY: report-only / read-only. No trades, no gate changes.
+        // DO NOT wire into autopilot decisions. DO NOT enable real trading.
+        const wporResult = runWatchProfileOutcomeReport({
+          enrollmentsPath: getArgValue('--enrollments')
+            ?? 'data/token-grab/ripper/watch-profile-enrollments.jsonl',
+          learningMemoryPath: getArgValue('--memory')
+            ?? 'data/token-grab/ripper/learning-memory.jsonl',
+        });
+        console.log(renderWatchProfileOutcomeReport(wporResult));
         break;
       }
 

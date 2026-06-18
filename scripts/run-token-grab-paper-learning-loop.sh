@@ -61,6 +61,10 @@ echo "  [STEP 4/9] Running shadow reject filter enrollment..."
 npm run token:ripper-shadow-reject-filter-enroll
 
 echo ""
+echo "  [STEP 4b] Running watch profile enrollment (fail-soft)..."
+npm run token:ripper-watch-profile-enroll || true
+
+echo ""
 echo "  [STEP 5/9] Running paper policy test..."
 npm run token:ripper-paper-policy-test
 
@@ -103,6 +107,10 @@ CLOSEOUT_FLAG="/tmp/token-grab-closeout-$$"
       data/token-grab/ripper/paper-intent-observations.jsonl \
       data/token-grab/dex-watch-runs/run-*.json \
     --out data/token-grab/ripper/shadow-enrolled-outcome-report.jsonl
+
+  echo ""
+  echo "  [STEP 9b] Running watch profile outcome report (fail-soft)..."
+  npm run token:ripper-watch-profile-outcome-report || true
 
   echo ""
   echo "  Running final autopilot status..."
