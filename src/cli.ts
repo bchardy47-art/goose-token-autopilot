@@ -239,6 +239,7 @@ import { runTargetProfileReviewLedgerReport, renderTargetProfileReviewLedgerRepo
 import { runTargetProfileReviewOutcomeUpdate, renderTargetProfileReviewOutcomeUpdate } from './token-grab/ripperTargetProfileReviewOutcomeUpdate';
 import { runLedgerUniqueStats, renderLedgerUniqueStats } from './token-grab/ripperTargetProfileLedgerUniqueStats';
 import { runEarlyFingerprintReport, renderEarlyFingerprintReport } from './token-grab/ripperHistoricalEarlyFingerprintReport';
+import { runPricePumpAutopsy, renderPricePumpAutopsy } from './token-grab/ripperPricePumpFingerprintAutopsy';
 import {
   runWatchObservationEnroll,
   runWatchObservationCloseout,
@@ -3744,6 +3745,14 @@ async function main(): Promise<void> {
           memoryPath: getArgValue('--memory-path') ?? 'data/token-grab/ripper/learning-memory.jsonl',
         });
         console.log(renderEarlyFingerprintReport(efResult));
+        break;
+      }
+
+      case 'token:ripper-price-pump-fingerprint-autopsy': {
+        const ppaResult = runPricePumpAutopsy({
+          memoryPath: getArgValue('--memory-path') ?? 'data/token-grab/ripper/learning-memory.jsonl',
+        });
+        console.log(renderPricePumpAutopsy(ppaResult));
         break;
       }
 
