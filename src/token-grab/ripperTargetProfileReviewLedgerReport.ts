@@ -24,6 +24,8 @@ interface LedgerRow {
   paperReviewLabel?: string;
   status?:           string;
   outcomeStatus?:    string;
+  outcomeLabel?:     string | null;
+  priceChangePct?:   number | null;
 }
 
 export interface ReviewLedgerReportResult {
@@ -33,7 +35,14 @@ export interface ReviewLedgerReportResult {
   byCycleId:           Record<string, number>;
   bySymbol:            Record<string, number>;
   outcomeStatusCounts: Record<string, number>;
+  outcomeLabelCounts:  Record<string, number>;
   targetProfileCounts: Record<string, number>;
+  observedCount:       number;
+  stillUnknownCount:   number;
+  win5Count:           number;
+  win5Rate:            number;
+  flatDumpCount:       number;
+  flatDumpRate:        number;
   latestCandidates:    LedgerRow[];
   reportOnly:          true;
   readOnly:            true;
@@ -79,18 +88,33 @@ export function runTargetProfileReviewLedgerReport(
   const ledgerPath = options.ledgerPath ?? DEFAULT_LEDGER_PATH;
   const rows       = readJsonl<LedgerRow>(ledgerPath);
 
-  const uniqueContracts     = new Set(rows.map(r => r.contract).filter(Boolean)).size;
+  const uniqueContracts:     number                 = new Set(rows.map(r => r.contract).filter(Boolean)).size;
   const byCycleId:           Record<string, number> = {};
   const bySymbol:            Record<string, number> = {};
   const outcomeStatusCounts: Record<string, number> = {};
+  const outcomeLabelCounts:  Record<string, number> = {};
   const targetProfileCounts: Record<string, number> = {};
 
+  let observedCount  = 0;
+  let win5Count      = 0;
+  let flatDumpCount  = 0;
+
   for (const r of rows) {
-    if (r.cycleId)        inc(byCycleId,           r.cycleId);
-    if (r.symbol)         inc(bySymbol,             r.symbol);
-    if (r.outcomeStatus)  inc(outcomeStatusCounts,  r.outcomeStatus);
-    if (r.targetProfileId) inc(targetProfileCounts, r.targetProfileId);
+    if (r.cycleId)         inc(byCycleId,           r.cycleId);
+    if (r.symbol)          inc(bySymbol,             r.symbol);
+    if (r.outcomeStatus)   inc(outcomeStatusCounts,  r.outcomeStatus);
+    if (r.outcomeLabel)    inc(outcomeLabelCounts,   r.outcomeLabel);
+    if (r.targetProfileId) inc(targetProfileCounts,  r.targetProfileId);
+    if (r.outcomeStatus === 'OBSERVED') {
+      observedCount++;
+      if (r.outcomeLabel === 'BIG_WINNER')                                  win5Count++;
+      if (r.outcomeLabel === 'FLAT_JUNK' || r.outcomeLabel === 'DUMP')      flatDumpCount++;
+    }
   }
+
+  const stillUnknownCount = (outcomeStatusCounts['UNKNOWN'] ?? 0);
+  const win5Rate      = observedCount > 0 ? win5Count      / observedCount : 0;
+  const flatDumpRate  = observedCount > 0 ? flatDumpCount  / observedCount : 0;
 
   // Latest N by reviewedAt descending
   const latestCandidates = [...rows]
@@ -104,7 +128,14 @@ export function runTargetProfileReviewLedgerReport(
     byCycleId,
     bySymbol,
     outcomeStatusCounts,
+    outcomeLabelCounts,
     targetProfileCounts,
+    observedCount,
+    stillUnknownCount,
+    win5Count,
+    win5Rate,
+    flatDumpCount,
+    flatDumpRate,
     latestCandidates,
     ...SAFETY,
   };
@@ -147,6 +178,19 @@ export function renderTargetProfileReviewLedgerReport(
     }
   }
   L.push('');
+
+  // Outcome label breakdown (from observed rows)
+  if (result.observedCount > 0) {
+    L.push('  Outcome labels (observed rows):');
+    for (const [lbl, n] of Object.entries(result.outcomeLabelCounts).sort()) {
+      L.push(`    ${lbl.padEnd(20)}: ${n}`);
+    }
+    L.push('');
+    L.push(`  win5 (BIG_WINNER / observed)  : ${result.win5Count} / ${result.observedCount}  =  ${(result.win5Rate * 100).toFixed(1)}%`);
+    L.push(`  flatDump (FLAT_JUNK+DUMP / obs): ${result.flatDumpCount} / ${result.observedCount}  =  ${(result.flatDumpRate * 100).toFixed(1)}%`);
+    L.push(`  Still UNKNOWN                  : ${result.stillUnknownCount}`);
+    L.push('');
+  }
 
   // By cycle
   if (Object.keys(result.byCycleId).length > 0) {

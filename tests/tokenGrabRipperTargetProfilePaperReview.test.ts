@@ -10,6 +10,10 @@ import {
   runTargetProfileReviewLedgerReport,
   renderTargetProfileReviewLedgerReport,
 } from '../src/token-grab/ripperTargetProfileReviewLedgerReport';
+import {
+  runTargetProfileReviewOutcomeUpdate,
+  renderTargetProfileReviewOutcomeUpdate,
+} from '../src/token-grab/ripperTargetProfileReviewOutcomeUpdate';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 function tmpDir(): string {
@@ -428,5 +432,255 @@ describe('runTargetProfileReviewLedgerReport', () => {
     expect(result.latestCandidates.length).toBe(0);
     expect(result.reportOnly).toBe(true);
     expect(result.tradingExecuted).toBe(0);
+  });
+
+  // Test 18: ledger report computes win5/flatDump from OBSERVED rows
+  it('computes win5Rate and flatDumpRate from observed rows', () => {
+    const ledgerPath = path.join(dir, 'ledger.jsonl');
+    writeLedgerRows(ledgerPath, [
+      makeLedgerRow({ contract: 'C1', symbol: 'W1', outcomeStatus: 'OBSERVED', outcomeLabel: 'BIG_WINNER' }),
+      makeLedgerRow({ contract: 'C2', symbol: 'W2', outcomeStatus: 'OBSERVED', outcomeLabel: 'FLAT_JUNK' }),
+      makeLedgerRow({ contract: 'C3', symbol: 'W3', outcomeStatus: 'OBSERVED', outcomeLabel: 'DUMP' }),
+      makeLedgerRow({ contract: 'C4', symbol: 'W4', outcomeStatus: 'UNKNOWN' }),
+    ]);
+    const result = runTargetProfileReviewLedgerReport({ ledgerPath });
+    expect(result.observedCount).toBe(3);
+    expect(result.stillUnknownCount).toBe(1);
+    expect(result.win5Count).toBe(1);
+    expect(result.flatDumpCount).toBe(2);
+    expect(result.win5Rate).toBeCloseTo(1 / 3);
+    expect(result.flatDumpRate).toBeCloseTo(2 / 3);
+    expect(result.outcomeLabelCounts['BIG_WINNER']).toBe(1);
+    expect(result.outcomeLabelCounts['FLAT_JUNK']).toBe(1);
+    expect(result.outcomeLabelCounts['DUMP']).toBe(1);
+  });
+});
+
+// ── Outcome updater tests ──────────────────────────────────────────────────────
+describe('runTargetProfileReviewOutcomeUpdate', () => {
+  let dir: string;
+
+  beforeEach(() => { dir = tmpDir(); });
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+
+  function writeLedger(ledgerPath: string, rows: object[]): void {
+    fs.writeFileSync(ledgerPath, rows.map(r => JSON.stringify(r)).join('\n') + '\n');
+  }
+
+  function writeMemory(memoryPath: string, rows: object[]): void {
+    fs.writeFileSync(memoryPath, rows.map(r => JSON.stringify(r)).join('\n') + '\n');
+  }
+
+  function makeOutcomeLedgerRow(o: Record<string, unknown> = {}): object {
+    return {
+      reviewId:        'LIQ_10K_30K_WATCH_ENTER_NOW::cycle-test::CONTRACT_A',
+      targetProfileId: 'LIQ_10K_30K_WATCH_ENTER_NOW',
+      cycleId:         'cycle-2026-06-18-100000',
+      contract:        'CONTRACT_AAAA',
+      symbol:          'TEST',
+      capturedAt:      '2026-06-18T10:00:00.000Z',
+      reviewedAt:      '2026-06-18T12:00:00.000Z',
+      status:          'REVIEWED_ONLY',
+      outcomeStatus:   'UNKNOWN',
+      reportOnly:      true, readOnly: true, paperOnly: true,
+      realTradingLocked: true, tradingExecuted: 0,
+      ...o,
+    };
+  }
+
+  function makeMemoryRow(o: Record<string, unknown> = {}): object {
+    return {
+      contract:      'CONTRACT_AAAA',
+      cycleId:       'cycle-2026-06-18-100000',
+      capturedAt:    '2026-06-18T10:00:00.000Z',
+      observedAt:    '2026-06-18T09:55:00.000Z',
+      outcomeLabel:  'BIG_WINNER',
+      priceChangePct: 12.5,
+      outcomeSource: 'paper-observation',
+      gateDecision:  'BUY_REJECTED',
+      ...o,
+    };
+  }
+
+  // Test 19: dry-run finds match but does not write ledger
+  it('dry-run reports match without writing ledger', () => {
+    const ledgerPath = path.join(dir, 'ledger.jsonl');
+    const memoryPath = path.join(dir, 'memory.jsonl');
+    writeLedger(ledgerPath, [makeOutcomeLedgerRow()]);
+    writeMemory(memoryPath, [makeMemoryRow()]);
+
+    const before = fs.readFileSync(ledgerPath, 'utf-8');
+    const result = runTargetProfileReviewOutcomeUpdate({ ledgerPath, memoryPath });
+
+    expect(result.dryRun).toBe(true);
+    expect(result.writeEnabled).toBe(false);
+    expect(result.matchedOutcomes).toBe(1);
+    expect(result.updatedRows).toBe(0);  // 0 on dry-run
+    expect(fs.readFileSync(ledgerPath, 'utf-8')).toBe(before);  // not mutated
+  });
+
+  // Test 20: --write applies the update
+  it('write=true applies outcome to ledger rows', () => {
+    const ledgerPath = path.join(dir, 'ledger.jsonl');
+    const memoryPath = path.join(dir, 'memory.jsonl');
+    writeLedger(ledgerPath, [makeOutcomeLedgerRow()]);
+    writeMemory(memoryPath, [makeMemoryRow({ outcomeLabel: 'BIG_WINNER', priceChangePct: 8.0 })]);
+
+    const result = runTargetProfileReviewOutcomeUpdate({
+      ledgerPath, memoryPath, write: true,
+      updatedAt: '2026-06-18T13:00:00.000Z',
+    });
+
+    expect(result.updatedRows).toBe(1);
+    expect(result.matchedOutcomes).toBe(1);
+    expect(result.writeEnabled).toBe(true);
+
+    const rows = readLedger(ledgerPath) as Record<string, unknown>[];
+    expect(rows.length).toBe(1);
+    expect(rows[0]!['outcomeStatus']).toBe('OBSERVED');
+    expect(rows[0]!['outcomeLabel']).toBe('BIG_WINNER');
+    expect(rows[0]!['priceChangePct']).toBeCloseTo(8.0);
+    expect(rows[0]!['updatedAt']).toBe('2026-06-18T13:00:00.000Z');
+  });
+
+  // Test 21: CONTRACT_AND_TIME match (capturedAt >= ledger capturedAt)
+  it('uses CONTRACT_AND_TIME when memory capturedAt >= ledger capturedAt', () => {
+    const ledgerPath = path.join(dir, 'ledger.jsonl');
+    const memoryPath = path.join(dir, 'memory.jsonl');
+    writeLedger(ledgerPath, [makeOutcomeLedgerRow({ capturedAt: '2026-06-18T10:00:00.000Z' })]);
+    writeMemory(memoryPath, [
+      makeMemoryRow({ capturedAt: '2026-06-18T10:00:00.000Z', outcomeLabel: 'BIG_WINNER' }),
+    ]);
+
+    const result = runTargetProfileReviewOutcomeUpdate({ ledgerPath, memoryPath });
+    expect(result.updatedCandidates[0]!.matchQuality).toBe('CONTRACT_AND_TIME');
+    expect(result.updatedCandidates[0]!.outcomeLabel).toBe('BIG_WINNER');
+  });
+
+  // Test 22: CONTRACT_ONLY_FALLBACK when no memory row has capturedAt >= ledger capturedAt
+  it('falls back to CONTRACT_ONLY_FALLBACK when no after-capturedAt match exists', () => {
+    const ledgerPath = path.join(dir, 'ledger.jsonl');
+    const memoryPath = path.join(dir, 'memory.jsonl');
+    writeLedger(ledgerPath, [makeOutcomeLedgerRow({ capturedAt: '2026-06-18T10:00:00.000Z' })]);
+    writeMemory(memoryPath, [
+      makeMemoryRow({ capturedAt: '2026-06-18T09:00:00.000Z', outcomeLabel: 'FLAT_JUNK' }),
+      makeMemoryRow({ capturedAt: '2026-06-18T08:00:00.000Z', outcomeLabel: 'FLAT_JUNK' }),
+    ]);
+
+    const result = runTargetProfileReviewOutcomeUpdate({ ledgerPath, memoryPath });
+    expect(result.matchedOutcomes).toBe(1);
+    expect(result.updatedCandidates[0]!.matchQuality).toBe('CONTRACT_ONLY_FALLBACK');
+  });
+
+  // Test 23: no match when no memory rows exist for contract
+  it('leaves row UNKNOWN when no memory rows exist for contract', () => {
+    const ledgerPath = path.join(dir, 'ledger.jsonl');
+    const memoryPath = path.join(dir, 'memory.jsonl');
+    writeLedger(ledgerPath, [makeOutcomeLedgerRow({ contract: 'CONTRACT_NO_MEMORY' })]);
+    writeMemory(memoryPath, [makeMemoryRow({ contract: 'DIFFERENT_CONTRACT' })]);
+
+    const result = runTargetProfileReviewOutcomeUpdate({ ledgerPath, memoryPath });
+    expect(result.matchedOutcomes).toBe(0);
+    expect(result.stillUnknown).toBe(1);
+    expect(result.updatedCandidates.length).toBe(0);
+  });
+
+  // Test 24: no match when all memory rows for contract have outcomeLabel=UNKNOWN
+  it('leaves row UNKNOWN when all memory rows have outcomeLabel UNKNOWN', () => {
+    const ledgerPath = path.join(dir, 'ledger.jsonl');
+    const memoryPath = path.join(dir, 'memory.jsonl');
+    writeLedger(ledgerPath, [makeOutcomeLedgerRow()]);
+    writeMemory(memoryPath, [makeMemoryRow({ outcomeLabel: 'UNKNOWN' })]);
+
+    const result = runTargetProfileReviewOutcomeUpdate({ ledgerPath, memoryPath });
+    expect(result.matchedOutcomes).toBe(0);
+    expect(result.stillUnknown).toBe(1);
+  });
+
+  // Test 25: already-OBSERVED rows are skipped
+  it('skips rows that are already OBSERVED', () => {
+    const ledgerPath = path.join(dir, 'ledger.jsonl');
+    const memoryPath = path.join(dir, 'memory.jsonl');
+    writeLedger(ledgerPath, [
+      makeOutcomeLedgerRow({ outcomeStatus: 'OBSERVED', outcomeLabel: 'BIG_WINNER' }),
+    ]);
+    writeMemory(memoryPath, [makeMemoryRow()]);
+
+    const before = fs.readFileSync(ledgerPath, 'utf-8');
+    const result = runTargetProfileReviewOutcomeUpdate({ ledgerPath, memoryPath, write: true });
+    expect(result.unknownBefore).toBe(0);
+    expect(result.matchedOutcomes).toBe(0);
+    expect(fs.readFileSync(ledgerPath, 'utf-8')).toBe(before);
+  });
+
+  // Test 26: multiple contracts updated in a single run
+  it('updates multiple contracts in one pass', () => {
+    const ledgerPath = path.join(dir, 'ledger.jsonl');
+    const memoryPath = path.join(dir, 'memory.jsonl');
+    writeLedger(ledgerPath, [
+      makeOutcomeLedgerRow({ contract: 'CONTRACT_A', symbol: 'AAA' }),
+      makeOutcomeLedgerRow({ contract: 'CONTRACT_B', symbol: 'BBB' }),
+    ]);
+    writeMemory(memoryPath, [
+      makeMemoryRow({ contract: 'CONTRACT_A', outcomeLabel: 'BIG_WINNER' }),
+      makeMemoryRow({ contract: 'CONTRACT_B', outcomeLabel: 'FLAT_JUNK' }),
+    ]);
+
+    const result = runTargetProfileReviewOutcomeUpdate({ ledgerPath, memoryPath });
+    expect(result.matchedOutcomes).toBe(2);
+    expect(result.outcomeLabelCounts['BIG_WINNER']).toBe(1);
+    expect(result.outcomeLabelCounts['FLAT_JUNK']).toBe(1);
+    expect(result.stillUnknown).toBe(0);
+  });
+
+  // Test 27: outcomeLabelCounts aggregated correctly
+  it('reports outcomeLabelCounts across all matched rows', () => {
+    const ledgerPath = path.join(dir, 'ledger.jsonl');
+    const memoryPath = path.join(dir, 'memory.jsonl');
+    writeLedger(ledgerPath, [
+      makeOutcomeLedgerRow({ contract: 'C1' }),
+      makeOutcomeLedgerRow({ contract: 'C2' }),
+      makeOutcomeLedgerRow({ contract: 'C3' }),
+    ]);
+    writeMemory(memoryPath, [
+      makeMemoryRow({ contract: 'C1', outcomeLabel: 'BIG_WINNER' }),
+      makeMemoryRow({ contract: 'C2', outcomeLabel: 'FLAT_JUNK' }),
+      makeMemoryRow({ contract: 'C3', outcomeLabel: 'FLAT_JUNK' }),
+    ]);
+
+    const result = runTargetProfileReviewOutcomeUpdate({ ledgerPath, memoryPath });
+    expect(result.outcomeLabelCounts['BIG_WINNER']).toBe(1);
+    expect(result.outcomeLabelCounts['FLAT_JUNK']).toBe(2);
+  });
+
+  // Test 28: result safety flags locked
+  it('result includes all safety flags', () => {
+    const ledgerPath = path.join(dir, 'ledger.jsonl');
+    const memoryPath = path.join(dir, 'memory.jsonl');
+    writeLedger(ledgerPath, [makeOutcomeLedgerRow()]);
+    writeMemory(memoryPath, [makeMemoryRow()]);
+
+    const result = runTargetProfileReviewOutcomeUpdate({ ledgerPath, memoryPath });
+    expect(result.reportOnly).toBe(true);
+    expect(result.readOnly).toBe(true);
+    expect(result.paperOnly).toBe(true);
+    expect(result.realTradingLocked).toBe(true);
+    expect(result.tradingExecuted).toBe(0);
+  });
+
+  // Test 29: render output contains safety strings
+  it('render output contains safety strings', () => {
+    const ledgerPath = path.join(dir, 'ledger.jsonl');
+    const memoryPath = path.join(dir, 'memory.jsonl');
+    writeLedger(ledgerPath, [makeOutcomeLedgerRow()]);
+    writeMemory(memoryPath, [makeMemoryRow()]);
+
+    const result   = runTargetProfileReviewOutcomeUpdate({ ledgerPath, memoryPath });
+    const rendered = renderTargetProfileReviewOutcomeUpdate(result);
+    expect(rendered).toContain('PAPER ONLY');
+    expect(rendered).toContain('NO WALLET');
+    expect(rendered).toContain('NO REAL TRADING');
+    expect(rendered).toContain('realTradingLocked=true');
+    expect(rendered).toContain('tradingExecuted=0');
   });
 });

@@ -236,6 +236,7 @@ import { runWatchEnrichmentPlan, renderWatchEnrichmentPlan } from './token-grab/
 import { runWatchTargetProfileReport, renderWatchTargetProfileReport } from './token-grab/ripperWatchTargetProfileReport';
 import { runTargetProfilePaperReview, renderTargetProfilePaperReview } from './token-grab/ripperTargetProfilePaperReview';
 import { runTargetProfileReviewLedgerReport, renderTargetProfileReviewLedgerReport } from './token-grab/ripperTargetProfileReviewLedgerReport';
+import { runTargetProfileReviewOutcomeUpdate, renderTargetProfileReviewOutcomeUpdate } from './token-grab/ripperTargetProfileReviewOutcomeUpdate';
 import {
   runWatchObservationEnroll,
   runWatchObservationCloseout,
@@ -3725,6 +3726,16 @@ async function main(): Promise<void> {
           ledgerPath: getArgValue('--ledger-path') ?? 'data/token-grab/ripper/target-profile-review-ledger.jsonl',
         });
         console.log(renderTargetProfileReviewLedgerReport(tprlrResult));
+        break;
+      }
+
+      case 'token:ripper-target-profile-review-outcome-update': {
+        const tpRouResult = runTargetProfileReviewOutcomeUpdate({
+          ledgerPath: getArgValue('--ledger-path') ?? 'data/token-grab/ripper/target-profile-review-ledger.jsonl',
+          memoryPath: getArgValue('--memory-path') ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          write:      process.argv.includes('--write'),
+        });
+        console.log(renderTargetProfileReviewOutcomeUpdate(tpRouResult));
         break;
       }
 
