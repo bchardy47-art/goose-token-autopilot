@@ -163,6 +163,49 @@ describe('parsePairResponse', () => {
     expect(parsePairResponse({}, SOL_A, 'T')).toBeNull();
     expect(parsePairResponse({ pairs: [] }, SOL_A, 'T')).toBeNull();
   });
+  it('captures priceChange.m5 into priceChangeM5', () => {
+    const body = {
+      pairs: [{
+        chainId: 'solana',
+        priceUsd: '1',
+        liquidity: { usd: 10_000 },
+        baseToken: { address: SOL_A, symbol: 'GOOSE' },
+        priceChange: { m5: '7.42' },
+      }],
+    };
+    const s = parsePairResponse(body, SOL_A, 'T');
+    expect(s!.priceChangeM5).toBeCloseTo(7.42);
+  });
+  it('captures negative priceChange.m5 (not filtered out)', () => {
+    const body = {
+      pairs: [{
+        chainId: 'solana',
+        priceUsd: '1',
+        liquidity: { usd: 10_000 },
+        baseToken: { address: SOL_A, symbol: 'GOOSE' },
+        priceChange: { m5: -3.5 },
+      }],
+    };
+    const s = parsePairResponse(body, SOL_A, 'T');
+    expect(s!.priceChangeM5).toBeCloseTo(-3.5);
+  });
+  it('captures zero priceChange.m5 (not filtered out)', () => {
+    const body = {
+      pairs: [{
+        chainId: 'solana',
+        priceUsd: '1',
+        liquidity: { usd: 10_000 },
+        baseToken: { address: SOL_A, symbol: 'GOOSE' },
+        priceChange: { m5: 0 },
+      }],
+    };
+    const s = parsePairResponse(body, SOL_A, 'T');
+    expect(s!.priceChangeM5).toBe(0);
+  });
+  it('sets priceChangeM5=null when priceChange absent', () => {
+    const s = parsePairResponse(pairBody({ priceUsd: 1 }), SOL_A, 'T');
+    expect(s!.priceChangeM5).toBeNull();
+  });
 });
 
 // ── Change math ──────────────────────────────────────────────────────────────────
@@ -206,6 +249,23 @@ describe('buildOutcome', () => {
   it('marks missing when entry or final snapshot absent', () => {
     expect(buildOutcome(sig(), null, snap()).classification).toBe('missing');
     expect(buildOutcome(sig(), snap(), null).classification).toBe('missing');
+  });
+  it('forwards entry priceChangeM5 to entryPriceChangeM5', () => {
+    const o = buildOutcome(sig(), snap({ priceChangeM5: 8.1 }), snap({ priceUsd: 1.5 }));
+    expect(o.entryPriceChangeM5).toBeCloseTo(8.1);
+  });
+  it('sets entryPriceChangeM5=null when entry has no priceChangeM5', () => {
+    const o = buildOutcome(sig(), snap(), snap({ priceUsd: 1.5 }));
+    expect(o.entryPriceChangeM5).toBeNull();
+  });
+  it('does not copy priceChangePct into entryPriceChangeM5', () => {
+    const o = buildOutcome(sig(), snap({ priceUsd: 1 }), snap({ priceUsd: 1.5 }));
+    expect(o.priceChangePct).toBeCloseTo(50);
+    expect(o.entryPriceChangeM5).toBeNull(); // priceChangePct must NOT leak here
+  });
+  it('forwards negative entryPriceChangeM5', () => {
+    const o = buildOutcome(sig(), snap({ priceChangeM5: -2.3 }), snap({ priceUsd: 1.5 }));
+    expect(o.entryPriceChangeM5).toBeCloseTo(-2.3);
   });
 });
 

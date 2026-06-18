@@ -44,6 +44,8 @@ interface DexWatchOutcomeRaw {
   liquidityChangePct?: number;
   volumeToLiquidityRatio?: number;
   classification?: string;
+  /** DexScreener-reported 5-min price change from the entry snapshot. Independent of observation window. */
+  entryPriceChangeM5?: number | null;
   [key: string]: unknown;
 }
 
@@ -124,6 +126,7 @@ export function dexWatchOutcomeToEarSignal(
     priceChangePct: outcome.priceChangePct,
     liquidityChangePct: outcome.liquidityChangePct,
     volumeLiquidityRatio: outcome.volumeToLiquidityRatio,
+    entryPriceChangeM5: outcome.entryPriceChangeM5 ?? null,
     raw: outcome,
   };
 }

@@ -45,6 +45,8 @@ export interface RipperEarSignal {
   txnCount?: number;
   buys?: number;
   sells?: number;
+  /** DexScreener-reported 5-min price change captured at entry/cycle time. NOT forwarded to scoring. */
+  entryPriceChangeM5?: number | null;
 
   // Enrichment hints (optional — from holder/cluster providers)
   holderRiskHint?: string;

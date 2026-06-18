@@ -796,3 +796,63 @@ describe('runLiveFixtureCapture — mocked cluster provider', () => {
     expect(readFixturesFromJsonl(output)).toHaveLength(2);
   });
 });
+
+// ── Tests: buildFixture — entryMomentum fields (M5 path) ─────────────────────
+
+describe('buildFixture — entryMomentumPct from entryPriceChangeM5', () => {
+  it('sets entryMomentumPct=m5, source=DEX_SCREENER_M5, window=M5 when entryPriceChangeM5 is set', () => {
+    const signal: RipperEarSignal = { ...primePairSignal(), entryPriceChangeM5: 7.42 };
+    const fixture = buildFixture(signal, DEFAULT_RIPPER_CONFIG, NOW_MS);
+    expect(fixture.entryMomentumPct).toBeCloseTo(7.42);
+    expect(fixture.entryMomentumSource).toBe('DEX_SCREENER_M5');
+    expect(fixture.entryMomentumWindowLabel).toBe('M5');
+  });
+
+  it('captures zero entryPriceChangeM5 as DEX_SCREENER_M5 (not filtered)', () => {
+    const signal: RipperEarSignal = { ...primePairSignal(), entryPriceChangeM5: 0 };
+    const fixture = buildFixture(signal, DEFAULT_RIPPER_CONFIG, NOW_MS);
+    expect(fixture.entryMomentumPct).toBe(0);
+    expect(fixture.entryMomentumSource).toBe('DEX_SCREENER_M5');
+  });
+
+  it('captures negative entryPriceChangeM5 as DEX_SCREENER_M5 (falling token is valid)', () => {
+    const signal: RipperEarSignal = { ...primePairSignal(), entryPriceChangeM5: -5.1 };
+    const fixture = buildFixture(signal, DEFAULT_RIPPER_CONFIG, NOW_MS);
+    expect(fixture.entryMomentumPct).toBeCloseTo(-5.1);
+    expect(fixture.entryMomentumSource).toBe('DEX_SCREENER_M5');
+  });
+
+  it('falls back to UNAVAILABLE when entryPriceChangeM5 is null', () => {
+    const signal: RipperEarSignal = { ...primePairSignal(), entryPriceChangeM5: null };
+    const fixture = buildFixture(signal, DEFAULT_RIPPER_CONFIG, NOW_MS);
+    expect(fixture.entryMomentumPct).toBeNull();
+    expect(fixture.entryMomentumSource).toBe('UNAVAILABLE');
+    expect(fixture.entryMomentumWindowLabel).toBe('UNAVAILABLE');
+  });
+
+  it('falls back to UNAVAILABLE when entryPriceChangeM5 is absent', () => {
+    const signal: RipperEarSignal = primePairSignal(); // no entryPriceChangeM5
+    const fixture = buildFixture(signal, DEFAULT_RIPPER_CONFIG, NOW_MS);
+    expect(fixture.entryMomentumPct).toBeNull();
+    expect(fixture.entryMomentumSource).toBe('UNAVAILABLE');
+  });
+
+  it('does not copy priceChangePct into entryMomentumPct', () => {
+    const signal: RipperEarSignal = { ...primePairSignal(), priceChangePct: 60, entryPriceChangeM5: 8.5 };
+    const fixture = buildFixture(signal, DEFAULT_RIPPER_CONFIG, NOW_MS);
+    expect(fixture.entryMomentumPct).toBeCloseTo(8.5);
+    expect(fixture.entryMomentumPct).not.toBe(60);
+  });
+
+  it('priceChangePct is preserved on the outcome side (not overwritten)', () => {
+    const signal: RipperEarSignal = { ...primePairSignal(), priceChangePct: 60, entryPriceChangeM5: 8.5 };
+    const fixture = buildFixture(signal, DEFAULT_RIPPER_CONFIG, NOW_MS);
+    expect(fixture.normalizedSignal.priceChangePct).toBe(60);
+  });
+
+  it('entryMomentumCapturedAt matches fixture capturedAt', () => {
+    const signal: RipperEarSignal = { ...primePairSignal(), entryPriceChangeM5: 3.0 };
+    const fixture = buildFixture(signal, DEFAULT_RIPPER_CONFIG, NOW_MS);
+    expect(fixture.entryMomentumCapturedAt).toBe(fixture.capturedAt);
+  });
+});

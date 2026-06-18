@@ -192,13 +192,20 @@ export function buildFixture(
     blockers: blockers.slice(0, 10),
     topReasons: topReasons.slice(0, 10),
     warnings: signal.warnings,
-    // Entry-time momentum: no independent capture-time field exists in the current dex-watch
-    // pipeline. priceChangePct is the 1-minute observation window that directly determines
-    // the outcome label (BIG_WINNER) and is therefore not a valid predictor.
-    entryMomentumPct:         null,
-    entryMomentumSource:      'UNAVAILABLE',
-    entryMomentumCapturedAt:  capturedAt,
-    entryMomentumWindowLabel: 'UNAVAILABLE',
+    // Entry-time momentum: use DexScreener's feed-reported priceChange.m5 captured at entry
+    // snapshot time. This is independent of the observation window (entry→final) that
+    // determines the outcome label, so it is safe to use as a capture-time predictor candidate.
+    // When unavailable (old run files, missing field), falls back to null/UNAVAILABLE.
+    ...(() => {
+      const m5 = signal.entryPriceChangeM5;
+      const hasM5 = typeof m5 === 'number' && Number.isFinite(m5);
+      return {
+        entryMomentumPct:         hasM5 ? m5 : null,
+        entryMomentumSource:      hasM5 ? 'DEX_SCREENER_M5' : 'UNAVAILABLE',
+        entryMomentumCapturedAt:  capturedAt,
+        entryMomentumWindowLabel: hasM5 ? 'M5' : 'UNAVAILABLE',
+      };
+    })(),
     realTradingLocked: true,
     paperOnly: true,
     readOnly: true,

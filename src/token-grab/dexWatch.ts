@@ -24,6 +24,8 @@ export interface DexPairSnapshot {
   liquidityUsd?: number;
   volumeUsd?: number;
   observedAt: string;
+  /** DexScreener-reported 5-minute price change (%). Capture-time field — NOT the observation window. */
+  priceChangeM5?: number | null;
 }
 
 export type DexWatchClass = 'winner' | 'loser' | 'flat' | 'missing';
@@ -41,6 +43,8 @@ export interface DexWatchOutcome {
   liquidityChangePct?: number;
   volumeToLiquidityRatio?: number;
   classification: DexWatchClass;
+  /** DexScreener-reported 5-min price change from the ENTRY snapshot. Independent of the observation window. */
+  entryPriceChangeM5?: number | null;
 }
 
 export interface DexWatchReport {
@@ -69,6 +73,13 @@ function toPositiveNumber(v: unknown): number | undefined {
   if (v == null) return undefined;
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+/** Parses any finite number (including 0 and negative). Returns null when missing/non-finite. */
+function toFiniteNumberOrNull(v: unknown): number | null {
+  if (v == null) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
 /** Solana addresses are base58, 32-44 chars, no 0x prefix. */
@@ -127,6 +138,7 @@ interface RawPair {
   priceUsd?: string | number;
   liquidity?: { usd?: string | number };
   volume?: { h24?: string | number; h6?: string | number; h1?: string | number; m5?: string | number };
+  priceChange?: { m5?: string | number | null; h1?: string | number | null };
 }
 
 /**
@@ -168,6 +180,7 @@ export function parsePairResponse(
     liquidityUsd: toPositiveNumber(best.liquidity?.usd),
     volumeUsd: toPositiveNumber(best.volume?.h1 ?? best.volume?.m5 ?? best.volume?.h24),
     observedAt,
+    priceChangeM5: toFiniteNumberOrNull(best.priceChange?.m5),
   };
 }
 
@@ -222,6 +235,9 @@ export function buildOutcome(
     liquidityChangePct,
     volumeToLiquidityRatio,
     classification: classifyOutcome(priceChangePct),
+    // Capture DexScreener's reported 5-min price change from the ENTRY snapshot only.
+    // This is independent of the observation window (entry→final) that determines the outcome label.
+    entryPriceChangeM5: entry.priceChangeM5 ?? null,
   };
 }
 

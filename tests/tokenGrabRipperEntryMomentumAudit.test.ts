@@ -105,6 +105,79 @@ describe('buildFixture — entryMomentum fields', () => {
   });
 });
 
+// ── Tests: buildFixture — DEX_SCREENER_M5 path ───────────────────────────────
+
+describe('buildFixture — DEX_SCREENER_M5 path', () => {
+  it('sets entryMomentumPct from entryPriceChangeM5 when present', () => {
+    const signal = makeSignal({ entryPriceChangeM5: 7.42 });
+    const fixture = buildFixture(signal, DEFAULT_RIPPER_CONFIG, Date.now());
+    expect(fixture.entryMomentumPct).toBeCloseTo(7.42);
+  });
+
+  it('sets entryMomentumSource=DEX_SCREENER_M5 when entryPriceChangeM5 is present', () => {
+    const signal = makeSignal({ entryPriceChangeM5: 7.42 });
+    const fixture = buildFixture(signal, DEFAULT_RIPPER_CONFIG, Date.now());
+    expect(fixture.entryMomentumSource).toBe('DEX_SCREENER_M5');
+  });
+
+  it('sets entryMomentumWindowLabel=M5 when entryPriceChangeM5 is present', () => {
+    const signal = makeSignal({ entryPriceChangeM5: 7.42 });
+    const fixture = buildFixture(signal, DEFAULT_RIPPER_CONFIG, Date.now());
+    expect(fixture.entryMomentumWindowLabel).toBe('M5');
+  });
+
+  it('handles zero entryPriceChangeM5 (not filtered out)', () => {
+    const signal = makeSignal({ entryPriceChangeM5: 0 });
+    const fixture = buildFixture(signal, DEFAULT_RIPPER_CONFIG, Date.now());
+    expect(fixture.entryMomentumPct).toBe(0);
+    expect(fixture.entryMomentumSource).toBe('DEX_SCREENER_M5');
+  });
+
+  it('handles negative entryPriceChangeM5 (valid: token falling)', () => {
+    const signal = makeSignal({ entryPriceChangeM5: -3.5 });
+    const fixture = buildFixture(signal, DEFAULT_RIPPER_CONFIG, Date.now());
+    expect(fixture.entryMomentumPct).toBeCloseTo(-3.5);
+    expect(fixture.entryMomentumSource).toBe('DEX_SCREENER_M5');
+  });
+
+  it('falls back to UNAVAILABLE when entryPriceChangeM5 is null', () => {
+    const signal = makeSignal({ entryPriceChangeM5: null });
+    const fixture = buildFixture(signal, DEFAULT_RIPPER_CONFIG, Date.now());
+    expect(fixture.entryMomentumPct).toBeNull();
+    expect(fixture.entryMomentumSource).toBe('UNAVAILABLE');
+    expect(fixture.entryMomentumWindowLabel).toBe('UNAVAILABLE');
+  });
+
+  it('falls back to UNAVAILABLE when entryPriceChangeM5 is undefined', () => {
+    const signal = makeSignal(); // no entryPriceChangeM5
+    const fixture = buildFixture(signal, DEFAULT_RIPPER_CONFIG, Date.now());
+    expect(fixture.entryMomentumPct).toBeNull();
+    expect(fixture.entryMomentumSource).toBe('UNAVAILABLE');
+  });
+
+  it('does not copy priceChangePct into entryMomentumPct even when entryPriceChangeM5 is set', () => {
+    const signal = makeSignal({ priceChangePct: 25, entryPriceChangeM5: 7.42 });
+    const fixture = buildFixture(signal, DEFAULT_RIPPER_CONFIG, Date.now());
+    expect(fixture.entryMomentumPct).toBeCloseTo(7.42);
+    expect(fixture.entryMomentumPct).not.toBe(25);
+  });
+
+  it('priceChangePct is preserved on normalizedSignal when m5 is set', () => {
+    const signal = makeSignal({ priceChangePct: 22, entryPriceChangeM5: 9.1 });
+    const fixture = buildFixture(signal, DEFAULT_RIPPER_CONFIG, Date.now());
+    expect(fixture.normalizedSignal.priceChangePct).toBe(22);
+    expect(fixture.entryMomentumPct).toBeCloseTo(9.1);
+  });
+
+  it('entryPriceChangeM5 is NOT forwarded to ripperInput (scoring must remain independent)', () => {
+    const signal = makeSignal({ entryPriceChangeM5: 15.5 });
+    const fixture = buildFixture(signal, DEFAULT_RIPPER_CONFIG, Date.now());
+    const inputRecord = fixture.ripperInput as Record<string, unknown> | null | undefined;
+    expect(inputRecord?.['entryPriceChangeM5']).toBeUndefined();
+    expect(inputRecord?.['entryMomentumPct']).toBeUndefined();
+  });
+});
+
 // ── Tests: runEntryMomentumAudit ──────────────────────────────────────────────
 
 describe('runEntryMomentumAudit — safety flags', () => {
