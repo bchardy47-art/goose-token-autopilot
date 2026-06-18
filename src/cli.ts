@@ -235,6 +235,7 @@ import { runHistoricalWinnerReplay, renderHistoricalWinnerReplay } from './token
 import { runWatchEnrichmentPlan, renderWatchEnrichmentPlan } from './token-grab/ripperWatchEnrichmentPlan';
 import { runWatchTargetProfileReport, renderWatchTargetProfileReport } from './token-grab/ripperWatchTargetProfileReport';
 import { runTargetProfilePaperReview, renderTargetProfilePaperReview } from './token-grab/ripperTargetProfilePaperReview';
+import { runTargetProfileReviewLedgerReport, renderTargetProfileReviewLedgerReport } from './token-grab/ripperTargetProfileReviewLedgerReport';
 import {
   runWatchObservationEnroll,
   runWatchObservationCloseout,
@@ -3710,10 +3711,20 @@ async function main(): Promise<void> {
 
       case 'token:ripper-target-profile-paper-review': {
         const tpprResult = runTargetProfilePaperReview({
-          cycleFile: getArgValue('--cycle-file'),
-          cycleDir:  getArgValue('--cycle-dir') ?? 'data/token-grab/ripper/cycles',
+          cycleFile:   getArgValue('--cycle-file'),
+          cycleDir:    getArgValue('--cycle-dir')   ?? 'data/token-grab/ripper/cycles',
+          ledgerPath:  getArgValue('--ledger-path') ?? 'data/token-grab/ripper/target-profile-review-ledger.jsonl',
+          writeLedger: process.argv.includes('--write-ledger'),
         });
         console.log(renderTargetProfilePaperReview(tpprResult));
+        break;
+      }
+
+      case 'token:ripper-target-profile-review-ledger-report': {
+        const tprlrResult = runTargetProfileReviewLedgerReport({
+          ledgerPath: getArgValue('--ledger-path') ?? 'data/token-grab/ripper/target-profile-review-ledger.jsonl',
+        });
+        console.log(renderTargetProfileReviewLedgerReport(tprlrResult));
         break;
       }
 

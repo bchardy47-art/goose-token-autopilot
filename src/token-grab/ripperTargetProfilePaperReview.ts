@@ -2,7 +2,14 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
-const DEFAULT_CYCLE_DIR = 'data/token-grab/ripper/cycles';
+const DEFAULT_CYCLE_DIR   = 'data/token-grab/ripper/cycles';
+const DEFAULT_LEDGER_PATH = 'data/token-grab/ripper/target-profile-review-ledger.jsonl';
+const TARGET_PROFILE_ID   = 'LIQ_10K_30K_WATCH_ENTER_NOW' as const;
+
+// Historical stats frozen from target profile report (LIQ_10K_30K + WATCH + ENTER_NOW)
+const HISTORICAL_WIN5_RATE      = 0.627;
+const HISTORICAL_FLAT_DUMP_RATE = 0.373;
+const HISTORICAL_LIFT           = 3.31;
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 export type PaperReviewLabel =
@@ -18,6 +25,7 @@ export type PaperReviewRecommendation =
 export interface ReviewCandidate {
   contract:         string;
   symbol:           string | null;
+  capturedAt:       string;
   ageMinutes:       number | null;
   liquidityUsd:     number | null;
   liquidityBucket:  string;
@@ -32,37 +40,78 @@ export interface ReviewCandidate {
   paperReviewLabel: PaperReviewLabel;
 }
 
+export interface ReviewLedgerRow {
+  reviewId:               string;
+  targetProfileId:        typeof TARGET_PROFILE_ID;
+  cycleId:                string;
+  cycleFile:              string;
+  contract:               string;
+  symbol:                 string | null;
+  capturedAt:             string;
+  reviewedAt:             string;
+  ageMinutes:             number | null;
+  liquidityUsd:           number | null;
+  liquidityBucket:        string;
+  vlrBucket:              string;
+  clusterRisk:            string | null;
+  bubbleMapsScore:        number | null;
+  ripperScore:            number | null;
+  timingPath:             string;
+  gateDecision:           string | null;
+  entryDecision:          string | null;
+  paperReviewLabel:       PaperReviewLabel;
+  reason:                 string;
+  historicalWin5Rate:     number;
+  historicalFlatDumpRate: number;
+  historicalLift:         number;
+  status:                 'REVIEWED_ONLY';
+  outcomeStatus:          'UNKNOWN';
+  reportOnly:             true;
+  readOnly:               true;
+  paperOnly:              true;
+  realTradingLocked:      true;
+  tradingExecuted:        0;
+}
+
 export interface TargetProfilePaperReviewResult {
-  cycleFile:         string;
-  totalRowsScanned:  number;
-  exactMatches:      number;
-  nearMisses:        number;
-  candidates:        ReviewCandidate[];
-  recommendation:    PaperReviewRecommendation;
-  reportOnly:        true;
-  readOnly:          true;
-  paperOnly:         true;
-  realTradingLocked: true;
-  tradingExecuted:   0;
+  cycleFile:           string;
+  totalRowsScanned:    number;
+  exactMatches:        number;
+  nearMisses:          number;
+  candidates:          ReviewCandidate[];
+  ledgerPath:          string;
+  ledgerWriteEnabled:  boolean;
+  exactMatchesWritten: number;
+  duplicatesSkipped:   number;
+  recommendation:      PaperReviewRecommendation;
+  reportOnly:          true;
+  readOnly:            true;
+  paperOnly:           true;
+  realTradingLocked:   true;
+  tradingExecuted:     0;
 }
 
 export interface TargetProfilePaperReviewOptions {
-  cycleFile?: string;
-  cycleDir?:  string;
+  cycleFile?:        string;
+  cycleDir?:         string;
+  writeLedger?:      boolean;
+  ledgerPath?:       string;
+  ledgerReviewedAt?: string;  // injectable for tests; defaults to new Date().toISOString()
 }
 
 // ── Internal types ─────────────────────────────────────────────────────────────
 interface CycleRow {
-  ripperInput?:    Record<string, unknown>;
+  capturedAt?:      string | null;
+  ripperInput?:     Record<string, unknown>;
   normalizedSignal?: Record<string, unknown>;
-  raw?:            Record<string, unknown>;
-  ripperScore?:    number | null;
-  ageMinutes?:     number | null;
-  entryDecision?:  string | null;
+  raw?:             Record<string, unknown>;
+  ripperScore?:     number | null;
+  ageMinutes?:      number | null;
+  entryDecision?:   string | null;
   buyGateDecision?: string | null;
-  blockers?:       string[];
-  topReasons?:     string[];
-  warnings?:       string[];
+  blockers?:        string[];
+  topReasons?:      string[];
+  warnings?:        string[];
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -125,29 +174,40 @@ function readJsonl<T>(filePath: string): T[] {
   return rows;
 }
 
+function dupKey(contract: string, capturedAt: string, cycleId: string): string {
+  return `${contract}::${cycleId}::${capturedAt}::${TARGET_PROFILE_ID}`;
+}
+
+function loadExistingDupKeys(ledgerPath: string): Set<string> {
+  const keys = new Set<string>();
+  for (const row of readJsonl<ReviewLedgerRow>(ledgerPath)) {
+    keys.add(dupKey(row.contract, row.capturedAt, row.cycleId));
+  }
+  return keys;
+}
+
 function classifyRow(row: CycleRow): ReviewCandidate | null {
-  const ri  = row.ripperInput  ?? {};
-  const ns  = row.normalizedSignal ?? {};
-  const raw = row.raw ?? {};
+  const ri  = row.ripperInput       ?? {};
+  const ns  = row.normalizedSignal  ?? {};
+  const raw = row.raw               ?? {};
 
   const clusterRisk = (ri['clusterRisk'] as string | null) ?? null;
-  if (clusterRisk !== 'WATCH') return null;  // exclude non-WATCH from candidates table
+  if (clusterRisk !== 'WATCH') return null;
 
-  const contract    = (ri['contract']  as string) || (ns['contract']  as string) || '';
-  const symbol      = (ri['symbol']    as string | null) ?? (ns['symbol'] as string | null) ?? null;
-  const ageMinutes  = (row.ageMinutes  as number | null) ?? null;
-  const liqUsd      = (ns['liquidityUsd'] as number | null) ?? null;
-  const vlr         = (ns['volumeLiquidityRatio'] as number | null) ?? null;
+  const contract   = (ri['contract'] as string) || (ns['contract'] as string) || '';
+  const symbol     = (ri['symbol']   as string | null) ?? (ns['symbol'] as string | null) ?? null;
+  const ageMinutes = (row.ageMinutes as number | null) ?? null;
+  const liqUsd     = (ns['liquidityUsd'] as number | null) ?? null;
+  const vlr        = (ns['volumeLiquidityRatio'] as number | null) ?? null;
+  const capturedAt = (row.capturedAt as string | null) ?? '';
 
   const liquidityBucket = deriveLiqBucket(liqUsd);
   const vlrBucket       = deriveVlrBucket(vlr);
   const timingPath      = deriveTimingPath(ageMinutes);
-
   const bubbleMapsScore = parseBubbleMapsScore(raw['clusterNotes']);
-  const ripperScore     = (row.ripperScore as number | null) ?? null;
-  const gateDecision    = (row.buyGateDecision as string | null) ?? null;
-  const entryDecision   = (row.entryDecision   as string | null) ?? null;
-
+  const ripperScore     = (row.ripperScore      as number | null) ?? null;
+  const gateDecision    = (row.buyGateDecision  as string | null) ?? null;
+  const entryDecision   = (row.entryDecision    as string | null) ?? null;
   const reasons = [
     ...(row.topReasons ?? []),
     ...(row.blockers   ?? []),
@@ -163,15 +223,15 @@ function classifyRow(row: CycleRow): ReviewCandidate | null {
   }
 
   return {
-    contract, symbol, ageMinutes, liquidityUsd: liqUsd, liquidityBucket, vlrBucket,
-    clusterRisk, bubbleMapsScore, ripperScore, timingPath,
-    gateDecision, entryDecision, reason: reasons, paperReviewLabel,
+    contract, symbol, capturedAt, ageMinutes, liquidityUsd: liqUsd,
+    liquidityBucket, vlrBucket, clusterRisk, bubbleMapsScore, ripperScore,
+    timingPath, gateDecision, entryDecision, reason: reasons, paperReviewLabel,
   };
 }
 
 const LABEL_ORDER: Record<PaperReviewLabel, number> = {
-  TARGET_PROFILE_EXACT_MATCH:      0,
-  TARGET_PROFILE_NEAR_MISS_WAIT:   1,
+  TARGET_PROFILE_EXACT_MATCH:       0,
+  TARGET_PROFILE_NEAR_MISS_WAIT:    1,
   TARGET_PROFILE_REJECT_NOT_TARGET: 2,
 };
 
@@ -179,22 +239,27 @@ const LABEL_ORDER: Record<PaperReviewLabel, number> = {
 export function runTargetProfilePaperReview(
   options: TargetProfilePaperReviewOptions = {},
 ): TargetProfilePaperReviewResult {
-  const cycleDir = options.cycleDir ?? DEFAULT_CYCLE_DIR;
+  const cycleDir    = options.cycleDir   ?? DEFAULT_CYCLE_DIR;
+  const ledgerPath  = options.ledgerPath ?? DEFAULT_LEDGER_PATH;
+  const writeLedger = options.writeLedger ?? false;
+
   const cycleFilePath = options.cycleFile ?? findLatestCycleFile(cycleDir);
   if (!cycleFilePath) {
     return {
-      cycleFile:        '(none found)',
-      totalRowsScanned: 0,
-      exactMatches:     0,
-      nearMisses:       0,
-      candidates:       [],
-      recommendation:   'TARGET_PROFILE_NO_MATCHES',
+      cycleFile: '(none found)', totalRowsScanned: 0,
+      exactMatches: 0, nearMisses: 0, candidates: [],
+      ledgerPath, ledgerWriteEnabled: writeLedger,
+      exactMatchesWritten: 0, duplicatesSkipped: 0,
+      recommendation: 'TARGET_PROFILE_NO_MATCHES',
       ...SAFETY,
     };
   }
 
-  const rows        = readJsonl<CycleRow>(cycleFilePath);
-  const candidates  = rows
+  const cycleFile = path.basename(cycleFilePath);
+  const cycleId   = cycleFile.replace(/\.jsonl$/, '');
+
+  const rows       = readJsonl<CycleRow>(cycleFilePath);
+  const candidates = rows
     .map(r => classifyRow(r))
     .filter((c): c is ReviewCandidate => c != null)
     .sort((a, b) => LABEL_ORDER[a.paperReviewLabel] - LABEL_ORDER[b.paperReviewLabel]);
@@ -203,20 +268,67 @@ export function runTargetProfilePaperReview(
   const nearMisses   = candidates.filter(c => c.paperReviewLabel === 'TARGET_PROFILE_NEAR_MISS_WAIT').length;
 
   let recommendation: PaperReviewRecommendation;
-  if (exactMatches > 0) {
-    recommendation = 'TARGET_PROFILE_MANUAL_PAPER_REVIEW';
-  } else if (nearMisses > 0) {
-    recommendation = 'TARGET_PROFILE_KEEP_WATCHING';
-  } else {
-    recommendation = 'TARGET_PROFILE_NO_MATCHES';
+  if (exactMatches > 0)      recommendation = 'TARGET_PROFILE_MANUAL_PAPER_REVIEW';
+  else if (nearMisses > 0)   recommendation = 'TARGET_PROFILE_KEEP_WATCHING';
+  else                        recommendation = 'TARGET_PROFILE_NO_MATCHES';
+
+  // ── Ledger write ───────────────────────────────────────────────────────────
+  let exactMatchesWritten = 0;
+  let duplicatesSkipped   = 0;
+
+  if (writeLedger) {
+    const reviewedAt  = options.ledgerReviewedAt ?? new Date().toISOString();
+    const existingKeys = loadExistingDupKeys(ledgerPath);
+    const toAppend: ReviewLedgerRow[] = [];
+
+    for (const c of candidates) {
+      if (c.paperReviewLabel !== 'TARGET_PROFILE_EXACT_MATCH') continue;
+      const key = dupKey(c.contract, c.capturedAt, cycleId);
+      if (existingKeys.has(key)) { duplicatesSkipped++; continue; }
+      existingKeys.add(key);
+      toAppend.push({
+        reviewId:               `${TARGET_PROFILE_ID}::${cycleId}::${c.contract}`,
+        targetProfileId:        TARGET_PROFILE_ID,
+        cycleId,
+        cycleFile,
+        contract:               c.contract,
+        symbol:                 c.symbol,
+        capturedAt:             c.capturedAt,
+        reviewedAt,
+        ageMinutes:             c.ageMinutes,
+        liquidityUsd:           c.liquidityUsd,
+        liquidityBucket:        c.liquidityBucket,
+        vlrBucket:              c.vlrBucket,
+        clusterRisk:            c.clusterRisk,
+        bubbleMapsScore:        c.bubbleMapsScore,
+        ripperScore:            c.ripperScore,
+        timingPath:             c.timingPath,
+        gateDecision:           c.gateDecision,
+        entryDecision:          c.entryDecision,
+        paperReviewLabel:       c.paperReviewLabel,
+        reason:                 c.reason,
+        historicalWin5Rate:     HISTORICAL_WIN5_RATE,
+        historicalFlatDumpRate: HISTORICAL_FLAT_DUMP_RATE,
+        historicalLift:         HISTORICAL_LIFT,
+        status:                 'REVIEWED_ONLY',
+        outcomeStatus:          'UNKNOWN',
+        ...SAFETY,
+      });
+    }
+
+    if (toAppend.length > 0) {
+      const ledgerDir = path.dirname(ledgerPath);
+      if (!fs.existsSync(ledgerDir)) fs.mkdirSync(ledgerDir, { recursive: true });
+      fs.appendFileSync(ledgerPath, toAppend.map(r => JSON.stringify(r)).join('\n') + '\n', 'utf-8');
+      exactMatchesWritten = toAppend.length;
+    }
   }
 
   return {
-    cycleFile:        path.basename(cycleFilePath),
-    totalRowsScanned: rows.length,
-    exactMatches,
-    nearMisses,
-    candidates,
+    cycleFile, totalRowsScanned: rows.length,
+    exactMatches, nearMisses, candidates,
+    ledgerPath, ledgerWriteEnabled: writeLedger,
+    exactMatchesWritten, duplicatesSkipped,
     recommendation,
     ...SAFETY,
   };
@@ -246,6 +358,18 @@ export function renderTargetProfilePaperReview(
   L.push('    Historical: win5=61.8%  flatDump=38.2%  lift=3.27x  observed=76');
   L.push('');
 
+  // Ledger status
+  L.push(`  ${SEP2}`);
+  L.push('  LEDGER');
+  L.push(`  ${SEP2}`, '');
+  L.push(`  Ledger path         : ${result.ledgerPath}`);
+  L.push(`  Ledger write        : ${result.ledgerWriteEnabled ? 'ENABLED' : 'disabled (pass --write-ledger to enable)'}`);
+  if (result.ledgerWriteEnabled) {
+    L.push(`  Exact matches written: ${result.exactMatchesWritten}`);
+    L.push(`  Duplicates skipped  : ${result.duplicatesSkipped}`);
+  }
+  L.push('');
+
   // Candidate table
   if (result.candidates.length === 0) {
     L.push(`  ${SEP2}`);
@@ -270,18 +394,12 @@ export function renderTargetProfilePaperReview(
       L.push(`    liquidityBucket: ${c.liquidityBucket}`);
       L.push(`    vlrBucket      : ${c.vlrBucket}`);
       L.push(`    clusterRisk    : ${c.clusterRisk ?? 'n/a'}`);
-      if (c.bubbleMapsScore != null) {
-        L.push(`    bubbleMapsScore: ${c.bubbleMapsScore}`);
-      }
-      if (c.ripperScore != null) {
-        L.push(`    ripperScore    : ${c.ripperScore.toFixed(3)}`);
-      }
+      if (c.bubbleMapsScore != null) L.push(`    bubbleMapsScore: ${c.bubbleMapsScore}`);
+      if (c.ripperScore     != null) L.push(`    ripperScore    : ${c.ripperScore.toFixed(3)}`);
       L.push(`    timingPath     : ${c.timingPath}`);
-      L.push(`    gateDecision   : ${c.gateDecision ?? 'n/a'}`);
+      L.push(`    gateDecision   : ${c.gateDecision  ?? 'n/a'}`);
       L.push(`    entryDecision  : ${c.entryDecision ?? 'n/a'}`);
-      if (c.reason) {
-        L.push(`    reason         : ${c.reason}`);
-      }
+      if (c.reason) L.push(`    reason         : ${c.reason}`);
       L.push('');
     }
   }
