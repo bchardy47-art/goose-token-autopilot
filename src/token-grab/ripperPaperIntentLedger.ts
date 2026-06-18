@@ -47,10 +47,11 @@ export function appendPaperIntents(
 // ── Status update (rewrites file) ─────────────────────────────────────────────
 
 export interface StatusUpdate {
-  intentId:      string;
-  status:        PaperIntentStatus;
-  observedAt?:   string;
+  intentId:       string;
+  status:         PaperIntentStatus;
+  observedAt?:    string;
   priceChangePct?: number | null;
+  expiredReason?: string;
 }
 
 export function updateIntentStatuses(
@@ -69,8 +70,9 @@ export function updateIntentStatuses(
     if (!upd) return intent;
     updated++;
     const next: PaperIntent = { ...intent, status: upd.status };
-    if (upd.observedAt    !== undefined) (next as Record<string, unknown>)['observedAt']    = upd.observedAt;
+    if (upd.observedAt     !== undefined) (next as Record<string, unknown>)['observedAt']    = upd.observedAt;
     if (upd.priceChangePct !== undefined) (next as Record<string, unknown>)['priceChangePct'] = upd.priceChangePct;
+    if (upd.expiredReason  !== undefined) (next as Record<string, unknown>)['expiredReason']  = upd.expiredReason;
     return next;
   });
 

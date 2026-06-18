@@ -240,6 +240,7 @@ import { runTargetProfileReviewOutcomeUpdate, renderTargetProfileReviewOutcomeUp
 import { runLedgerUniqueStats, renderLedgerUniqueStats } from './token-grab/ripperTargetProfileLedgerUniqueStats';
 import { runEarlyFingerprintReport, renderEarlyFingerprintReport } from './token-grab/ripperHistoricalEarlyFingerprintReport';
 import { runPricePumpAutopsy, renderPricePumpAutopsy } from './token-grab/ripperPricePumpFingerprintAutopsy';
+import { runPaperIntentCloseout, renderPaperIntentCloseout } from './token-grab/ripperPaperIntentCloseout';
 import {
   runWatchObservationEnroll,
   runWatchObservationCloseout,
@@ -3753,6 +3754,20 @@ async function main(): Promise<void> {
           memoryPath: getArgValue('--memory-path') ?? 'data/token-grab/ripper/learning-memory.jsonl',
         });
         console.log(renderPricePumpAutopsy(ppaResult));
+        break;
+      }
+
+      case 'token:ripper-paper-intent-closeout': {
+        const picResult = runPaperIntentCloseout({
+          intentsPath:  getArgValue('--intents-path')  ?? 'data/token-grab/ripper/paper-intents.jsonl',
+          memoryPath:   getArgValue('--memory-path')   ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          obsDir:       getArgValue('--obs-dir')       ?? 'data/token-grab/ripper/observations',
+          graceMinutes: getArgValue('--grace-minutes') != null ? Number(getArgValue('--grace-minutes')) : undefined,
+          maxIntents:   getArgValue('--max-intents')   != null ? Number(getArgValue('--max-intents'))   : undefined,
+          contract:     getArgValue('--contract')      ?? undefined,
+          dryRun:       !process.argv.includes('--write'),
+        });
+        console.log(renderPaperIntentCloseout(picResult));
         break;
       }
 
