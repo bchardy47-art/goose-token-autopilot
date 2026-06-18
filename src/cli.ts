@@ -234,6 +234,7 @@ import { runHistoricalWinnerBrain, renderHistoricalWinnerBrain } from './token-g
 import { runHistoricalWinnerReplay, renderHistoricalWinnerReplay } from './token-grab/ripperHistoricalWinnerReplay';
 import { runWatchEnrichmentPlan, renderWatchEnrichmentPlan } from './token-grab/ripperWatchEnrichmentPlan';
 import { runWatchTargetProfileReport, renderWatchTargetProfileReport } from './token-grab/ripperWatchTargetProfileReport';
+import { runTargetProfilePaperReview, renderTargetProfilePaperReview } from './token-grab/ripperTargetProfilePaperReview';
 import {
   runWatchObservationEnroll,
   runWatchObservationCloseout,
@@ -3704,6 +3705,15 @@ async function main(): Promise<void> {
           snapshotsPath: getArgValue('--snapshots') ?? 'data/token-grab/ripper/watch-observations/watch-observation-snapshots.jsonl',
         });
         console.log(renderWatchTargetProfileReport(wtprResult));
+        break;
+      }
+
+      case 'token:ripper-target-profile-paper-review': {
+        const tpprResult = runTargetProfilePaperReview({
+          cycleFile: getArgValue('--cycle-file'),
+          cycleDir:  getArgValue('--cycle-dir') ?? 'data/token-grab/ripper/cycles',
+        });
+        console.log(renderTargetProfilePaperReview(tpprResult));
         break;
       }
 

@@ -160,6 +160,7 @@
     "token:ripper-watch-observation-closeout": "tsx src/cli.ts token:ripper-watch-observation-closeout",
     "token:ripper-watch-observation-report": "tsx src/cli.ts token:ripper-watch-observation-report",
     "token:ripper-watch-target-profile-report": "tsx src/cli.ts token:ripper-watch-target-profile-report",
+    "token:ripper-target-profile-paper-review": "tsx src/cli.ts token:ripper-target-profile-paper-review",
     "token:prime-gate-audit": "tsx src/cli.ts token:prime-gate-audit",
     "token:holder-risk-audit": "tsx src/cli.ts token:holder-risk-audit",
     "token:fixture-holder-enrich": "tsx src/cli.ts token:fixture-holder-enrich",
