@@ -238,6 +238,7 @@ import { runTargetProfilePaperReview, renderTargetProfilePaperReview } from './t
 import { runTargetProfileReviewLedgerReport, renderTargetProfileReviewLedgerReport } from './token-grab/ripperTargetProfileReviewLedgerReport';
 import { runTargetProfileReviewOutcomeUpdate, renderTargetProfileReviewOutcomeUpdate } from './token-grab/ripperTargetProfileReviewOutcomeUpdate';
 import { runLedgerUniqueStats, renderLedgerUniqueStats } from './token-grab/ripperTargetProfileLedgerUniqueStats';
+import { runEarlyFingerprintReport, renderEarlyFingerprintReport } from './token-grab/ripperHistoricalEarlyFingerprintReport';
 import {
   runWatchObservationEnroll,
   runWatchObservationCloseout,
@@ -3735,6 +3736,14 @@ async function main(): Promise<void> {
           ledgerPath: getArgValue('--ledger-path') ?? 'data/token-grab/ripper/target-profile-review-ledger.jsonl',
         });
         console.log(renderLedgerUniqueStats(usResult));
+        break;
+      }
+
+      case 'token:ripper-historical-early-fingerprint-report': {
+        const efResult = runEarlyFingerprintReport({
+          memoryPath: getArgValue('--memory-path') ?? 'data/token-grab/ripper/learning-memory.jsonl',
+        });
+        console.log(renderEarlyFingerprintReport(efResult));
         break;
       }
 
