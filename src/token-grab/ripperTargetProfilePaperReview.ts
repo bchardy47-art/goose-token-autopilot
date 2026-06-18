@@ -17,27 +17,37 @@ export type PaperReviewLabel =
   | 'TARGET_PROFILE_NEAR_MISS_WAIT'
   | 'TARGET_PROFILE_REJECT_NOT_TARGET';
 
+export type StrictRejectReason =
+  | 'BLOCKED_ENTRY_DECISION'
+  | 'RIPPER_SCORE_TOO_LOW'
+  | 'VLR_GTE_2_EXCLUDED'
+  | 'BOT_PUMP_RISK_EXCLUDED'
+  | 'SUSPICIOUS_LIQUIDITY_EXCLUDED'
+  | 'PRICE_CRASH_EXCLUDED';
+
 export type PaperReviewRecommendation =
   | 'TARGET_PROFILE_MANUAL_PAPER_REVIEW'
   | 'TARGET_PROFILE_KEEP_WATCHING'
   | 'TARGET_PROFILE_NO_MATCHES';
 
 export interface ReviewCandidate {
-  contract:         string;
-  symbol:           string | null;
-  capturedAt:       string;
-  ageMinutes:       number | null;
-  liquidityUsd:     number | null;
-  liquidityBucket:  string;
-  vlrBucket:        string;
-  clusterRisk:      string | null;
-  bubbleMapsScore:  number | null;
-  ripperScore:      number | null;
-  timingPath:       string;
-  gateDecision:     string | null;
-  entryDecision:    string | null;
-  reason:           string;
-  paperReviewLabel: PaperReviewLabel;
+  contract:           string;
+  symbol:             string | null;
+  capturedAt:         string;
+  ageMinutes:         number | null;
+  liquidityUsd:       number | null;
+  liquidityBucket:    string;
+  vlrBucket:          string;
+  clusterRisk:        string | null;
+  bubbleMapsScore:    number | null;
+  ripperScore:        number | null;
+  timingPath:         string;
+  gateDecision:       string | null;
+  entryDecision:      string | null;
+  priceChangePct:     number | null;
+  reason:             string;
+  strictRejectReason: StrictRejectReason | null;
+  paperReviewLabel:   PaperReviewLabel;
 }
 
 export interface ReviewLedgerRow {
@@ -74,21 +84,22 @@ export interface ReviewLedgerRow {
 }
 
 export interface TargetProfilePaperReviewResult {
-  cycleFile:           string;
-  totalRowsScanned:    number;
-  exactMatches:        number;
-  nearMisses:          number;
-  candidates:          ReviewCandidate[];
-  ledgerPath:          string;
-  ledgerWriteEnabled:  boolean;
-  exactMatchesWritten: number;
-  duplicatesSkipped:   number;
-  recommendation:      PaperReviewRecommendation;
-  reportOnly:          true;
-  readOnly:            true;
-  paperOnly:           true;
-  realTradingLocked:   true;
-  tradingExecuted:     0;
+  cycleFile:            string;
+  totalRowsScanned:     number;
+  exactMatches:         number;
+  nearMisses:           number;
+  broadProfileRejects:  number;
+  candidates:           ReviewCandidate[];
+  ledgerPath:           string;
+  ledgerWriteEnabled:   boolean;
+  exactMatchesWritten:  number;
+  duplicatesSkipped:    number;
+  recommendation:       PaperReviewRecommendation;
+  reportOnly:           true;
+  readOnly:             true;
+  paperOnly:            true;
+  realTradingLocked:    true;
+  tradingExecuted:      0;
 }
 
 export interface TargetProfilePaperReviewOptions {
@@ -174,6 +185,23 @@ function readJsonl<T>(filePath: string): T[] {
   return rows;
 }
 
+function computeStrictRejectReason(
+  entryDecision:  string | null,
+  ripperScore:    number | null,
+  vlrBucket:      string,
+  reason:         string,
+  priceChangePct: number | null,
+): StrictRejectReason | null {
+  if (entryDecision !== 'READY_TO_SNIPE_PAPER')      return 'BLOCKED_ENTRY_DECISION';
+  if (ripperScore == null || ripperScore < 80)        return 'RIPPER_SCORE_TOO_LOW';
+  if (vlrBucket === 'VLR_GTE_2')                     return 'VLR_GTE_2_EXCLUDED';
+  const lower = reason.toLowerCase();
+  if (lower.includes('bot/pump risk') || lower.includes('possible pump')) return 'BOT_PUMP_RISK_EXCLUDED';
+  if (lower.includes('suspicious liquidity'))         return 'SUSPICIOUS_LIQUIDITY_EXCLUDED';
+  if (priceChangePct != null && priceChangePct <= -20) return 'PRICE_CRASH_EXCLUDED';
+  return null;
+}
+
 function dupKey(contract: string, capturedAt: string, cycleId: string): string {
   return `${contract}::${cycleId}::${capturedAt}::${TARGET_PROFILE_ID}`;
 }
@@ -199,7 +227,8 @@ function classifyRow(row: CycleRow): ReviewCandidate | null {
   const ageMinutes = (row.ageMinutes as number | null) ?? null;
   const liqUsd     = (ns['liquidityUsd'] as number | null) ?? null;
   const vlr        = (ns['volumeLiquidityRatio'] as number | null) ?? null;
-  const capturedAt = (row.capturedAt as string | null) ?? '';
+  const capturedAt    = (row.capturedAt as string | null) ?? '';
+  const priceChangePct = (ri['priceChangePct'] as number | null) ?? (ns['priceChangePct'] as number | null) ?? null;
 
   const liquidityBucket = deriveLiqBucket(liqUsd);
   const vlrBucket       = deriveVlrBucket(vlr);
@@ -214,8 +243,12 @@ function classifyRow(row: CycleRow): ReviewCandidate | null {
   ].slice(0, 4).join(' | ');
 
   let paperReviewLabel: PaperReviewLabel;
+  let strictRejectReason: StrictRejectReason | null = null;
+
   if (liquidityBucket === 'LIQ_10K_30K' && timingPath === 'ENTER_NOW') {
-    paperReviewLabel = 'TARGET_PROFILE_EXACT_MATCH';
+    // Broad profile match — apply strict quality gates
+    strictRejectReason = computeStrictRejectReason(entryDecision, ripperScore, vlrBucket, reasons, priceChangePct);
+    paperReviewLabel   = strictRejectReason == null ? 'TARGET_PROFILE_EXACT_MATCH' : 'TARGET_PROFILE_REJECT_NOT_TARGET';
   } else if (liquidityBucket === 'LIQ_10K_30K' || liquidityBucket === 'LIQ_UNKNOWN') {
     paperReviewLabel = 'TARGET_PROFILE_NEAR_MISS_WAIT';
   } else {
@@ -225,7 +258,8 @@ function classifyRow(row: CycleRow): ReviewCandidate | null {
   return {
     contract, symbol, capturedAt, ageMinutes, liquidityUsd: liqUsd,
     liquidityBucket, vlrBucket, clusterRisk, bubbleMapsScore, ripperScore,
-    timingPath, gateDecision, entryDecision, reason: reasons, paperReviewLabel,
+    timingPath, gateDecision, entryDecision, priceChangePct,
+    reason: reasons, strictRejectReason, paperReviewLabel,
   };
 }
 
@@ -247,7 +281,7 @@ export function runTargetProfilePaperReview(
   if (!cycleFilePath) {
     return {
       cycleFile: '(none found)', totalRowsScanned: 0,
-      exactMatches: 0, nearMisses: 0, candidates: [],
+      exactMatches: 0, nearMisses: 0, broadProfileRejects: 0, candidates: [],
       ledgerPath, ledgerWriteEnabled: writeLedger,
       exactMatchesWritten: 0, duplicatesSkipped: 0,
       recommendation: 'TARGET_PROFILE_NO_MATCHES',
@@ -264,8 +298,9 @@ export function runTargetProfilePaperReview(
     .filter((c): c is ReviewCandidate => c != null)
     .sort((a, b) => LABEL_ORDER[a.paperReviewLabel] - LABEL_ORDER[b.paperReviewLabel]);
 
-  const exactMatches = candidates.filter(c => c.paperReviewLabel === 'TARGET_PROFILE_EXACT_MATCH').length;
-  const nearMisses   = candidates.filter(c => c.paperReviewLabel === 'TARGET_PROFILE_NEAR_MISS_WAIT').length;
+  const exactMatches       = candidates.filter(c => c.paperReviewLabel === 'TARGET_PROFILE_EXACT_MATCH').length;
+  const nearMisses         = candidates.filter(c => c.paperReviewLabel === 'TARGET_PROFILE_NEAR_MISS_WAIT').length;
+  const broadProfileRejects = candidates.filter(c => c.strictRejectReason != null).length;
 
   let recommendation: PaperReviewRecommendation;
   if (exactMatches > 0)      recommendation = 'TARGET_PROFILE_MANUAL_PAPER_REVIEW';
@@ -326,7 +361,7 @@ export function runTargetProfilePaperReview(
 
   return {
     cycleFile, totalRowsScanned: rows.length,
-    exactMatches, nearMisses, candidates,
+    exactMatches, nearMisses, broadProfileRejects, candidates,
     ledgerPath, ledgerWriteEnabled: writeLedger,
     exactMatchesWritten, duplicatesSkipped,
     recommendation,
@@ -350,11 +385,14 @@ export function renderTargetProfilePaperReview(
   L.push(`  Cycle file          : ${result.cycleFile}`);
   L.push(`  Total rows scanned  : ${result.totalRowsScanned}`);
   L.push(`  WATCH rows shown    : ${result.candidates.length}`);
-  L.push(`  Exact matches       : ${result.exactMatches}  (LIQ_10K_30K + WATCH + ENTER_NOW)`);
+  L.push(`  Exact matches       : ${result.exactMatches}  (strict: WATCH+LIQ_10K_30K+ENTER_NOW+quality gates)`);
   L.push(`  Near misses         : ${result.nearMisses}  (WATCH + wrong liq or timing)`);
+  L.push(`  Broad rejects       : ${result.broadProfileRejects}  (broad match but failed strict gate)`);
   L.push('');
-  L.push('  Target profile:');
-  L.push('    clusterRisk=WATCH  liquidityBucket=LIQ_10K_30K  timingPath=ENTER_NOW (ageMinutes<10)');
+  L.push('  Strict target profile:');
+  L.push('    clusterRisk=WATCH  liquidityBucket=LIQ_10K_30K  timingPath=ENTER_NOW');
+  L.push('    entryDecision=READY_TO_SNIPE_PAPER  ripperScore>=80  vlrBucket!=VLR_GTE_2');
+  L.push('    reason: no bot/pump/suspicious-liquidity  priceChangePct > -20%');
   L.push('    Historical: win5=61.8%  flatDump=38.2%  lift=3.27x  observed=76');
   L.push('');
 
@@ -399,7 +437,9 @@ export function renderTargetProfilePaperReview(
       L.push(`    timingPath     : ${c.timingPath}`);
       L.push(`    gateDecision   : ${c.gateDecision  ?? 'n/a'}`);
       L.push(`    entryDecision  : ${c.entryDecision ?? 'n/a'}`);
+      if (c.priceChangePct != null) L.push(`    priceChangePct : ${c.priceChangePct.toFixed(2)}%`);
       if (c.reason) L.push(`    reason         : ${c.reason}`);
+      if (c.strictRejectReason) L.push(`    strictReject   : ${c.strictRejectReason}`);
       L.push('');
     }
   }

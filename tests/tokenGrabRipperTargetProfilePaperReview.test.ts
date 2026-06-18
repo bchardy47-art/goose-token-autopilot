@@ -45,14 +45,18 @@ function makeCycleRow(o: {
   gateDecision?: string;
   bubbleMapsScore?: number | null;
   ripperScore?: number | null;
+  priceChangePct?: number | null;
+  topReasons?: string[];
+  blockers?: string[];
 } = {}): object {
-  const contract   = o.contract   ?? 'CONTRACT_AAAA1111pump';
-  const symbol     = o.symbol     ?? 'TEST';
-  const liq        = o.liquidityUsd ?? 15_000;
-  const vlr        = o.vlr        ?? 0.3;
-  const age        = o.ageMinutes ?? 3;
-  const cr         = o.clusterRisk ?? 'WATCH';
-  const capturedAt = o.capturedAt ?? '2026-06-18T10:00:00.000Z';
+  const contract      = o.contract   ?? 'CONTRACT_AAAA1111pump';
+  const symbol        = o.symbol     ?? 'TEST';
+  const liq           = o.liquidityUsd ?? 15_000;
+  const vlr           = o.vlr        ?? 0.3;
+  const age           = o.ageMinutes ?? 3;
+  const cr            = o.clusterRisk ?? 'WATCH';
+  const capturedAt    = o.capturedAt ?? '2026-06-18T10:00:00.000Z';
+  const priceChangePct = o.priceChangePct ?? 5;
 
   const clusterNotes = o.bubbleMapsScore != null
     ? [`bubbleMapsScore ${o.bubbleMapsScore}`]
@@ -65,7 +69,7 @@ function makeCycleRow(o: {
     ripperInput: {
       contract, symbol,
       observedAt:          capturedAt,
-      priceChangePct:       5,
+      priceChangePct,
       liquidityChangePct:   0,
       volumeLiquidityRatio: vlr,
       clusterRisk:          cr,
@@ -74,18 +78,18 @@ function makeCycleRow(o: {
       contract, symbol,
       liquidityUsd:         liq,
       volumeLiquidityRatio: vlr,
-      priceChangePct:       5,
+      priceChangePct,
     },
     raw: {
       clusterProvider: 'bubblemaps',
       clusterNotes,
     },
-    ripperScore:     o.ripperScore ?? 0.82,
+    ripperScore:     o.ripperScore ?? 82,
     ageMinutes:      age,
     entryDecision:   o.entryDecision ?? 'READY_TO_SNIPE_PAPER',
     buyGateDecision: o.gateDecision  ?? 'BUY_REJECTED',
-    blockers:        ['cluster risk WATCH — buy downgraded to review'],
-    topReasons:      ['prime window', 'liquidity quality GOOD'],
+    blockers:        o.blockers  ?? ['cluster risk WATCH — buy downgraded to review'],
+    topReasons:      o.topReasons ?? ['prime window', 'liquidity quality GOOD'],
     warnings:        [],
     realTradingLocked: true,
     paperOnly:       true,
@@ -338,6 +342,153 @@ describe('runTargetProfilePaperReview', () => {
     expect(result.paperOnly).toBe(true);
     expect(result.realTradingLocked).toBe(true);
     expect(result.tradingExecuted).toBe(0);
+  });
+});
+
+// ── Strict-match gate tests ────────────────────────────────────────────────────
+describe('strict exact-match gates', () => {
+  let dir: string;
+
+  beforeEach(() => { dir = tmpDir(); });
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+
+  // Test S1: SENDY-like — broad match + VLR_GTE_2 + ripperScore=0 + PAPER_BUY_BLOCKED + bot/pump reason
+  it('SENDY-like row (PAPER_BUY_BLOCKED + ripperScore=0 + VLR_GTE_2 + bot/pump) is REJECT with BLOCKED_ENTRY_DECISION', () => {
+    writeCycle(dir, 'cycle-2026-06-18-100000.jsonl', [
+      makeCycleRow({
+        clusterRisk: 'WATCH', liquidityUsd: 15_000, ageMinutes: 3,
+        vlr: 5.0, ripperScore: 0,
+        entryDecision: 'PAPER_BUY_BLOCKED',
+        topReasons: ['bot/pump risk detected', 'price declining sharply'],
+        priceChangePct: -35,
+      }),
+    ]);
+    const result = runTargetProfilePaperReview({ cycleDir: dir });
+    expect(result.exactMatches).toBe(0);
+    expect(result.broadProfileRejects).toBe(1);
+    const c = result.candidates[0]!;
+    expect(c.paperReviewLabel).toBe('TARGET_PROFILE_REJECT_NOT_TARGET');
+    expect(c.strictRejectReason).toBe('BLOCKED_ENTRY_DECISION');  // first rule fires
+  });
+
+  // Test S2: READY_TO_SNIPE_PAPER + ripperScore>=80 + VLR_LT_0_5 → strict EXACT_MATCH
+  it('READY_TO_SNIPE_PAPER + ripperScore=82 + VLR_LT_0_5 is EXACT_MATCH with no strictRejectReason', () => {
+    writeCycle(dir, 'cycle-2026-06-18-100000.jsonl', [
+      makeCycleRow({ clusterRisk: 'WATCH', liquidityUsd: 15_000, ageMinutes: 3, vlr: 0.3, ripperScore: 82 }),
+    ]);
+    const result = runTargetProfilePaperReview({ cycleDir: dir });
+    expect(result.exactMatches).toBe(1);
+    expect(result.broadProfileRejects).toBe(0);
+    expect(result.candidates[0]!.paperReviewLabel).toBe('TARGET_PROFILE_EXACT_MATCH');
+    expect(result.candidates[0]!.strictRejectReason).toBeNull();
+  });
+
+  // Test S3: VLR_0_5_TO_2 still matches when other rules pass
+  it('VLR_0_5_TO_2 is still EXACT_MATCH when all other strict rules pass', () => {
+    writeCycle(dir, 'cycle-2026-06-18-100000.jsonl', [
+      makeCycleRow({ clusterRisk: 'WATCH', liquidityUsd: 15_000, ageMinutes: 3, vlr: 1.2 }),
+    ]);
+    const result = runTargetProfilePaperReview({ cycleDir: dir });
+    expect(result.exactMatches).toBe(1);
+    expect(result.candidates[0]!.vlrBucket).toBe('VLR_0_5_TO_2');
+    expect(result.candidates[0]!.strictRejectReason).toBeNull();
+  });
+
+  // Test S4: entryDecision=PAPER_BUY_BLOCKED → BLOCKED_ENTRY_DECISION
+  it('entryDecision=PAPER_BUY_BLOCKED rejects with BLOCKED_ENTRY_DECISION', () => {
+    writeCycle(dir, 'cycle-2026-06-18-100000.jsonl', [
+      makeCycleRow({ clusterRisk: 'WATCH', liquidityUsd: 15_000, ageMinutes: 3, entryDecision: 'PAPER_BUY_BLOCKED' }),
+    ]);
+    const result = runTargetProfilePaperReview({ cycleDir: dir });
+    expect(result.exactMatches).toBe(0);
+    expect(result.candidates[0]!.paperReviewLabel).toBe('TARGET_PROFILE_REJECT_NOT_TARGET');
+    expect(result.candidates[0]!.strictRejectReason).toBe('BLOCKED_ENTRY_DECISION');
+  });
+
+  // Test S5: ripperScore=50 < 80 → RIPPER_SCORE_TOO_LOW
+  it('ripperScore=50 rejects with RIPPER_SCORE_TOO_LOW', () => {
+    writeCycle(dir, 'cycle-2026-06-18-100000.jsonl', [
+      makeCycleRow({ clusterRisk: 'WATCH', liquidityUsd: 15_000, ageMinutes: 3, ripperScore: 50 }),
+    ]);
+    const result = runTargetProfilePaperReview({ cycleDir: dir });
+    expect(result.candidates[0]!.strictRejectReason).toBe('RIPPER_SCORE_TOO_LOW');
+    expect(result.candidates[0]!.paperReviewLabel).toBe('TARGET_PROFILE_REJECT_NOT_TARGET');
+  });
+
+  // Test S6: reason includes "bot/pump risk" → BOT_PUMP_RISK_EXCLUDED
+  it('reason containing "bot/pump risk" rejects with BOT_PUMP_RISK_EXCLUDED', () => {
+    writeCycle(dir, 'cycle-2026-06-18-100000.jsonl', [
+      makeCycleRow({
+        clusterRisk: 'WATCH', liquidityUsd: 15_000, ageMinutes: 3,
+        topReasons: ['bot/pump risk — wallet cluster suspicious'],
+      }),
+    ]);
+    const result = runTargetProfilePaperReview({ cycleDir: dir });
+    expect(result.candidates[0]!.strictRejectReason).toBe('BOT_PUMP_RISK_EXCLUDED');
+  });
+
+  // Test S7: reason includes "possible pump" → BOT_PUMP_RISK_EXCLUDED
+  it('reason containing "possible pump" rejects with BOT_PUMP_RISK_EXCLUDED', () => {
+    writeCycle(dir, 'cycle-2026-06-18-100000.jsonl', [
+      makeCycleRow({
+        clusterRisk: 'WATCH', liquidityUsd: 15_000, ageMinutes: 3,
+        topReasons: ['possible pump activity detected'],
+      }),
+    ]);
+    const result = runTargetProfilePaperReview({ cycleDir: dir });
+    expect(result.candidates[0]!.strictRejectReason).toBe('BOT_PUMP_RISK_EXCLUDED');
+  });
+
+  // Test S8: reason includes "suspicious liquidity" → SUSPICIOUS_LIQUIDITY_EXCLUDED
+  it('reason containing "suspicious liquidity" rejects with SUSPICIOUS_LIQUIDITY_EXCLUDED', () => {
+    writeCycle(dir, 'cycle-2026-06-18-100000.jsonl', [
+      makeCycleRow({
+        clusterRisk: 'WATCH', liquidityUsd: 15_000, ageMinutes: 3,
+        topReasons: ['suspicious liquidity pattern observed'],
+      }),
+    ]);
+    const result = runTargetProfilePaperReview({ cycleDir: dir });
+    expect(result.candidates[0]!.strictRejectReason).toBe('SUSPICIOUS_LIQUIDITY_EXCLUDED');
+  });
+
+  // Test S9: priceChangePct <= -20 → PRICE_CRASH_EXCLUDED
+  it('priceChangePct=-25 rejects with PRICE_CRASH_EXCLUDED', () => {
+    writeCycle(dir, 'cycle-2026-06-18-100000.jsonl', [
+      makeCycleRow({ clusterRisk: 'WATCH', liquidityUsd: 15_000, ageMinutes: 3, priceChangePct: -25 }),
+    ]);
+    const result = runTargetProfilePaperReview({ cycleDir: dir });
+    expect(result.candidates[0]!.strictRejectReason).toBe('PRICE_CRASH_EXCLUDED');
+    expect(result.candidates[0]!.paperReviewLabel).toBe('TARGET_PROFILE_REJECT_NOT_TARGET');
+  });
+
+  // Test S10: --write-ledger does not write broad-match rows that fail strict gate
+  it('--write-ledger does not write broad-rejected matches to ledger', () => {
+    writeCycle(dir, 'cycle-2026-06-18-100000.jsonl', [
+      makeCycleRow({ contract: 'STRICT_REJECT', entryDecision: 'PAPER_BUY_BLOCKED' }),  // broad+strict reject
+      makeCycleRow({ contract: 'STRICT_PASS_1' }),  // passes all strict rules
+    ]);
+    const ledgerPath = path.join(dir, 'ledger.jsonl');
+    const result = runTargetProfilePaperReview({
+      cycleDir: dir, writeLedger: true, ledgerPath,
+      ledgerReviewedAt: '2026-06-18T12:00:00.000Z',
+    });
+    expect(result.exactMatchesWritten).toBe(1);
+    expect(result.exactMatches).toBe(1);
+    expect(result.broadProfileRejects).toBe(1);
+    const rows = readLedger(ledgerPath) as Record<string, unknown>[];
+    expect(rows.length).toBe(1);
+    expect(rows[0]!['contract']).toBe('STRICT_PASS_1');
+  });
+
+  // Test S11: VLR_GTE_2 exact row → VLR_GTE_2_EXCLUDED (after READY_TO_SNIPE_PAPER + score>=80)
+  it('VLR_GTE_2 rejects with VLR_GTE_2_EXCLUDED', () => {
+    writeCycle(dir, 'cycle-2026-06-18-100000.jsonl', [
+      makeCycleRow({ clusterRisk: 'WATCH', liquidityUsd: 15_000, ageMinutes: 3, vlr: 3.5 }),
+    ]);
+    const result = runTargetProfilePaperReview({ cycleDir: dir });
+    expect(result.candidates[0]!.vlrBucket).toBe('VLR_GTE_2');
+    expect(result.candidates[0]!.strictRejectReason).toBe('VLR_GTE_2_EXCLUDED');
+    expect(result.candidates[0]!.paperReviewLabel).toBe('TARGET_PROFILE_REJECT_NOT_TARGET');
   });
 });
 
