@@ -229,6 +229,10 @@ import { runBubbleMapsValueReport, renderBubbleMapsValueReport } from './token-g
 import { runWinnerProfileReport, renderWinnerProfileReport } from './token-grab/ripperWinnerProfileReport';
 import { runWatchProfileEnrollment, renderWatchProfileEnrollment } from './token-grab/ripperWatchProfileEnrollment';
 import { runWatchProfileOutcomeReport, renderWatchProfileOutcomeReport } from './token-grab/ripperWatchProfileOutcomeReport';
+import { runRipperWatchSignalValidation, renderRipperWatchSignalValidation } from './token-grab/ripperWatchSignalValidationReport';
+import { runHistoricalWinnerBrain, renderHistoricalWinnerBrain } from './token-grab/ripperHistoricalWinnerBrain';
+import { runHistoricalWinnerReplay, renderHistoricalWinnerReplay } from './token-grab/ripperHistoricalWinnerReplay';
+import { runWatchEnrichmentPlan, renderWatchEnrichmentPlan } from './token-grab/ripperWatchEnrichmentPlan';
 
 function getArgValue(flag: string): string | undefined {
   for (let i = 0; i < process.argv.length; i++) {
@@ -3578,6 +3582,34 @@ async function main(): Promise<void> {
         break;
       }
 
+      case 'token:ripper-historical-winner-replay': {
+        // SAFETY: report-only / read-only. No trades, no gate changes.
+        // DO NOT wire into autopilot decisions. DO NOT enable real trading.
+        const hwrResult = runHistoricalWinnerReplay({
+          learningMemoryPath: getArgValue('--memory')
+            ?? 'data/token-grab/ripper/learning-memory.jsonl',
+        });
+        console.log(renderHistoricalWinnerReplay(hwrResult));
+        break;
+      }
+
+      case 'token:ripper-historical-winner-brain': {
+        // SAFETY: report-only / read-only. No trades, no gate changes.
+        // DO NOT wire into autopilot decisions. DO NOT enable real trading.
+        const hwbResult = runHistoricalWinnerBrain({
+          learningMemoryPath: getArgValue('--memory')
+            ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          minPatternSample: getArgValue('--min-sample') != null
+            ? Number(getArgValue('--min-sample'))
+            : undefined,
+          topN: getArgValue('--top-n') != null
+            ? Number(getArgValue('--top-n'))
+            : undefined,
+        });
+        console.log(renderHistoricalWinnerBrain(hwbResult));
+        break;
+      }
+
       case 'token:ripper-watch-profile-enroll': {
         // SAFETY: report-only / append-only tagging. No trades, no gate changes.
         // DO NOT wire into autopilot decisions. DO NOT enable real trading.
@@ -3601,6 +3633,24 @@ async function main(): Promise<void> {
             ?? 'data/token-grab/ripper/learning-memory.jsonl',
         });
         console.log(renderWatchProfileOutcomeReport(wporResult));
+        break;
+      }
+
+      case 'token:ripper-watch-signal-validation': {
+        const rwsvResult = runRipperWatchSignalValidation({
+          learningMemoryPath: getArgValue('--memory')
+            ?? 'data/token-grab/ripper/learning-memory.jsonl',
+        });
+        console.log(renderRipperWatchSignalValidation(rwsvResult));
+        break;
+      }
+
+      case 'token:ripper-watch-enrichment-plan': {
+        const wepResult = runWatchEnrichmentPlan({
+          learningMemoryPath: getArgValue('--memory')
+            ?? 'data/token-grab/ripper/learning-memory.jsonl',
+        });
+        console.log(renderWatchEnrichmentPlan(wepResult));
         break;
       }
 
