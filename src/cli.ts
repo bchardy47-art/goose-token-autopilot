@@ -243,6 +243,7 @@ import { runPricePumpAutopsy, renderPricePumpAutopsy } from './token-grab/ripper
 import { runPaperIntentCloseout, renderPaperIntentCloseout } from './token-grab/ripperPaperIntentCloseout';
 import { runEntryMomentumAudit, renderEntryMomentumAudit } from './token-grab/ripperEntryMomentumAudit';
 import { runBrainDoctrineReport, renderBrainDoctrineReport } from './token-grab/ripperBrainDoctrineReport';
+import { runPaperTradeSimulationReport, renderPaperTradeSimulationReport } from './token-grab/ripperPaperTradeSimulationReport';
 import {
   runWatchObservationEnroll,
   runWatchObservationCloseout,
@@ -3772,6 +3773,16 @@ async function main(): Promise<void> {
       case 'token:ripper-brain-doctrine-report': {
         const bdrResult = runBrainDoctrineReport({});
         console.log(renderBrainDoctrineReport(bdrResult));
+        break;
+      }
+
+      case 'token:ripper-paper-trade-simulation-report': {
+        const ptsResult = runPaperTradeSimulationReport({
+          intentsPath: getArgValue('--intents-path') ?? 'data/token-grab/ripper/paper-intents.jsonl',
+          memoryPath:  getArgValue('--memory-path')  ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          cyclesDir:   getArgValue('--cycles-dir')   ?? 'data/token-grab/ripper/cycles',
+        });
+        console.log(renderPaperTradeSimulationReport(ptsResult));
         break;
       }
 

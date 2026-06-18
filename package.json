@@ -169,6 +169,7 @@
     "token:ripper-paper-intent-closeout": "tsx src/cli.ts token:ripper-paper-intent-closeout",
     "token:ripper-entry-momentum-audit": "tsx src/cli.ts token:ripper-entry-momentum-audit",
     "token:ripper-brain-doctrine-report": "tsx src/cli.ts token:ripper-brain-doctrine-report",
+    "token:ripper-paper-trade-simulation-report": "tsx src/cli.ts token:ripper-paper-trade-simulation-report",
     "token:prime-gate-audit": "tsx src/cli.ts token:prime-gate-audit",
     "token:holder-risk-audit": "tsx src/cli.ts token:holder-risk-audit",
     "token:fixture-holder-enrich": "tsx src/cli.ts token:fixture-holder-enrich",
