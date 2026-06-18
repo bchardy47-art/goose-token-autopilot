@@ -832,6 +832,13 @@ export function renderEarlyFingerprintReport(
   } else {
     L.push('  ✓ Coverage sufficient for analysis.');
   }
+  L.push('');
+  L.push('  ── DOCTRINE REFERENCE (Brain Doctrine v1) ──────────────────────────');
+  L.push('  priceBucket=PRICE_PUMP is CONTAMINATED. priceChangePct is computed over the same');
+  L.push('  1-minute observation window that determines outcomeLabel. The 100% PRICE_PUMP win');
+  L.push('  rate is circular — not predictive. Do not treat it as an entry gate signal.');
+  L.push('  Use entryMomentumPct (source=DEX_SCREENER_M5) as the clean capture-time substitute.');
+  L.push('  Run: npm run token:ripper-brain-doctrine-report  for full doctrine.');
   L.push(SEP, '');
 
   return L.join('\n');

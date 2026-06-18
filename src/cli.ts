@@ -242,6 +242,7 @@ import { runEarlyFingerprintReport, renderEarlyFingerprintReport } from './token
 import { runPricePumpAutopsy, renderPricePumpAutopsy } from './token-grab/ripperPricePumpFingerprintAutopsy';
 import { runPaperIntentCloseout, renderPaperIntentCloseout } from './token-grab/ripperPaperIntentCloseout';
 import { runEntryMomentumAudit, renderEntryMomentumAudit } from './token-grab/ripperEntryMomentumAudit';
+import { runBrainDoctrineReport, renderBrainDoctrineReport } from './token-grab/ripperBrainDoctrineReport';
 import {
   runWatchObservationEnroll,
   runWatchObservationCloseout,
@@ -3765,6 +3766,12 @@ async function main(): Promise<void> {
           maxSamples: getArgValue('--max-samples') != null ? Number(getArgValue('--max-samples')) : undefined,
         });
         console.log(renderEntryMomentumAudit(emaResult));
+        break;
+      }
+
+      case 'token:ripper-brain-doctrine-report': {
+        const bdrResult = runBrainDoctrineReport({});
+        console.log(renderBrainDoctrineReport(bdrResult));
         break;
       }
 

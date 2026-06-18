@@ -873,6 +873,14 @@ export function renderPricePumpAutopsy(result: PricePumpAutopsyResult): string {
   L.push('  Artifact note: PRICE_PUMP 100% win rate is a mathematical artifact of how');
   L.push('  outcome labels are defined. It is NOT evidence that PRICE_PUMP is a safe');
   L.push('  entry gate or that real trading should be enabled for PRICE_PUMP contracts.');
+  L.push('');
+  L.push('  ── DOCTRINE REFERENCE (Brain Doctrine v1) ──────────────────────────');
+  L.push('  outcome priceChangePct is NOT predictive. It is the observation window RESULT,');
+  L.push('  not a capture-time signal. All PRICE_PUMP statistics in this report describe');
+  L.push('  what happened AFTER the observation window — not what was knowable at entry.');
+  L.push('  The clean substitute is entryMomentumPct (DEX_SCREENER_M5), which must first');
+  L.push('  be proven predictive by forward paper data before any gate change.');
+  L.push('  Run: npm run token:ripper-brain-doctrine-report  for full doctrine.');
   L.push(SEP, '');
 
   return L.join('\n');

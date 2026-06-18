@@ -246,6 +246,12 @@ export function renderEntryMomentumAudit(result: EntryMomentumAuditResult): stri
   L.push('  DO_NOT_ENABLE_REAL_TRADING    tradingExecuted=0    realTradingLocked=true');
   L.push('  paperOnly=true    entryMomentumPct MUST NOT be used to approve buys.');
   L.push('  Do not call token:auto-paper or token:paper-buy from this audit.');
+  L.push('');
+  L.push('  ── DOCTRINE REFERENCE (Brain Doctrine v1) ──────────────────────────');
+  L.push('  entryMomentumPct (source=DEX_SCREENER_M5, window=M5) is RESEARCH-ONLY.');
+  L.push('  It must be proven predictive by forward paper data before affecting buy approvals.');
+  L.push('  Contaminated field: priceChangePct is the observation OUTCOME — not a predictor.');
+  L.push('  Run: npm run token:ripper-brain-doctrine-report  for full doctrine.');
   L.push(SEP, '');
 
   return L.join('\n');
