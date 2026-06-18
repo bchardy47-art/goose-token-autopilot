@@ -129,6 +129,16 @@ export interface EarlyFingerprintReportOptions {
   memoryPath?: string;
 }
 
+export interface EntryMomentumCoverage {
+  totalRows:       number;
+  rowsWithField:   number;
+  rowsWithNonNull: number;
+  coveragePct:     number;
+  sources:         string[];
+  windowLabels:    string[];
+  insufficient:    boolean;
+}
+
 export interface EarlyFingerprintReportResult {
   totalMemoryRows:   number;
   uniqueContracts:   number;
@@ -147,6 +157,7 @@ export interface EarlyFingerprintReportResult {
   falseApproveJunks:  FalseApprove[];
   fingerprints:      FingerprintResult[];
   trustRules:        string[];
+  entryMomentumCoverage: EntryMomentumCoverage;
   reportOnly:        true;
   readOnly:          true;
   paperOnly:         true;
@@ -563,6 +574,35 @@ export function runEarlyFingerprintReport(
   const fingerprints = computeFingerprints(observedProfiles, baselineWinRate);
   const trustRules   = deriveTrustRules(featureStats, baselineWinRate);
 
+  // Entry-momentum coverage: check how many memory rows carry the entryMomentumPct field.
+  // These fields are only added by the new liveFixtureCapture.ts logic (2026-06-18+).
+  // Historical rows will not have them, so coverage starts at 0 and grows as new cycles run.
+  let emRowsWithField   = 0;
+  let emRowsWithNonNull = 0;
+  const emSources      = new Set<string>();
+  const emWindows      = new Set<string>();
+  for (const row of allRows) {
+    const hasField = 'entryMomentumPct' in row;
+    if (hasField) emRowsWithField++;
+    const pct    = row['entryMomentumPct'];
+    const src    = row['entryMomentumSource'];
+    const window = row['entryMomentumWindowLabel'];
+    if (typeof pct === 'number' && Number.isFinite(pct)) emRowsWithNonNull++;
+    if (typeof src    === 'string') emSources.add(src);
+    if (typeof window === 'string') emWindows.add(window);
+  }
+  const emTotal       = allRows.length;
+  const emCoveragePct = emTotal > 0 ? (emRowsWithNonNull / emTotal) * 100 : 0;
+  const entryMomentumCoverage: EntryMomentumCoverage = {
+    totalRows:       emTotal,
+    rowsWithField:   emRowsWithField,
+    rowsWithNonNull: emRowsWithNonNull,
+    coveragePct:     emCoveragePct,
+    sources:         [...emSources],
+    windowLabels:    [...emWindows],
+    insufficient:    emRowsWithNonNull < 20,
+  };
+
   return {
     totalMemoryRows:    allRows.length,
     uniqueContracts:    byContract.size,
@@ -581,6 +621,7 @@ export function runEarlyFingerprintReport(
     falseApproveJunks,
     fingerprints,
     trustRules,
+    entryMomentumCoverage,
     ...SAFETY,
   };
 }
@@ -765,6 +806,32 @@ export function renderEarlyFingerprintReport(
   L.push('  REPORT_ONLY=true    READ_ONLY=true    NO_POLICY_CHANGE=true');
   L.push('  DO_NOT_ENABLE_REAL_TRADING    tradingExecuted=0    realTradingLocked=true');
   L.push('  paperOnly=true    No data files mutated.');
+  L.push('');
+
+  // ── Section 10: Entry-time momentum coverage ──────────────────────────────────
+  L.push(`  ${SEP2}`);
+  L.push('  SECTION 10 — ENTRY-TIME MOMENTUM COVERAGE');
+  L.push(`  ${SEP2}`, '');
+  const em = result.entryMomentumCoverage;
+  L.push(`  Memory rows total         : ${em.totalRows}`);
+  L.push(`  Rows with field present   : ${em.rowsWithField}`);
+  L.push(`  Rows with non-null value  : ${em.rowsWithNonNull}`);
+  L.push(`  Non-null coverage         : ${em.coveragePct.toFixed(1)}%`);
+  if (em.sources.length > 0) {
+    L.push(`  Sources seen              : ${em.sources.join(', ')}`);
+  }
+  if (em.windowLabels.length > 0) {
+    L.push(`  Window labels seen        : ${em.windowLabels.join(', ')}`);
+  }
+  L.push('');
+  if (em.insufficient) {
+    L.push('  ⚠ INSUFFICIENT COVERAGE — entryMomentumPct is not yet in learning-memory.');
+    L.push('  The field was added to cycle JSONL rows on 2026-06-18. It will propagate to');
+    L.push('  learning-memory once new observation cycles complete and outcomes are labeled.');
+    L.push('  Historical PRICE_PUMP contamination is NOT fixed — old data remains outcome-correlated.');
+  } else {
+    L.push('  ✓ Coverage sufficient for analysis.');
+  }
   L.push(SEP, '');
 
   return L.join('\n');

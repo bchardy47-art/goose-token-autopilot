@@ -91,6 +91,15 @@ export interface LiveRipperFixture {
   shadowPolicyReason?: string;
   shadowPolicyValue?:  number | null;
   shadowPolicyMode?:   'shadow_only';
+  /**
+   * Independent capture-time momentum fields. These are NOT derived from the observation
+   * window that determines the outcome label. entryMomentumSource='UNAVAILABLE' when no
+   * independent capture-time price field is present in the current pipeline.
+   */
+  entryMomentumPct?:          number | null;
+  entryMomentumSource?:       string;
+  entryMomentumCapturedAt?:   string;
+  entryMomentumWindowLabel?:  string;
   realTradingLocked: true;
   paperOnly: true;
   readOnly: true;
@@ -183,6 +192,13 @@ export function buildFixture(
     blockers: blockers.slice(0, 10),
     topReasons: topReasons.slice(0, 10),
     warnings: signal.warnings,
+    // Entry-time momentum: no independent capture-time field exists in the current dex-watch
+    // pipeline. priceChangePct is the 1-minute observation window that directly determines
+    // the outcome label (BIG_WINNER) and is therefore not a valid predictor.
+    entryMomentumPct:         null,
+    entryMomentumSource:      'UNAVAILABLE',
+    entryMomentumCapturedAt:  capturedAt,
+    entryMomentumWindowLabel: 'UNAVAILABLE',
     realTradingLocked: true,
     paperOnly: true,
     readOnly: true,

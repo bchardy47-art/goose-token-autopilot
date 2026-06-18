@@ -241,6 +241,7 @@ import { runLedgerUniqueStats, renderLedgerUniqueStats } from './token-grab/ripp
 import { runEarlyFingerprintReport, renderEarlyFingerprintReport } from './token-grab/ripperHistoricalEarlyFingerprintReport';
 import { runPricePumpAutopsy, renderPricePumpAutopsy } from './token-grab/ripperPricePumpFingerprintAutopsy';
 import { runPaperIntentCloseout, renderPaperIntentCloseout } from './token-grab/ripperPaperIntentCloseout';
+import { runEntryMomentumAudit, renderEntryMomentumAudit } from './token-grab/ripperEntryMomentumAudit';
 import {
   runWatchObservationEnroll,
   runWatchObservationCloseout,
@@ -3754,6 +3755,16 @@ async function main(): Promise<void> {
           memoryPath: getArgValue('--memory-path') ?? 'data/token-grab/ripper/learning-memory.jsonl',
         });
         console.log(renderPricePumpAutopsy(ppaResult));
+        break;
+      }
+
+      case 'token:ripper-entry-momentum-audit': {
+        const emaResult = runEntryMomentumAudit({
+          cyclesDir:  getArgValue('--cycles-dir') ?? 'data/token-grab/ripper/cycles',
+          allCycles:  process.argv.includes('--all-cycles'),
+          maxSamples: getArgValue('--max-samples') != null ? Number(getArgValue('--max-samples')) : undefined,
+        });
+        console.log(renderEntryMomentumAudit(emaResult));
         break;
       }
 
