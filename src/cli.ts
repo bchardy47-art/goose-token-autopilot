@@ -233,6 +233,7 @@ import { runRipperWatchSignalValidation, renderRipperWatchSignalValidation } fro
 import { runHistoricalWinnerBrain, renderHistoricalWinnerBrain } from './token-grab/ripperHistoricalWinnerBrain';
 import { runHistoricalWinnerReplay, renderHistoricalWinnerReplay } from './token-grab/ripperHistoricalWinnerReplay';
 import { runWatchEnrichmentPlan, renderWatchEnrichmentPlan } from './token-grab/ripperWatchEnrichmentPlan';
+import { runWatchTargetProfileReport, renderWatchTargetProfileReport } from './token-grab/ripperWatchTargetProfileReport';
 import {
   runWatchObservationEnroll,
   runWatchObservationCloseout,
@@ -3693,6 +3694,16 @@ async function main(): Promise<void> {
           cycleDir:      getArgValue('--cycle-dir')  ?? 'data/token-grab/ripper/cycles',
         });
         console.log(renderWatchObservationReport(worResult));
+        break;
+      }
+
+      case 'token:ripper-watch-target-profile-report': {
+        const wtprResult = runWatchTargetProfileReport({
+          memoryPath:    getArgValue('--memory')    ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          ledgerPath:    getArgValue('--ledger')    ?? 'data/token-grab/ripper/watch-observations/watch-observation-ledger.jsonl',
+          snapshotsPath: getArgValue('--snapshots') ?? 'data/token-grab/ripper/watch-observations/watch-observation-snapshots.jsonl',
+        });
+        console.log(renderWatchTargetProfileReport(wtprResult));
         break;
       }
 
