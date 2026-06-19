@@ -247,6 +247,7 @@ import { runPaperTradeSimulationReport, renderPaperTradeSimulationReport } from 
 import { runLearningLoopAudit, renderLearningLoopAudit } from './token-grab/ripperLearningLoopPropagationAudit';
 import { runM5EvidenceDashboard, renderM5EvidenceDashboard } from './token-grab/ripperM5EvidenceDashboard';
 import { runM5UsableSampleDeepDive, renderM5UsableSampleDeepDive } from './token-grab/ripperM5UsableSampleDeepDive';
+import { runClusterCoverageAudit, renderClusterCoverageAudit } from './token-grab/ripperClusterCoverageAudit';
 import {
   runWatchObservationEnroll,
   runWatchObservationCloseout,
@@ -3826,6 +3827,24 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(deepDiveResult, null, 2));
         } else {
           console.log(renderM5UsableSampleDeepDive(deepDiveResult));
+        }
+        break;
+      }
+
+      case 'token:ripper-cluster-coverage-audit': {
+        const cca = runClusterCoverageAudit({
+          cyclesDir:        getArgValue('--cycles-dir')         ?? 'data/token-grab/ripper/cycles',
+          memoryPath:       getArgValue('--memory-path')        ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          intentsPath:      getArgValue('--intents-path')       ?? 'data/token-grab/ripper/paper-intents.jsonl',
+          observationsPath: getArgValue('--observations-path')  ?? 'data/token-grab/ripper/paper-intent-observations.jsonl',
+          dexWatchRunsDir:  getArgValue('--dex-watch-runs-dir') ?? 'data/token-grab/dex-watch-runs',
+          recent:           getArgValue('--recent') != null ? Number(getArgValue('--recent')) : undefined,
+          topN:             getArgValue('--top')    != null ? Number(getArgValue('--top'))    : undefined,
+        });
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(cca, null, 2));
+        } else {
+          console.log(renderClusterCoverageAudit(cca));
         }
         break;
       }
