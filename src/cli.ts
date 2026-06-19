@@ -245,6 +245,7 @@ import { runEntryMomentumAudit, renderEntryMomentumAudit } from './token-grab/ri
 import { runBrainDoctrineReport, renderBrainDoctrineReport } from './token-grab/ripperBrainDoctrineReport';
 import { runPaperTradeSimulationReport, renderPaperTradeSimulationReport } from './token-grab/ripperPaperTradeSimulationReport';
 import { runLearningLoopAudit, renderLearningLoopAudit } from './token-grab/ripperLearningLoopPropagationAudit';
+import { runM5EvidenceDashboard, renderM5EvidenceDashboard } from './token-grab/ripperM5EvidenceDashboard';
 import {
   runWatchObservationEnroll,
   runWatchObservationCloseout,
@@ -3797,6 +3798,21 @@ async function main(): Promise<void> {
           recent:          getArgValue('--recent') != null ? Number(getArgValue('--recent')) : undefined,
         });
         console.log(renderLearningLoopAudit(llaResult));
+        break;
+      }
+
+      case 'token:ripper-m5-evidence-dashboard': {
+        const m5DashResult = runM5EvidenceDashboard({
+          memoryPath:   getArgValue('--memory-path')  ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          intentsPath:  getArgValue('--intents-path') ?? 'data/token-grab/ripper/paper-intents.jsonl',
+          minN:         getArgValue('--min-n')  != null ? Number(getArgValue('--min-n'))  : undefined,
+          topN:         getArgValue('--top')    != null ? Number(getArgValue('--top'))    : undefined,
+        });
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(m5DashResult, null, 2));
+        } else {
+          console.log(renderM5EvidenceDashboard(m5DashResult));
+        }
         break;
       }
 
