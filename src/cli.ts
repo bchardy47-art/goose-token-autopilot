@@ -246,6 +246,7 @@ import { runBrainDoctrineReport, renderBrainDoctrineReport } from './token-grab/
 import { runPaperTradeSimulationReport, renderPaperTradeSimulationReport } from './token-grab/ripperPaperTradeSimulationReport';
 import { runLearningLoopAudit, renderLearningLoopAudit } from './token-grab/ripperLearningLoopPropagationAudit';
 import { runM5EvidenceDashboard, renderM5EvidenceDashboard } from './token-grab/ripperM5EvidenceDashboard';
+import { runM5UsableSampleDeepDive, renderM5UsableSampleDeepDive } from './token-grab/ripperM5UsableSampleDeepDive';
 import {
   runWatchObservationEnroll,
   runWatchObservationCloseout,
@@ -3812,6 +3813,19 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(m5DashResult, null, 2));
         } else {
           console.log(renderM5EvidenceDashboard(m5DashResult));
+        }
+        break;
+      }
+
+      case 'token:ripper-m5-usable-sample-deep-dive': {
+        const deepDiveResult = runM5UsableSampleDeepDive({
+          memoryPath:  getArgValue('--memory-path') ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          topN:        getArgValue('--top') != null ? Number(getArgValue('--top')) : undefined,
+        });
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(deepDiveResult, null, 2));
+        } else {
+          console.log(renderM5UsableSampleDeepDive(deepDiveResult));
         }
         break;
       }
