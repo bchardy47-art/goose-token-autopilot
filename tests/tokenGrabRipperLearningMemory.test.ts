@@ -9,6 +9,7 @@ import {
   bucketLiquidity,
   bucketVlr,
   inferMemoryUniverse,
+  classifyClusterUnknownReason,
   type LearningMemoryRow,
 } from '../src/token-grab/ripperLearningMemory';
 
@@ -558,4 +559,180 @@ describe('entryMomentumPct persistence into learning memory', () => {
     expect(mem[0].realTradingLocked).toBe(true);
     expect(mem[0].tradingExecuted).toBe(0);
   });
+});
+
+// ── Cluster Reason Persistence v1 ────────────────────────────────────────────
+
+describe('classifyClusterUnknownReason', () => {
+  it('normalizes API_CAP_SKIPPED from cap notes', () => {
+    expect(classifyClusterUnknownReason(['BubbleMaps call skipped: per-run cap of 20 reached'], null))
+      .toBe('API_CAP_SKIPPED');
+  });
+  it('normalizes API_ERROR from clusterFetchError even when notes are empty', () => {
+    expect(classifyClusterUnknownReason([], 'HTTP 429')).toBe('API_ERROR');
+    expect(classifyClusterUnknownReason(['BubbleMaps HTTP 429'], null)).toBe('API_ERROR');
+  });
+  it('normalizes NOT_REQUESTED from disabled / not-requested notes', () => {
+    expect(classifyClusterUnknownReason(['BubbleMaps disabled (TOKEN_GRAB_BUBBLEMAPS_DISABLED=1)'], null))
+      .toBe('NOT_REQUESTED');
+  });
+  it('returns UNKNOWN_REASON_NOT_RECORDED when no provenance present', () => {
+    expect(classifyClusterUnknownReason([], null)).toBe('UNKNOWN_REASON_NOT_RECORDED');
+    expect(classifyClusterUnknownReason(null, null)).toBe('UNKNOWN_REASON_NOT_RECORDED');
+    expect(classifyClusterUnknownReason(undefined, undefined)).toBe('UNKNOWN_REASON_NOT_RECORDED');
+  });
+  it('returns MIXED_OR_UNCLEAR when multiple distinct categories present', () => {
+    expect(classifyClusterUnknownReason(
+      ['BubbleMaps disabled', 'per-run cap of 20 reached'], null,
+    )).toBe('MIXED_OR_UNCLEAR');
+  });
+  it('accepts a single string of notes', () => {
+    expect(classifyClusterUnknownReason('BubbleMaps disabled', null)).toBe('NOT_REQUESTED');
+  });
+});
+
+describe('runRipperLearningMemory — cluster provenance persistence', () => {
+  const CLUSTER_CYCLE = 'cycle-2026-06-12-132744.jsonl';
+
+  // Builds a cycle row with explicit cluster provenance in raw.*
+  function clusterCycleRow(opts: {
+    contract:           string;
+    clusterRisk:        string;
+    clusterProvider?:   string;
+    clusterConfidence?: string | number;
+    clusterNotes?:      string[];
+    clusterFetchError?: string;
+  }): Record<string, unknown> {
+    const raw: Record<string, unknown> = {
+      contract:    opts.contract,
+      symbol:      'TEST',
+      clusterRisk: opts.clusterRisk,
+    };
+    if (opts.clusterProvider   != null) raw['clusterProvider']   = opts.clusterProvider;
+    if (opts.clusterConfidence != null) raw['clusterConfidence'] = opts.clusterConfidence;
+    if (opts.clusterNotes      != null) raw['clusterNotes']      = opts.clusterNotes;
+    if (opts.clusterFetchError != null) raw['clusterFetchError'] = opts.clusterFetchError;
+    return {
+      id:               `cycle:${opts.contract}`,
+      capturedAt:       BASE_ISO,
+      source:           'dex-watch-run',
+      sourceKind:       'DEX_NEW_POOL',
+      normalizedSignal: { contract: opts.contract, symbol: 'TEST', liquidityUsd: 25_000 },
+      raw,
+      ripperScore:      95,
+      ageMinutes:       5,
+      launchAgeBucket:  'PRIME_WINDOW',
+      entryDecision:    'READY_TO_SNIPE_PAPER',
+      buyGateDecision:  'BUY_APPROVED_PAPER',
+      realTradingLocked:true,
+      paperOnly:        true,
+      readOnly:         true,
+    };
+  }
+
+  it('persists clusterProvider into learning memory', () => {
+    writeJsonl(path.join(cyclesDir, CLUSTER_CYCLE), [
+      clusterCycleRow({ contract: CONTRACT_A, clusterRisk: 'CLEAN', clusterProvider: 'bubblemaps', clusterConfidence: 'HIGH', clusterNotes: ['bubbleMapsScore 80'] }),
+    ]);
+    runDefault();
+    expect(readMemory()[0].clusterProvider).toBe('bubblemaps');
+  });
+
+  it('persists clusterConfidence into learning memory', () => {
+    writeJsonl(path.join(cyclesDir, CLUSTER_CYCLE), [
+      clusterCycleRow({ contract: CONTRACT_A, clusterRisk: 'CLEAN', clusterConfidence: 'HIGH' }),
+    ]);
+    expect(readMemoryAfterRun()[0].clusterConfidence).toBe('HIGH');
+  });
+
+  it('persists clusterNotes into learning memory', () => {
+    const notes = ['BubbleMaps disabled (TOKEN_GRAB_BUBBLEMAPS_DISABLED=1)', 'No live calls will be made'];
+    writeJsonl(path.join(cyclesDir, CLUSTER_CYCLE), [
+      clusterCycleRow({ contract: CONTRACT_A, clusterRisk: 'UNKNOWN', clusterNotes: notes }),
+    ]);
+    expect(readMemoryAfterRun()[0].clusterNotes).toEqual(notes);
+  });
+
+  it('persists clusterFetchError into learning memory', () => {
+    writeJsonl(path.join(cyclesDir, CLUSTER_CYCLE), [
+      clusterCycleRow({ contract: CONTRACT_A, clusterRisk: 'UNKNOWN', clusterFetchError: 'HTTP 429', clusterNotes: ['BubbleMaps HTTP 429'] }),
+    ]);
+    expect(readMemoryAfterRun()[0].clusterFetchError).toBe('HTTP 429');
+  });
+
+  it('normalizes API_CAP_SKIPPED into clusterUnknownReason for UNKNOWN rows', () => {
+    writeJsonl(path.join(cyclesDir, CLUSTER_CYCLE), [
+      clusterCycleRow({ contract: CONTRACT_A, clusterRisk: 'UNKNOWN', clusterNotes: ['BubbleMaps call skipped: per-run cap of 20 reached'] }),
+    ]);
+    expect(readMemoryAfterRun()[0].clusterUnknownReason).toBe('API_CAP_SKIPPED');
+  });
+
+  it('normalizes API_ERROR into clusterUnknownReason from clusterFetchError', () => {
+    writeJsonl(path.join(cyclesDir, CLUSTER_CYCLE), [
+      clusterCycleRow({ contract: CONTRACT_A, clusterRisk: 'UNKNOWN', clusterFetchError: 'HTTP 429' }),
+    ]);
+    expect(readMemoryAfterRun()[0].clusterUnknownReason).toBe('API_ERROR');
+  });
+
+  it('normalizes NOT_REQUESTED into clusterUnknownReason from disabled notes', () => {
+    writeJsonl(path.join(cyclesDir, CLUSTER_CYCLE), [
+      clusterCycleRow({ contract: CONTRACT_A, clusterRisk: 'UNKNOWN', clusterNotes: ['BubbleMaps disabled (TOKEN_GRAB_BUBBLEMAPS_DISABLED=1)'] }),
+    ]);
+    expect(readMemoryAfterRun()[0].clusterUnknownReason).toBe('NOT_REQUESTED');
+  });
+
+  it('sets clusterUnknownReason to UNKNOWN_REASON_NOT_RECORDED when no provenance', () => {
+    writeJsonl(path.join(cyclesDir, CLUSTER_CYCLE), [
+      clusterCycleRow({ contract: CONTRACT_A, clusterRisk: 'UNKNOWN' }),
+    ]);
+    expect(readMemoryAfterRun()[0].clusterUnknownReason).toBe('UNKNOWN_REASON_NOT_RECORDED');
+  });
+
+  it('does NOT set clusterUnknownReason for non-UNKNOWN (CLEAN) rows', () => {
+    writeJsonl(path.join(cyclesDir, CLUSTER_CYCLE), [
+      clusterCycleRow({ contract: CONTRACT_A, clusterRisk: 'CLEAN', clusterNotes: ['bubbleMapsScore 82'] }),
+    ]);
+    expect(readMemoryAfterRun()[0].clusterUnknownReason).toBeNull();
+  });
+
+  it('old memory rows without new fields still load (backward compatible)', () => {
+    // Seed an existing memory file that predates the new fields.
+    const legacyRow = {
+      contract: CONTRACT_B, cycleId: 'cycle-old', capturedAt: BASE_ISO, observedAt: null,
+      clusterRisk: 'UNKNOWN', gateDecision: 'BUY_APPROVED_PAPER', priceChangePct: null,
+      outcomeLabel: 'UNKNOWN', reportOnly: true, readOnly: true, paperOnly: true,
+      realTradingLocked: true, tradingExecuted: 0,
+    };
+    writeJsonl(outPath, [legacyRow]);
+    // New cycle adds a fresh row; the legacy row must remain readable & unchanged.
+    writeJsonl(path.join(cyclesDir, CLUSTER_CYCLE), [
+      clusterCycleRow({ contract: CONTRACT_A, clusterRisk: 'UNKNOWN', clusterNotes: ['BubbleMaps disabled'] }),
+    ]);
+    const result = runDefault();
+    const mem = readMemory();
+    expect(result.duplicatesSkipped).toBe(0);
+    const legacy = mem.find(m => m.contract === CONTRACT_B)!;
+    expect(legacy.clusterRisk).toBe('UNKNOWN');
+    expect(legacy.clusterUnknownReason).toBeUndefined(); // not backfilled
+    const fresh = mem.find(m => m.contract === CONTRACT_A)!;
+    expect(fresh.clusterUnknownReason).toBe('NOT_REQUESTED');
+  });
+
+  it('does not backfill / mutate existing memory rows on re-run', () => {
+    writeJsonl(path.join(cyclesDir, CLUSTER_CYCLE), [
+      clusterCycleRow({ contract: CONTRACT_A, clusterRisk: 'UNKNOWN', clusterNotes: ['BubbleMaps disabled'] }),
+    ]);
+    runDefault();
+    const firstBytes = fs.readFileSync(outPath, 'utf-8');
+    const secondResult = runDefault();   // same cycle → dedup, no new rows
+    expect(secondResult.rowsAppended).toBe(0);
+    expect(fs.readFileSync(outPath, 'utf-8')).toBe(firstBytes);
+  });
+
+  // Local helper: run then read (CONTRACT_A path needs an outcome to be observed,
+  // but cluster provenance is captured regardless of observation state).
+  function readMemoryAfterRun(): LearningMemoryRow[] {
+    runDefault();
+    return readMemory();
+  }
 });

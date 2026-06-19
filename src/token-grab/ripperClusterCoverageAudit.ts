@@ -17,6 +17,7 @@ import {
   type M5Band,
   type ConfidenceTier,
 } from './ripperM5EvidenceDashboard';
+import { classifyClusterUnknownReason } from './ripperLearningMemory';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -96,6 +97,19 @@ export interface UnknownReasonBreakdown {
   totalUnknown:      number;
   counts:            Record<UnknownReason, number>;
   note:              string;
+}
+
+// Memory-layer reason coverage: how UNKNOWN learning-memory rows get their reason,
+// preferring persisted memory fields and falling back to a cycle join for old rows.
+export interface MemoryReasonCoverage {
+  totalUnknownMemoryRows: number;
+  withReasonFieldDirect:  number;  // clusterUnknownReason persisted on the row
+  withNotesOrFetchError:  number;  // classifiable from persisted memory notes/fetchError
+  requiringCycleJoin:     number;  // no memory reason data → needed a cycle join
+  resolvedViaCycleJoin:   number;  // cycle file supplied the reason
+  reasonNotRecorded:      number;  // UNKNOWN_REASON_NOT_RECORDED after all sources
+  counts:                 Record<UnknownReason, number>;
+  note:                   string;
 }
 
 export interface CapPressure {
@@ -229,6 +243,7 @@ export interface ClusterCoverageAuditResult {
 
   // §4
   unknownReasons: UnknownReasonBreakdown;
+  memoryReasonCoverage: MemoryReasonCoverage;
 
   // §5
   capPressure: CapPressure;
@@ -301,6 +316,7 @@ interface RawCycleRow {
 interface RawMemRow {
   contract?:         string;
   symbol?:           string;
+  cycleId?:          string;
   capturedAt?:       string;
   observedAt?:       string | null;
   entryMomentumPct?: number | null;
@@ -310,6 +326,13 @@ interface RawMemRow {
   clusterRisk?:      string;
   gateDecision?:     string;
   entryDecision?:    string;
+  // Cluster provenance fields (present only on rows written by Cluster Reason
+  // Persistence v1+; absent on older rows → require cycle join for the reason).
+  clusterProvider?:      string | null;
+  clusterConfidence?:    string | number | null;
+  clusterNotes?:         string[] | string | null;
+  clusterUnknownReason?: string | null;
+  clusterFetchError?:    string | null;
 }
 
 interface RawSimpleRow {
@@ -397,27 +420,10 @@ function countsTotal(counts: ClusterCounts): number {
 }
 
 // Classify a single UNKNOWN cycle row into a reason using its clusterNotes /
-// clusterFetchError. Returns null reason source markers carefully — never invents.
+// clusterFetchError. Delegates to the canonical normalizer shared with the
+// learning-memory builder so both layers agree on reason labels.
 function classifyUnknownReason(row: RawCycleRow): UnknownReason {
-  const notes = (row.raw?.clusterNotes ?? []).map(n => String(n).toLowerCase());
-  const fetchError = row.raw?.clusterFetchError;
-  const matched = new Set<UnknownReason>();
-
-  const blob = notes.join(' | ');
-  if (/disabled/.test(blob))                          matched.add('NOT_REQUESTED');
-  if (/per-run cap|cap of \d+|cap reached|cap of/.test(blob)) matched.add('API_CAP_SKIPPED');
-  if (/http \d|429|timeout|fetch error|error/.test(blob) || (fetchError != null && fetchError !== '')) matched.add('API_ERROR');
-  if (/cache miss|not cached/.test(blob))             matched.add('CACHE_MISS');
-  if (/not found|no data|404|unknown token/.test(blob)) matched.add('NOT_FOUND');
-
-  if (matched.size === 0) {
-    // No diagnostic note present for this UNKNOWN row.
-    if (notes.length === 0) return 'UNKNOWN_REASON_NOT_RECORDED';
-    return 'MIXED_OR_UNCLEAR';
-  }
-  if (matched.size === 1) return [...matched][0];
-  // More than one distinct reason category on the same row → ambiguous.
-  return 'MIXED_OR_UNCLEAR';
+  return classifyClusterUnknownReason(row.raw?.clusterNotes, row.raw?.clusterFetchError) as UnknownReason;
 }
 
 function parseCapFromNotes(notes: string[] | undefined): number | null {
@@ -692,12 +698,28 @@ export function runClusterCoverageAudit(
     reasonFieldEverPresent: false,
   };
   let latestCycleCapturedAt: string | null = null;
+  // Index of cycle-row cluster provenance keyed by `contract::cycleId`, for the
+  // cycle-join fallback when a memory row has no persisted reason fields.
+  const cycleReasonIndex = new Map<string, { notes: string[]; fetchError: string | null }>();
   for (const f of allCycleFiles) {
+    const cycleId = f.replace(/\.jsonl$/, '');
     const rows = readJsonl<RawCycleRow>(path.join(cyclesDir, f));
     scanCycleRows(rows, cycleScan);
     for (const r of rows) {
       if (r.capturedAt && (!latestCycleCapturedAt || r.capturedAt > latestCycleCapturedAt)) {
         latestCycleCapturedAt = r.capturedAt;
+      }
+      if (cycleCluster(r) === 'UNKNOWN') {
+        const contract = r.normalizedSignal?.contract ?? r.ripperInput?.contract;
+        if (contract) {
+          const key = `${contract}::${cycleId}`;
+          if (!cycleReasonIndex.has(key)) {
+            cycleReasonIndex.set(key, {
+              notes: Array.isArray(r.raw?.clusterNotes) ? r.raw!.clusterNotes!.map(n => String(n)) : [],
+              fetchError: r.raw?.clusterFetchError ?? null,
+            });
+          }
+        }
       }
     }
   }
@@ -793,11 +815,14 @@ export function runClusterCoverageAudit(
     totalUnknown: cycleScan.counts.UNKNOWN,
     counts: cycleScan.unknownReasonCounts,
     note: reasonFieldExists
-      ? 'Cycle rows carry row-level cluster notes. The learning-memory (M5 evidence) layer does NOT ' +
-        'persist a per-row unknownReason field — UNKNOWN M5 rows cannot be attributed without a cycle join.'
+      ? 'Cycle rows carry row-level cluster notes. New learning-memory rows now persist the cluster ' +
+        'reason directly (see memory-layer breakdown below); older rows still resolve via cycle join.'
       : 'No row-level cluster reason fields found in cycle rows. UNKNOWN reason is NOT persisted ' +
         'anywhere — classified as UNKNOWN_REASON_NOT_RECORDED. Recommend adding a future unknownReason field.',
   };
+
+  // ── Memory-layer reason coverage (prefer persisted memory fields, then cycle join) ─
+  const memoryReasonCoverage = computeMemoryReasonCoverage(memRows, cycleReasonIndex);
 
   // ── Cap pressure ───────────────────────────────────────────────────────────
   const capPressure = computeCapPressure(recentCycles, cyclesDir);
@@ -831,7 +856,7 @@ export function runClusterCoverageAudit(
   };
 
   // ── Samples needing resolution (M5 + UNKNOWN + approved/observed) ───────────
-  const samplesNeedingResolution = buildSamples(memRows, topN);
+  const samplesNeedingResolution = buildSamples(memRows, topN, cycleReasonIndex);
 
   // ── Diagnoses ──────────────────────────────────────────────────────────────
   const diagnoses = computeDiagnoses({
@@ -840,6 +865,7 @@ export function runClusterCoverageAudit(
     approvedVsRejected,
     capPressure,
     reasonFieldExists,
+    memoryReasonCoverage,
     m5UnknownMem,
     m5MemRowsCount: m5MemRows.length,
   });
@@ -866,6 +892,7 @@ export function runClusterCoverageAudit(
     recentCycles,
     stageCoverage,
     unknownReasons,
+    memoryReasonCoverage,
     capPressure,
     crossTab,
     neutralReview,
@@ -947,7 +974,92 @@ function computeCapPressure(recentCycles: RecentCycleCoverage[], _cyclesDir: str
   };
 }
 
-function buildSamples(memRows: RawMemRow[], topN: number): SampleRow[] {
+type ReasonSource = 'memoryDirect' | 'memoryNotes' | 'cycleJoin' | 'notRecorded';
+
+// Resolves the UNKNOWN reason for a memory row, preferring persisted memory fields
+// (clusterUnknownReason, then clusterNotes/clusterFetchError), then a cycle join,
+// then UNKNOWN_REASON_NOT_RECORDED. Never treats UNKNOWN as CLEAN.
+function resolveMemReason(
+  r: RawMemRow,
+  cycleReasonIndex: Map<string, { notes: string[]; fetchError: string | null }>,
+): { reason: UnknownReason; source: ReasonSource } {
+  // 1. Reason persisted directly on the memory row.
+  if (typeof r.clusterUnknownReason === 'string' && r.clusterUnknownReason.trim() !== '') {
+    return { reason: r.clusterUnknownReason as UnknownReason, source: 'memoryDirect' };
+  }
+  // 2. Provenance persisted on the memory row (notes / fetchError).
+  const memNotes = r.clusterNotes;
+  const hasMemNotes = (Array.isArray(memNotes) && memNotes.length > 0) ||
+    (typeof memNotes === 'string' && memNotes.trim() !== '');
+  const hasMemFetchError = typeof r.clusterFetchError === 'string' && r.clusterFetchError.trim() !== '';
+  if (hasMemNotes || hasMemFetchError) {
+    return {
+      reason: classifyClusterUnknownReason(memNotes ?? null, r.clusterFetchError ?? null) as UnknownReason,
+      source: 'memoryNotes',
+    };
+  }
+  // 3. Cycle join fallback for older rows that predate reason persistence.
+  if (r.contract && r.cycleId) {
+    const idx = cycleReasonIndex.get(`${r.contract}::${r.cycleId}`);
+    if (idx && (idx.notes.length > 0 || (idx.fetchError != null && idx.fetchError !== ''))) {
+      return {
+        reason: classifyClusterUnknownReason(idx.notes, idx.fetchError) as UnknownReason,
+        source: 'cycleJoin',
+      };
+    }
+  }
+  // 4. Nothing available anywhere.
+  return { reason: 'UNKNOWN_REASON_NOT_RECORDED', source: 'notRecorded' };
+}
+
+function computeMemoryReasonCoverage(
+  memRows: RawMemRow[],
+  cycleReasonIndex: Map<string, { notes: string[]; fetchError: string | null }>,
+): MemoryReasonCoverage {
+  const counts = emptyReasonCounts();
+  let withReasonFieldDirect = 0;
+  let withNotesOrFetchError = 0;
+  let requiringCycleJoin    = 0;
+  let resolvedViaCycleJoin  = 0;
+  let reasonNotRecorded     = 0;
+  let total = 0;
+
+  for (const r of memRows) {
+    if (memCluster(r) !== 'UNKNOWN') continue;
+    total++;
+    const { reason, source } = resolveMemReason(r, cycleReasonIndex);
+    counts[reason]++;
+    if (source === 'memoryDirect')      withReasonFieldDirect++;
+    else if (source === 'memoryNotes')  withNotesOrFetchError++;
+    else if (source === 'cycleJoin')  { requiringCycleJoin++; resolvedViaCycleJoin++; }
+    else                              { requiringCycleJoin++; reasonNotRecorded++; }
+  }
+
+  const note = withReasonFieldDirect > 0
+    ? `${withReasonFieldDirect} UNKNOWN memory rows carry a persisted clusterUnknownReason (Cluster Reason ` +
+      `Persistence v1+). ${requiringCycleJoin} older rows still resolve via cycle join; ${reasonNotRecorded} ` +
+      `remain UNKNOWN_REASON_NOT_RECORDED. No backfill performed — older rows are unchanged.`
+    : `No UNKNOWN memory rows carry a persisted reason yet (older rows predate Cluster Reason Persistence v1). ` +
+      `${resolvedViaCycleJoin} resolved via cycle join; ${reasonNotRecorded} remain UNKNOWN_REASON_NOT_RECORDED. ` +
+      `New rows appended by token:ripper-learning-memory will persist the reason directly.`;
+
+  return {
+    totalUnknownMemoryRows: total,
+    withReasonFieldDirect,
+    withNotesOrFetchError,
+    requiringCycleJoin,
+    resolvedViaCycleJoin,
+    reasonNotRecorded,
+    counts,
+    note,
+  };
+}
+
+function buildSamples(
+  memRows: RawMemRow[],
+  topN: number,
+  cycleReasonIndex: Map<string, { notes: string[]; fetchError: string | null }>,
+): SampleRow[] {
   const cap = Math.max(SAMPLE_CAP, topN);
   const candidates = memRows.filter(r =>
     hasM5(r.entryMomentumPct) &&
@@ -960,19 +1072,26 @@ function buildSamples(memRows: RawMemRow[], topN: number): SampleRow[] {
     const tb = b.observedAt ?? b.capturedAt ?? '';
     return tb.localeCompare(ta);
   });
-  return candidates.slice(0, cap).map(r => ({
-    symbol: r.symbol ?? null,
-    contractPrefix: (r.contract ?? 'unknown').slice(0, 16),
-    capturedAt: r.observedAt ?? r.capturedAt ?? null,
-    m5: hasM5(r.entryMomentumPct) ? (r.entryMomentumPct as number) : null,
-    m5Band: m5ToBand(r.entryMomentumPct),
-    liquidityBucket: r.liquidityBucket ?? 'UNKNOWN',
-    vlrBucket: r.vlrBucket ?? 'UNKNOWN',
-    paperDecision: r.gateDecision ?? r.entryDecision ?? 'unknown',
-    pnl: typeof r.priceChangePct === 'number' ? r.priceChangePct : null,
-    // Reason is NOT persisted at the memory layer.
-    unknownReason: 'NOT_RECORDED (memory layer — see cycle reason breakdown)',
-  }));
+  return candidates.slice(0, cap).map(r => {
+    const { reason, source } = resolveMemReason(r, cycleReasonIndex);
+    const sourceLabel =
+      source === 'memoryDirect' ? 'memory'
+      : source === 'memoryNotes' ? 'memory-notes'
+      : source === 'cycleJoin'   ? 'cycle-join'
+      : 'not-recorded';
+    return {
+      symbol: r.symbol ?? null,
+      contractPrefix: (r.contract ?? 'unknown').slice(0, 16),
+      capturedAt: r.observedAt ?? r.capturedAt ?? null,
+      m5: hasM5(r.entryMomentumPct) ? (r.entryMomentumPct as number) : null,
+      m5Band: m5ToBand(r.entryMomentumPct),
+      liquidityBucket: r.liquidityBucket ?? 'UNKNOWN',
+      vlrBucket: r.vlrBucket ?? 'UNKNOWN',
+      paperDecision: r.gateDecision ?? r.entryDecision ?? 'unknown',
+      pnl: typeof r.priceChangePct === 'number' ? r.priceChangePct : null,
+      unknownReason: `${reason} (${sourceLabel})`,
+    };
+  });
 }
 
 function computeDiagnoses(ctx: {
@@ -981,6 +1100,7 @@ function computeDiagnoses(ctx: {
   approvedVsRejected: ApprovedVsRejected;
   capPressure: CapPressure;
   reasonFieldExists: boolean;
+  memoryReasonCoverage: MemoryReasonCoverage;
   m5UnknownMem: number;
   m5MemRowsCount: number;
 }): Diagnosis[] {
@@ -997,9 +1117,12 @@ function computeDiagnoses(ctx: {
   if (!ctx.approvedVsRejected.approvedSufficientlyCovered &&
       ctx.approvedVsRejected.approvedTotal > 0) d.push('APPROVED_ROWS_LACK_CLUSTER_COVERAGE');
 
-  // Reason not persisted at the M5 evidence (memory) layer — always true here,
-  // since memory rows carry no clusterNotes/unknownReason.
-  d.push('UNKNOWN_REASON_NOT_PERSISTED');
+  // Reason not (fully) persisted at the M5 evidence (memory) layer. After Cluster
+  // Reason Persistence v1, NEW rows carry the reason directly; this fires only while
+  // older UNKNOWN rows still require a cycle join to attribute their reason.
+  if (ctx.memoryReasonCoverage.requiringCycleJoin > 0) {
+    d.push('UNKNOWN_REASON_NOT_PERSISTED');
+  }
 
   // If BubbleMaps is disabled across the board, a fallback holder source is worth study.
   if (ctx.capPressure.cyclesWithBubbleMapsDisabled === ctx.capPressure.recentCyclesScanned &&
@@ -1160,6 +1283,7 @@ export function renderClusterCoverageAudit(r: ClusterCoverageAuditResult): strin
   L.push(`  ${SEP2}`);
   L.push('  SECTION 4 — UNKNOWN REASON BREAKDOWN');
   L.push(`  ${SEP2}`, '');
+  L.push('  ── Cycle-row reasons (raw.clusterNotes / raw.clusterFetchError) ──');
   L.push(`  Reason source        : ${r.unknownReasons.reasonSource}`);
   L.push(`  Reason field exists  : ${r.unknownReasons.reasonFieldExists ? 'yes (cycle rows)' : 'no'}`);
   L.push(`  Total UNKNOWN (cycle): ${r.unknownReasons.totalUnknown}`);
@@ -1168,7 +1292,23 @@ export function renderClusterCoverageAudit(r: ClusterCoverageAuditResult): strin
     L.push(`    ${reason.padEnd(30)} : ${r.unknownReasons.counts[reason]}`);
   }
   L.push('');
+
+  // Memory-layer reason coverage (prefers persisted memory fields, then cycle join)
+  const mrc = r.memoryReasonCoverage;
+  L.push('  ── Memory-layer reasons (prefer persisted memory fields → cycle join) ──');
+  L.push(`  Total UNKNOWN memory rows         : ${mrc.totalUnknownMemoryRows}`);
+  L.push(`  With persisted clusterUnknownReason: ${mrc.withReasonFieldDirect}  (read directly from memory)`);
+  L.push(`  With persisted notes/fetchError    : ${mrc.withNotesOrFetchError}  (classified from memory)`);
+  L.push(`  Requiring cycle join (old rows)    : ${mrc.requiringCycleJoin}`);
+  L.push(`    └ resolved via cycle join        : ${mrc.resolvedViaCycleJoin}`);
+  L.push(`  UNKNOWN_REASON_NOT_RECORDED        : ${mrc.reasonNotRecorded}`);
+  L.push('');
+  for (const reason of UNKNOWN_REASONS) {
+    L.push(`    ${reason.padEnd(30)} : ${mrc.counts[reason]}`);
+  }
+  L.push('');
   L.push(`  Note: ${r.unknownReasons.note}`);
+  L.push(`  Note: ${mrc.note}`);
   L.push('');
 
   // §5 — BubbleMaps cap pressure

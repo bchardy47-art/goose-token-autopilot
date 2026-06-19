@@ -60,10 +60,14 @@ interface MemRowSpec {
   vlr?:        string;
   capturedAt?: string;
   observedAt?: string;
+  cycleId?:              string;
+  clusterUnknownReason?: string;
+  clusterNotes?:         string[];
+  clusterFetchError?:    string;
 }
 
 function memRow(spec: MemRowSpec): Record<string, unknown> {
-  return {
+  const row: Record<string, unknown> = {
     contract:         spec.contract ?? 'M1',
     symbol:           spec.symbol ?? 'TKN',
     capturedAt:       spec.capturedAt ?? '2026-06-19T20:00:00.000Z',
@@ -75,6 +79,11 @@ function memRow(spec: MemRowSpec): Record<string, unknown> {
     vlrBucket:        spec.vlr ?? 'VLR_LT_0_5',
     gateDecision:     spec.gate ?? 'BUY_APPROVED_PAPER',
   };
+  if (spec.cycleId              != null) row['cycleId']              = spec.cycleId;
+  if (spec.clusterUnknownReason != null) row['clusterUnknownReason'] = spec.clusterUnknownReason;
+  if (spec.clusterNotes         != null) row['clusterNotes']         = spec.clusterNotes;
+  if (spec.clusterFetchError    != null) row['clusterFetchError']    = spec.clusterFetchError;
+  return row;
 }
 
 interface TmpDirs {
@@ -386,10 +395,91 @@ describe('runClusterCoverageAudit', () => {
       cycleRow({ gate: 'BUY_REJECTED', cluster: 'CLEAN', provider: 'bubblemaps', notes: ['bubbleMapsScore 70'] }),
     ]);
     const r = runClusterCoverageAudit(opts(dirs));
-    // UNKNOWN_REASON_NOT_PERSISTED always present (memory layer carries no reason),
-    // but the M5/artifact/cap diagnoses should be absent here.
+    // No UNKNOWN rows at all → no cycle-join gap → UNKNOWN_REASON_NOT_PERSISTED absent.
     expect(r.diagnoses).not.toContain('M5_NEUTRAL_UNKNOWN_ARTIFACT');
     expect(r.diagnoses).not.toContain('UNKNOWN_CLUSTER_DOMINATES_M5');
+    expect(r.diagnoses).not.toContain('UNKNOWN_REASON_NOT_PERSISTED');
     expect(r.neutralReview.conclusion).toBe('M5_NEUTRAL_CLEAN_SUPPORTED');
+  });
+
+  it('UNKNOWN_REASON_NOT_PERSISTED fires only when old rows still need a cycle join', () => {
+    // Old UNKNOWN row (no reason fields, no matching cycle) → still needs a join.
+    writeJsonl(dirs.memoryPath, [memRow({ contract: 'OLD', cluster: 'UNKNOWN', cycleId: 'cycle-gone' })]);
+    expect(runClusterCoverageAudit(opts(dirs)).diagnoses).toContain('UNKNOWN_REASON_NOT_PERSISTED');
+
+    // All UNKNOWN rows carry a persisted reason → diagnosis absent.
+    writeJsonl(dirs.memoryPath, [memRow({ contract: 'NEW', cluster: 'UNKNOWN', clusterUnknownReason: 'NOT_REQUESTED' })]);
+    expect(runClusterCoverageAudit(opts(dirs)).diagnoses).not.toContain('UNKNOWN_REASON_NOT_PERSISTED');
+  });
+
+  // ── Cluster Reason Persistence v1 — memory-preferred reason + cycle join ──────
+
+  it('prefers persisted memory clusterUnknownReason when present', () => {
+    writeJsonl(dirs.memoryPath, [
+      memRow({ contract: 'A', cluster: 'UNKNOWN', clusterUnknownReason: 'API_CAP_SKIPPED' }),
+    ]);
+    const r = runClusterCoverageAudit(opts(dirs));
+    expect(r.memoryReasonCoverage.totalUnknownMemoryRows).toBe(1);
+    expect(r.memoryReasonCoverage.withReasonFieldDirect).toBe(1);
+    expect(r.memoryReasonCoverage.requiringCycleJoin).toBe(0);
+    expect(r.memoryReasonCoverage.counts.API_CAP_SKIPPED).toBe(1);
+  });
+
+  it('classifies from persisted memory notes/fetchError when no explicit reason', () => {
+    writeJsonl(dirs.memoryPath, [
+      memRow({ contract: 'A', cluster: 'UNKNOWN', clusterNotes: ['BubbleMaps disabled (TOKEN_GRAB_BUBBLEMAPS_DISABLED=1)'] }),
+      memRow({ contract: 'B', cluster: 'UNKNOWN', clusterFetchError: 'HTTP 429' }),
+    ]);
+    const r = runClusterCoverageAudit(opts(dirs));
+    expect(r.memoryReasonCoverage.withNotesOrFetchError).toBe(2);
+    expect(r.memoryReasonCoverage.counts.NOT_REQUESTED).toBe(1);
+    expect(r.memoryReasonCoverage.counts.API_ERROR).toBe(1);
+  });
+
+  it('falls back to cycle join for old memory rows lacking reason fields', () => {
+    // Old memory row: UNKNOWN, no reason/notes, but has cycleId+contract for join.
+    writeJsonl(dirs.memoryPath, [
+      memRow({ contract: 'JOINME', cluster: 'UNKNOWN', cycleId: 'cycle-2026-06-19-200000' }),
+    ]);
+    // Cycle file supplies the reason via clusterNotes.
+    writeJsonl(path.join(dirs.cyclesDir, 'cycle-2026-06-19-200000.jsonl'), [
+      cycleRow({ contract: 'JOINME', cluster: 'UNKNOWN', notes: ['BubbleMaps call skipped: per-run cap of 20 reached'] }),
+    ]);
+    const r = runClusterCoverageAudit(opts(dirs));
+    expect(r.memoryReasonCoverage.withReasonFieldDirect).toBe(0);
+    expect(r.memoryReasonCoverage.requiringCycleJoin).toBe(1);
+    expect(r.memoryReasonCoverage.resolvedViaCycleJoin).toBe(1);
+    expect(r.memoryReasonCoverage.counts.API_CAP_SKIPPED).toBe(1);
+    expect(r.memoryReasonCoverage.reasonNotRecorded).toBe(0);
+  });
+
+  it('counts UNKNOWN_REASON_NOT_RECORDED when neither memory nor cycle has a reason', () => {
+    writeJsonl(dirs.memoryPath, [
+      memRow({ contract: 'NOPE', cluster: 'UNKNOWN', cycleId: 'cycle-missing' }),
+    ]);
+    const r = runClusterCoverageAudit(opts(dirs));
+    expect(r.memoryReasonCoverage.requiringCycleJoin).toBe(1);
+    expect(r.memoryReasonCoverage.resolvedViaCycleJoin).toBe(0);
+    expect(r.memoryReasonCoverage.reasonNotRecorded).toBe(1);
+    expect(r.memoryReasonCoverage.counts.UNKNOWN_REASON_NOT_RECORDED).toBe(1);
+  });
+
+  it('samples surface the resolved reason and its source', () => {
+    writeJsonl(dirs.memoryPath, [
+      memRow({ contract: 'DIRECT', m5: 0, cluster: 'UNKNOWN', gate: 'BUY_APPROVED_PAPER', clusterUnknownReason: 'NOT_REQUESTED' }),
+    ]);
+    const r = runClusterCoverageAudit(opts(dirs));
+    expect(r.samplesNeedingResolution.length).toBe(1);
+    expect(r.samplesNeedingResolution[0].unknownReason).toBe('NOT_REQUESTED (memory)');
+  });
+
+  it('renders the memory-layer reason breakdown in section 4', () => {
+    writeJsonl(dirs.memoryPath, [
+      memRow({ contract: 'A', cluster: 'UNKNOWN', clusterUnknownReason: 'API_ERROR' }),
+    ]);
+    const text = renderClusterCoverageAudit(runClusterCoverageAudit(opts(dirs)));
+    expect(text).toContain('Memory-layer reasons');
+    expect(text).toContain('With persisted clusterUnknownReason');
+    expect(text).toContain('Requiring cycle join');
   });
 });

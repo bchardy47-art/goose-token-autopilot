@@ -69,6 +69,51 @@ export type VlrBucket =
 
 export type TimingPath = 'ENTER_NOW' | 'WAIT_10M' | null;
 
+// ── Cluster UNKNOWN reason normalization ────────────────────────────────────────
+// Canonical normalizer shared with the Cluster Coverage Audit. Classifies WHY a
+// cluster lookup produced UNKNOWN from the row-level clusterNotes / clusterFetchError
+// provenance. UNKNOWN is NEVER treated as CLEAN — these labels only describe the gap.
+
+export const CLUSTER_UNKNOWN_REASONS = [
+  'API_CAP_SKIPPED',
+  'API_ERROR',
+  'NOT_REQUESTED',
+  'NOT_FOUND',
+  'CACHE_MISS',
+  'SCHEMA_MISSING',
+  'UNKNOWN_REASON_NOT_RECORDED',
+  'MIXED_OR_UNCLEAR',
+] as const;
+export type ClusterUnknownReason = (typeof CLUSTER_UNKNOWN_REASONS)[number];
+
+// Pure classifier — given the notes/fetchError provenance, returns the normalized
+// reason. Empty/absent provenance → UNKNOWN_REASON_NOT_RECORDED. Multiple distinct
+// categories on the same row → MIXED_OR_UNCLEAR. Never invents a reason.
+export function classifyClusterUnknownReason(
+  clusterNotes: string[] | string | null | undefined,
+  clusterFetchError: string | null | undefined,
+): ClusterUnknownReason {
+  const notes = Array.isArray(clusterNotes)
+    ? clusterNotes.map(n => String(n))
+    : (typeof clusterNotes === 'string' && clusterNotes.trim() ? [clusterNotes] : []);
+  const fetchError = typeof clusterFetchError === 'string' ? clusterFetchError.trim() : '';
+  const blob = notes.join(' | ').toLowerCase();
+  const matched = new Set<ClusterUnknownReason>();
+
+  if (/disabled|not requested|no live calls/.test(blob))        matched.add('NOT_REQUESTED');
+  if (/per-run cap|cap of \d+|cap reached/.test(blob))          matched.add('API_CAP_SKIPPED');
+  if (/http \d|429|timeout|fetch error|error/.test(blob) || fetchError !== '') matched.add('API_ERROR');
+  if (/cache miss|not cached/.test(blob))                       matched.add('CACHE_MISS');
+  if (/not found|no data|404|unknown token/.test(blob))         matched.add('NOT_FOUND');
+  if (/schema|missing field|malformed/.test(blob))              matched.add('SCHEMA_MISSING');
+
+  if (matched.size === 0) {
+    return notes.length === 0 ? 'UNKNOWN_REASON_NOT_RECORDED' : 'MIXED_OR_UNCLEAR';
+  }
+  if (matched.size === 1) return [...matched][0];
+  return 'MIXED_OR_UNCLEAR';
+}
+
 export interface LearningMemoryRow {
   contract:              string;
   cycleId:               string;
@@ -77,6 +122,13 @@ export interface LearningMemoryRow {
   outcomeSource:         string | null;
   gateDecision:          string | null;
   clusterRisk:           string | null;
+  // ── Cluster provenance / UNKNOWN reason (carried forward from cycle rows) ──────
+  // All optional so older memory rows written before this field existed still load.
+  clusterProvider?:      string | null;
+  clusterConfidence?:    string | number | null;
+  clusterNotes?:         string[] | string | null;
+  clusterUnknownReason?: ClusterUnknownReason | string | null;
+  clusterFetchError?:    string | null;
   ripperScore:           number | null;
   launchAgeBucket:       string | null;
   ageMinutes:            number | null;
@@ -234,6 +286,52 @@ function extractBubbleMapsScore(raw: Record<string, unknown> | undefined): numbe
   const direct = raw['bubbleMapsScore'];
   if (typeof direct === 'number' && Number.isFinite(direct)) return direct;
   return null;
+}
+
+// Carries cluster provenance forward from a cycle row's raw/ripperInput blocks.
+// Returns null for any field not present (backward/forward compatible). Computes
+// clusterUnknownReason ONLY when clusterRisk is UNKNOWN — never for CLEAN/WATCH/RISKY.
+interface ClusterProvenance {
+  clusterProvider:      string | null;
+  clusterConfidence:    string | number | null;
+  clusterNotes:         string[] | null;
+  clusterFetchError:    string | null;
+  clusterUnknownReason: ClusterUnknownReason | null;
+}
+
+function extractClusterProvenance(
+  raw: Record<string, unknown> | undefined,
+  ripperInput: Record<string, unknown> | undefined,
+  clusterRisk: string | null,
+): ClusterProvenance {
+  const provider =
+    typeof raw?.['clusterProvider']         === 'string' ? raw!['clusterProvider']         as string :
+    typeof ripperInput?.['clusterProvider'] === 'string' ? ripperInput!['clusterProvider'] as string : null;
+
+  const confRaw = raw?.['clusterConfidence'] ?? ripperInput?.['clusterConfidence'];
+  const confidence =
+    typeof confRaw === 'string' ? confRaw :
+    (typeof confRaw === 'number' && Number.isFinite(confRaw)) ? confRaw : null;
+
+  const notesRaw = raw?.['clusterNotes'] ?? ripperInput?.['clusterNotes'];
+  const notes = Array.isArray(notesRaw)
+    ? notesRaw.filter((n): n is string => typeof n === 'string')
+    : (typeof notesRaw === 'string' && notesRaw.trim() ? [notesRaw] : null);
+
+  const feRaw = raw?.['clusterFetchError'] ?? ripperInput?.['clusterFetchError'];
+  const fetchError = typeof feRaw === 'string' && feRaw.trim() ? feRaw : null;
+
+  const clusterUnknownReason = clusterRisk === 'UNKNOWN'
+    ? classifyClusterUnknownReason(notes, fetchError)
+    : null;
+
+  return {
+    clusterProvider:   provider,
+    clusterConfidence: confidence,
+    clusterNotes:      notes,
+    clusterFetchError: fetchError,
+    clusterUnknownReason,
+  };
 }
 
 function extractVlr(ns: Record<string, unknown> | undefined, raw: Record<string, unknown> | undefined): number | null {
@@ -475,9 +573,13 @@ export function runRipperLearningMemory(options: LearningMemoryOptions): Learnin
       // Normalize entryMomentumPct — accept both field names for robustness
       const m5v = f['entryMomentumPct'] ?? f['entryPriceChangeM5'];
       const entryMomentumPct = (typeof m5v === 'number' && Number.isFinite(m5v)) ? m5v : null;
+      const ripperInput = f['ripperInput'] as Record<string, unknown> | undefined;
       const clusterRisk     =
         typeof raw?.['clusterRisk'] === 'string' ? raw['clusterRisk'] as string :
+        typeof ripperInput?.['clusterRisk'] === 'string' ? ripperInput['clusterRisk'] as string :
         typeof f['clusterRisk']    === 'string' ? f['clusterRisk']    as string : null;
+      // Carry cluster provenance + normalized UNKNOWN reason forward from the cycle row.
+      const clusterProvenance = extractClusterProvenance(raw, ripperInput, clusterRisk);
       const liquidityUsd    =
         typeof ns?.['liquidityUsd'] === 'number' ? ns['liquidityUsd'] as number :
         typeof raw?.['liquidityUsd'] === 'number' ? raw['liquidityUsd'] as number : null;
@@ -558,6 +660,11 @@ export function runRipperLearningMemory(options: LearningMemoryOptions): Learnin
         outcomeSource,
         gateDecision,
         clusterRisk,
+        clusterProvider:       clusterProvenance.clusterProvider,
+        clusterConfidence:     clusterProvenance.clusterConfidence,
+        clusterNotes:          clusterProvenance.clusterNotes,
+        clusterUnknownReason:  clusterProvenance.clusterUnknownReason,
+        clusterFetchError:     clusterProvenance.clusterFetchError,
         ripperScore,
         launchAgeBucket,
         ageMinutes,
