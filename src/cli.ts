@@ -244,6 +244,7 @@ import { runPaperIntentCloseout, renderPaperIntentCloseout } from './token-grab/
 import { runEntryMomentumAudit, renderEntryMomentumAudit } from './token-grab/ripperEntryMomentumAudit';
 import { runBrainDoctrineReport, renderBrainDoctrineReport } from './token-grab/ripperBrainDoctrineReport';
 import { runPaperTradeSimulationReport, renderPaperTradeSimulationReport } from './token-grab/ripperPaperTradeSimulationReport';
+import { runLearningLoopAudit, renderLearningLoopAudit } from './token-grab/ripperLearningLoopPropagationAudit';
 import {
   runWatchObservationEnroll,
   runWatchObservationCloseout,
@@ -3783,6 +3784,19 @@ async function main(): Promise<void> {
           cyclesDir:   getArgValue('--cycles-dir')   ?? 'data/token-grab/ripper/cycles',
         });
         console.log(renderPaperTradeSimulationReport(ptsResult));
+        break;
+      }
+
+      case 'token:ripper-learning-loop-propagation-audit': {
+        const llaResult = runLearningLoopAudit({
+          dexWatchRunsDir: getArgValue('--dex-watch-runs-dir') ?? 'data/token-grab/dex-watch-runs',
+          cyclesDir:       getArgValue('--cycles-dir')         ?? 'data/token-grab/ripper/cycles',
+          intentsPath:     getArgValue('--intents-path')       ?? 'data/token-grab/ripper/paper-intents.jsonl',
+          obsPath:         getArgValue('--obs-path')           ?? 'data/token-grab/ripper/paper-intent-observations.jsonl',
+          memoryPath:      getArgValue('--memory-path')        ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          recent:          getArgValue('--recent') != null ? Number(getArgValue('--recent')) : undefined,
+        });
+        console.log(renderLearningLoopAudit(llaResult));
         break;
       }
 
