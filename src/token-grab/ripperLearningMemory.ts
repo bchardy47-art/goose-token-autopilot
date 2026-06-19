@@ -85,6 +85,7 @@ export interface LearningMemoryRow {
   bubbleMapsScore:       number | null;
   vlrBucket:             VlrBucket;
   entryDecision:         string | null;
+  entryMomentumPct?:     number | null;
   timingPath:            TimingPath;
   priceChangePct:        number | null;
   outcomeLabel:          OutcomeLabel;
@@ -471,6 +472,9 @@ export function runRipperLearningMemory(options: LearningMemoryOptions): Learnin
       const launchAgeBucket = typeof f['launchAgeBucket']  === 'string' ? f['launchAgeBucket']  as string : null;
       const ageMinutes      = typeof f['ageMinutes']       === 'number' ? f['ageMinutes']       as number : null;
       const entryDecision   = typeof f['entryDecision']    === 'string' ? f['entryDecision']    as string : null;
+      // Normalize entryMomentumPct — accept both field names for robustness
+      const m5v = f['entryMomentumPct'] ?? f['entryPriceChangeM5'];
+      const entryMomentumPct = (typeof m5v === 'number' && Number.isFinite(m5v)) ? m5v : null;
       const clusterRisk     =
         typeof raw?.['clusterRisk'] === 'string' ? raw['clusterRisk'] as string :
         typeof f['clusterRisk']    === 'string' ? f['clusterRisk']    as string : null;
@@ -562,6 +566,7 @@ export function runRipperLearningMemory(options: LearningMemoryOptions): Learnin
         bubbleMapsScore,
         vlrBucket,
         entryDecision,
+        entryMomentumPct,
         timingPath:            timingPathFromAge(ageMinutes),
         priceChangePct,
         outcomeLabel,

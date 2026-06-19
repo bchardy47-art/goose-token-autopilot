@@ -704,3 +704,85 @@ describe('dex-watch run observation source', () => {
     expect(result.paperOnly).toBe(true);
   });
 });
+
+// ── entryMomentumPct persistence ─────────────────────────────────────────────
+
+describe('entryMomentumPct persistence through cycle → intent → observation', () => {
+  it('cycle fixture with entryMomentumPct persists to paper intent', () => {
+    const fixture = { ...makeFixture(), entryMomentumPct: 14.7 };
+    writeCycleFile([fixture]);
+    const opts = makeOptions();
+    runRipperPaperAutopilotCycle(opts);
+    const intents = readPaperIntents(opts.intentsPath!);
+    expect(intents).toHaveLength(1);
+    expect(intents[0].entryMomentumPct).toBeCloseTo(14.7);
+  });
+
+  it('cycle fixture with entryPriceChangeM5 (alternate name) normalizes to entryMomentumPct on intent', () => {
+    const fixture = { ...makeFixture(), entryPriceChangeM5: 9.1 };
+    writeCycleFile([fixture]);
+    const opts = makeOptions();
+    runRipperPaperAutopilotCycle(opts);
+    const intents = readPaperIntents(opts.intentsPath!);
+    expect(intents[0].entryMomentumPct).toBeCloseTo(9.1);
+  });
+
+  it('cycle fixture without entryMomentumPct creates intent with entryMomentumPct=null', () => {
+    writeCycleFile([makeFixture()]);
+    const opts = makeOptions();
+    runRipperPaperAutopilotCycle(opts);
+    const intents = readPaperIntents(opts.intentsPath!);
+    expect(intents[0].entryMomentumPct).toBeNull();
+  });
+
+  it('negative entryMomentumPct persists correctly', () => {
+    const fixture = { ...makeFixture(), entryMomentumPct: -21.0 };
+    writeCycleFile([fixture]);
+    const opts = makeOptions();
+    runRipperPaperAutopilotCycle(opts);
+    const intents = readPaperIntents(opts.intentsPath!);
+    expect(intents[0].entryMomentumPct).toBeCloseTo(-21.0);
+  });
+
+  it('zero entryMomentumPct persists correctly', () => {
+    const fixture = { ...makeFixture(), entryMomentumPct: 0 };
+    writeCycleFile([fixture]);
+    const opts = makeOptions();
+    runRipperPaperAutopilotCycle(opts);
+    const intents = readPaperIntents(opts.intentsPath!);
+    expect(intents[0].entryMomentumPct).toBe(0);
+  });
+
+  it('written observation includes entryMomentumPct from intent', () => {
+    const capturedAt = at(-5 * 60_000);
+    const fixture = { ...makeFixture({ capturedAt, clusterRisk: 'WATCH' }), entryMomentumPct: 8.8 };
+    writeCycleFile([fixture]);
+    writeObsFile([makeObs({ contract: CONTRACT_A, capturedAt: at(-1 * 60_000), priceChangePct: 5 })]);
+    const opts = makeOptions({ nowMs: BASE_MS });
+    const result = runRipperPaperAutopilotCycle(opts);
+    expect(result.paperObsWritten).toBe(1);
+    const lines = fs.readFileSync(result.paperObsPath, 'utf-8').split('\n').filter(l => l.trim());
+    const row = JSON.parse(lines[0]) as Record<string, unknown>;
+    expect(row['entryMomentumPct']).toBeCloseTo(8.8);
+  });
+
+  it('written observation has entryMomentumPct=null when intent had none', () => {
+    writeCycleFile([makeFixture({ capturedAt: at(-5 * 60_000), clusterRisk: 'WATCH' })]);
+    writeObsFile([makeObs({ contract: CONTRACT_A, capturedAt: at(-1 * 60_000), priceChangePct: 3 })]);
+    const opts = makeOptions({ nowMs: BASE_MS });
+    const result = runRipperPaperAutopilotCycle(opts);
+    const lines = fs.readFileSync(result.paperObsPath, 'utf-8').split('\n').filter(l => l.trim());
+    const row = JSON.parse(lines[0]) as Record<string, unknown>;
+    expect(row['entryMomentumPct']).toBeNull();
+  });
+
+  it('entryMomentumPct does not affect BUY_APPROVED vs BUY_REJECTED decisions', () => {
+    // Same fixture with and without M5 — same count of intents created
+    const withM5    = { ...makeFixture({ contract: CONTRACT_A }), entryMomentumPct: 50 };
+    const withoutM5 = makeFixture({ contract: CONTRACT_B });
+    writeCycleFile([withM5, withoutM5]);
+    const opts = makeOptions();
+    const result = runRipperPaperAutopilotCycle(opts);
+    expect(result.intentsCreated).toBe(2);
+  });
+});

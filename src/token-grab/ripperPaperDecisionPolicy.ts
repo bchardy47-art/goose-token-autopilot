@@ -10,33 +10,35 @@ export type PaperIntentReason =
   | 'HIGH_QUALITY_WAIT10_SUBGROUP';
 
 export interface PaperIntent {
-  intentId:         string;
-  contract:         string;
-  symbol:           string | null;
-  approvedAt:       string;
-  targetEntryAt:    string;
-  paperEntryTiming: PaperEntryTiming;
-  reason:           PaperIntentReason;
-  sourceCycle:      string | null;
-  clusterRisk:      string;
-  ripperScore:      number | null;
-  launchAgeBucket:  string | null;
-  entryDecision:    string | null;
-  status:           PaperIntentStatus;
+  intentId:          string;
+  contract:          string;
+  symbol:            string | null;
+  approvedAt:        string;
+  targetEntryAt:     string;
+  paperEntryTiming:  PaperEntryTiming;
+  reason:            PaperIntentReason;
+  sourceCycle:       string | null;
+  clusterRisk:       string;
+  ripperScore:       number | null;
+  launchAgeBucket:   string | null;
+  entryDecision:     string | null;
+  entryMomentumPct?: number | null;
+  status:            PaperIntentStatus;
   realTradingLocked: true;
   paperOnly:         true;
   tradingExecuted:   0;
 }
 
 export interface ApprovedFixtureInput {
-  contract:         string;
-  symbol:           string | null;
-  approvedAt:       string;
-  clusterRisk:      string;
-  ripperScore:      number | null;
-  launchAgeBucket:  string | null;
-  entryDecision:    string | null;
-  sourceCycle?:     string | null;
+  contract:          string;
+  symbol:            string | null;
+  approvedAt:        string;
+  clusterRisk:       string;
+  ripperScore:       number | null;
+  launchAgeBucket:   string | null;
+  entryDecision:     string | null;
+  sourceCycle?:      string | null;
+  entryMomentumPct?: number | null;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -80,18 +82,19 @@ export function applyPaperDecisionPolicy(fixture: ApprovedFixtureInput): PaperIn
 
   return {
     intentId,
-    contract:         fixture.contract,
-    symbol:           fixture.symbol,
-    approvedAt:       fixture.approvedAt,
+    contract:          fixture.contract,
+    symbol:            fixture.symbol,
+    approvedAt:        fixture.approvedAt,
     targetEntryAt,
-    paperEntryTiming: timing,
+    paperEntryTiming:  timing,
     reason,
-    sourceCycle:      fixture.sourceCycle ?? null,
-    clusterRisk:      fixture.clusterRisk,
-    ripperScore:      fixture.ripperScore,
-    launchAgeBucket:  fixture.launchAgeBucket,
-    entryDecision:    fixture.entryDecision,
-    status:           'PLANNED',
+    sourceCycle:       fixture.sourceCycle ?? null,
+    clusterRisk:       fixture.clusterRisk,
+    ripperScore:       fixture.ripperScore,
+    launchAgeBucket:   fixture.launchAgeBucket,
+    entryDecision:     fixture.entryDecision,
+    entryMomentumPct:  fixture.entryMomentumPct ?? null,
+    status:            'PLANNED',
     realTradingLocked: true,
     paperOnly:         true,
     tradingExecuted:   0,

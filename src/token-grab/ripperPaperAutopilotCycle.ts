@@ -139,14 +139,18 @@ function extractApproved(fixtures: Record<string, unknown>[], sourceCycle: strin
     const clusterV = raw?.['clusterRisk'];
     const clusterRisk = (clusterV === 'CLEAN' || clusterV === 'WATCH' || clusterV === 'RISKY')
       ? clusterV : 'UNKNOWN';
+    // Normalize entryMomentumPct — accept both entryMomentumPct and entryPriceChangeM5
+    const m5v = f['entryMomentumPct'] ?? f['entryPriceChangeM5'];
+    const entryMomentumPct = (typeof m5v === 'number' && Number.isFinite(m5v)) ? m5v : null;
     approved.push({
       contract,
-      symbol:          (ns?.['symbol'] as string | undefined) ?? null,
-      approvedAt:      capturedAt,
+      symbol:           (ns?.['symbol'] as string | undefined) ?? null,
+      approvedAt:       capturedAt,
       clusterRisk,
-      ripperScore:     typeof f['ripperScore'] === 'number'     ? f['ripperScore']     : null,
-      launchAgeBucket: typeof f['launchAgeBucket'] === 'string' ? f['launchAgeBucket'] : null,
-      entryDecision:   typeof f['entryDecision']   === 'string' ? f['entryDecision']   : null,
+      ripperScore:      typeof f['ripperScore'] === 'number'     ? f['ripperScore']     : null,
+      launchAgeBucket:  typeof f['launchAgeBucket'] === 'string' ? f['launchAgeBucket'] : null,
+      entryDecision:    typeof f['entryDecision']   === 'string' ? f['entryDecision']   : null,
+      entryMomentumPct,
       sourceCycle,
     });
   }
@@ -350,6 +354,7 @@ export function runRipperPaperAutopilotCycle(
         source:            'paper-intent-obs',
         sourceKind:        'PAPER_INTENT_OBS',
         intentId:          u.intentId,
+        entryMomentumPct:  intent.entryMomentumPct ?? null,
         normalizedSignal:  { contract: intent.contract, priceChangePct: u.priceChangePct ?? null },
         raw:               { contract: intent.contract, priceChangePct: u.priceChangePct ?? null },
         realTradingLocked: true,

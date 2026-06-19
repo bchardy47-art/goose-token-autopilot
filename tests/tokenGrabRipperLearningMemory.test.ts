@@ -486,3 +486,76 @@ describe('runRipperLearningMemory — safety guarantees', () => {
     expect(out).toContain('NO_POLICY_CHANGE');
   });
 });
+
+// ── entryMomentumPct persistence ─────────────────────────────────────────────
+
+describe('entryMomentumPct persistence into learning memory', () => {
+  const CYCLE_FILE = 'cycle-2026-06-18-100000.jsonl';
+
+  it('cycle row with positive entryMomentumPct produces memory row with that value', () => {
+    const row = { ...makeCycleRow({ contract: CONTRACT_A, liquidityUsd: 20_000, ageMinutes: 5 }), entryMomentumPct: 18.4 };
+    writeJsonl(path.join(cyclesDir, CYCLE_FILE), [row]);
+    writeJsonl(paperIntentPath, [{ capturedAt: LATER_ISO, normalizedSignal: { contract: CONTRACT_A, priceChangePct: 5 } }]);
+    runDefault();
+    const mem = readMemory();
+    expect(mem).toHaveLength(1);
+    expect(mem[0].entryMomentumPct).toBeCloseTo(18.4);
+  });
+
+  it('cycle row with negative entryMomentumPct persists correctly', () => {
+    const row = { ...makeCycleRow({ contract: CONTRACT_A, liquidityUsd: 20_000, ageMinutes: 5 }), entryMomentumPct: -15.2 };
+    writeJsonl(path.join(cyclesDir, CYCLE_FILE), [row]);
+    writeJsonl(paperIntentPath, [{ capturedAt: LATER_ISO, normalizedSignal: { contract: CONTRACT_A, priceChangePct: 2 } }]);
+    runDefault();
+    const mem = readMemory();
+    expect(mem[0].entryMomentumPct).toBeCloseTo(-15.2);
+  });
+
+  it('cycle row with zero entryMomentumPct persists correctly', () => {
+    const row = { ...makeCycleRow({ contract: CONTRACT_A, liquidityUsd: 20_000, ageMinutes: 5 }), entryMomentumPct: 0 };
+    writeJsonl(path.join(cyclesDir, CYCLE_FILE), [row]);
+    writeJsonl(paperIntentPath, [{ capturedAt: LATER_ISO, normalizedSignal: { contract: CONTRACT_A, priceChangePct: 1 } }]);
+    runDefault();
+    const mem = readMemory();
+    expect(mem[0].entryMomentumPct).toBe(0);
+  });
+
+  it('cycle row without entryMomentumPct produces memory row with null', () => {
+    writeJsonl(path.join(cyclesDir, CYCLE_FILE), [makeCycleRow({ contract: CONTRACT_A, liquidityUsd: 20_000, ageMinutes: 5 })]);
+    writeJsonl(paperIntentPath, [{ capturedAt: LATER_ISO, normalizedSignal: { contract: CONTRACT_A, priceChangePct: 3 } }]);
+    runDefault();
+    const mem = readMemory();
+    expect(mem[0].entryMomentumPct).toBeNull();
+  });
+
+  it('cycle row with entryPriceChangeM5 (alternate name) normalizes to entryMomentumPct', () => {
+    const row = { ...makeCycleRow({ contract: CONTRACT_A, liquidityUsd: 20_000, ageMinutes: 5 }), entryPriceChangeM5: 7.7 };
+    writeJsonl(path.join(cyclesDir, CYCLE_FILE), [row]);
+    writeJsonl(paperIntentPath, [{ capturedAt: LATER_ISO, normalizedSignal: { contract: CONTRACT_A, priceChangePct: 4 } }]);
+    runDefault();
+    const mem = readMemory();
+    expect(mem[0].entryMomentumPct).toBeCloseTo(7.7);
+  });
+
+  it('entryMomentumPct from cycle preferred over entryPriceChangeM5 when both present', () => {
+    const row = { ...makeCycleRow({ contract: CONTRACT_A, liquidityUsd: 20_000, ageMinutes: 5 }), entryMomentumPct: 5.0, entryPriceChangeM5: 99.0 };
+    writeJsonl(path.join(cyclesDir, CYCLE_FILE), [row]);
+    writeJsonl(paperIntentPath, [{ capturedAt: LATER_ISO, normalizedSignal: { contract: CONTRACT_A, priceChangePct: 6 } }]);
+    runDefault();
+    const mem = readMemory();
+    expect(mem[0].entryMomentumPct).toBeCloseTo(5.0);
+  });
+
+  it('all other learning memory fields are unaffected by entryMomentumPct presence', () => {
+    const row = { ...makeCycleRow({ contract: CONTRACT_A, liquidityUsd: 25_000, ageMinutes: 5, clusterRisk: 'CLEAN' }), entryMomentumPct: 12.0 };
+    writeJsonl(path.join(cyclesDir, CYCLE_FILE), [row]);
+    writeJsonl(paperIntentPath, [{ capturedAt: LATER_ISO, normalizedSignal: { contract: CONTRACT_A, priceChangePct: 7 } }]);
+    runDefault();
+    const mem = readMemory();
+    expect(mem[0].contract).toBe(CONTRACT_A);
+    expect(mem[0].liquidityBucket).toBe('LIQ_10K_30K');
+    expect(mem[0].reportOnly).toBe(true);
+    expect(mem[0].realTradingLocked).toBe(true);
+    expect(mem[0].tradingExecuted).toBe(0);
+  });
+});

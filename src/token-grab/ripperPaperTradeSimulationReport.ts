@@ -125,28 +125,30 @@ export interface PaperTradeSimulationOptions {
 // ── Internal raw types ─────────────────────────────────────────────────────────
 
 interface RawIntent {
-  intentId?:        string;
-  contract?:        string;
-  symbol?:          string;
-  status?:          string;
-  approvedAt?:      string;
-  targetEntryAt?:   string;
-  paperEntryTiming?: string;
-  reason?:          string;
-  sourceCycle?:     string;
-  clusterRisk?:     string | null;
-  ripperScore?:     number | null;
-  launchAgeBucket?: string | null;
-  entryDecision?:   string | null;
-  observedAt?:      string;
-  priceChangePct?:  number | null;
+  intentId?:          string;
+  contract?:          string;
+  symbol?:            string;
+  status?:            string;
+  approvedAt?:        string;
+  targetEntryAt?:     string;
+  paperEntryTiming?:  string;
+  reason?:            string;
+  sourceCycle?:       string;
+  clusterRisk?:       string | null;
+  ripperScore?:       number | null;
+  launchAgeBucket?:   string | null;
+  entryDecision?:     string | null;
+  entryMomentumPct?:  number | null;
+  observedAt?:        string;
+  priceChangePct?:    number | null;
 }
 
 interface MemRow {
-  contract?:        string;
-  liquidityBucket?: string | null;
-  vlrBucket?:       string | null;
-  timingPath?:      string | null;
+  contract?:          string;
+  liquidityBucket?:   string | null;
+  vlrBucket?:         string | null;
+  timingPath?:        string | null;
+  entryMomentumPct?:  number | null;
 }
 
 interface CycleRow {
@@ -291,7 +293,11 @@ export function runPaperTradeSimulationReport(
     const mem = memByContract.get(intent.contract);
     const cycleRow = cycleCache.get(intent.sourceCycle ?? '')?.get(intent.contract);
 
-    const m5raw = cycleRow?.entryMomentumPct ?? null;
+    // Prefer: intent (direct) → memory row → cycle file (fallback join)
+    const m5raw =
+      intent.entryMomentumPct != null ? intent.entryMomentumPct :
+      mem?.entryMomentumPct   != null ? mem.entryMomentumPct    :
+      (cycleRow?.entryMomentumPct ?? null);
     const m5 = (typeof m5raw === 'number' && Number.isFinite(m5raw)) ? m5raw : null;
 
     simulatedTrades.push({

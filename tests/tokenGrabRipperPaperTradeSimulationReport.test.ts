@@ -586,3 +586,84 @@ describe('renderPaperTradeSimulationReport — section headers', () => {
     expect(rendered).toContain('Do not call token:paper-buy');
   });
 });
+
+// ── Tests: entryMomentumPct priority (intent → memory → cycle) ───────────────
+
+describe('runPaperTradeSimulationReport — entryMomentumPct source priority', () => {
+  const CYCLE_SLUG = 'cycle-2026-06-18-100000';
+
+  it('uses entryMomentumPct from intent when present (does not need cycle)', () => {
+    writeJsonl(intentsPath, [makeIntent({ entryMomentumPct: 22.5 })]);
+    writeJsonl(memoryPath, [makeMemRow('CONTRACT_A')]);
+    // No cycle file written — proves intent is the source
+    const r = runPaperTradeSimulationReport({ intentsPath, memoryPath, cyclesDir });
+    expect(r.simulatedTrades[0].entryMomentumPct).toBeCloseTo(22.5);
+  });
+
+  it('uses entryMomentumPct from memory row when intent lacks it', () => {
+    writeJsonl(intentsPath, [makeIntent()]);  // no entryMomentumPct on intent
+    writeJsonl(memoryPath, [makeMemRow('CONTRACT_A', { entryMomentumPct: 11.1 })]);
+    // No cycle file — proves memory is the source
+    const r = runPaperTradeSimulationReport({ intentsPath, memoryPath, cyclesDir });
+    expect(r.simulatedTrades[0].entryMomentumPct).toBeCloseTo(11.1);
+  });
+
+  it('falls back to cycle file when intent and memory lack entryMomentumPct', () => {
+    writeJsonl(intentsPath, [makeIntent()]);
+    writeJsonl(memoryPath, [makeMemRow('CONTRACT_A')]);
+    const cycleFile = path.join(cyclesDir, `${CYCLE_SLUG}.jsonl`);
+    writeJsonl(cycleFile, [makeCycleRow('CONTRACT_A', {
+      entryMomentumPct: 7.3,
+      entryMomentumSource: 'DEX_SCREENER_M5',
+      entryMomentumWindowLabel: 'M5',
+    })]);
+    const r = runPaperTradeSimulationReport({ intentsPath, memoryPath, cyclesDir });
+    expect(r.simulatedTrades[0].entryMomentumPct).toBeCloseTo(7.3);
+  });
+
+  it('intent entryMomentumPct takes priority over memory and cycle', () => {
+    writeJsonl(intentsPath, [makeIntent({ entryMomentumPct: 5.5 })]);
+    writeJsonl(memoryPath, [makeMemRow('CONTRACT_A', { entryMomentumPct: 99.0 })]);
+    const cycleFile = path.join(cyclesDir, `${CYCLE_SLUG}.jsonl`);
+    writeJsonl(cycleFile, [makeCycleRow('CONTRACT_A', { entryMomentumPct: 77.0 })]);
+    const r = runPaperTradeSimulationReport({ intentsPath, memoryPath, cyclesDir });
+    expect(r.simulatedTrades[0].entryMomentumPct).toBeCloseTo(5.5);
+  });
+
+  it('memory entryMomentumPct takes priority over cycle when intent has none', () => {
+    writeJsonl(intentsPath, [makeIntent()]);
+    writeJsonl(memoryPath, [makeMemRow('CONTRACT_A', { entryMomentumPct: 33.3 })]);
+    const cycleFile = path.join(cyclesDir, `${CYCLE_SLUG}.jsonl`);
+    writeJsonl(cycleFile, [makeCycleRow('CONTRACT_A', { entryMomentumPct: 88.0 })]);
+    const r = runPaperTradeSimulationReport({ intentsPath, memoryPath, cyclesDir });
+    expect(r.simulatedTrades[0].entryMomentumPct).toBeCloseTo(33.3);
+  });
+
+  it('entryMomentumPct is null when absent from intent, memory, and cycle', () => {
+    writeJsonl(intentsPath, [makeIntent()]);
+    writeJsonl(memoryPath, [makeMemRow('CONTRACT_A')]);
+    // No cycle file written
+    const r = runPaperTradeSimulationReport({ intentsPath, memoryPath, cyclesDir });
+    expect(r.simulatedTrades[0].entryMomentumPct).toBeNull();
+  });
+
+  it('backward compat: old intents without entryMomentumPct still produce simulated trades', () => {
+    // Old-style intent — no entryMomentumPct field at all
+    const oldIntent = makeIntent();
+    delete (oldIntent as Record<string, unknown>)['entryMomentumPct'];
+    writeJsonl(intentsPath, [oldIntent]);
+    writeJsonl(memoryPath, [makeMemRow('CONTRACT_A')]);
+    const r = runPaperTradeSimulationReport({ intentsPath, memoryPath, cyclesDir });
+    expect(r.totalSimulated).toBe(1);
+    expect(r.simulatedTrades[0].entryMomentumPct).toBeNull();
+    expect(r.simulatedTrades[0].m5Band).toBe('UNAVAILABLE');
+  });
+
+  it('negative entryMomentumPct on intent persists to simulated trade', () => {
+    writeJsonl(intentsPath, [makeIntent({ entryMomentumPct: -25.0 })]);
+    writeJsonl(memoryPath, [makeMemRow('CONTRACT_A')]);
+    const r = runPaperTradeSimulationReport({ intentsPath, memoryPath, cyclesDir });
+    expect(r.simulatedTrades[0].entryMomentumPct).toBeCloseTo(-25.0);
+    expect(r.simulatedTrades[0].m5Band).toBe('M5 <= -20');
+  });
+});

@@ -201,3 +201,40 @@ describe('applyPolicyToFixtures', () => {
     expect(intents[1].paperEntryTiming).toBe('ENTER_NOW');
   });
 });
+
+// ── entryMomentumPct persistence ─────────────────────────────────────────────
+
+describe('applyPaperDecisionPolicy — entryMomentumPct', () => {
+  it('carries positive entryMomentumPct through to intent', () => {
+    const intent = applyPaperDecisionPolicy(makeFixture({ entryMomentumPct: 12.5 }));
+    expect(intent.entryMomentumPct).toBeCloseTo(12.5);
+  });
+
+  it('carries negative entryMomentumPct through to intent', () => {
+    const intent = applyPaperDecisionPolicy(makeFixture({ entryMomentumPct: -8.3 }));
+    expect(intent.entryMomentumPct).toBeCloseTo(-8.3);
+  });
+
+  it('carries zero entryMomentumPct through to intent', () => {
+    const intent = applyPaperDecisionPolicy(makeFixture({ entryMomentumPct: 0 }));
+    expect(intent.entryMomentumPct).toBe(0);
+  });
+
+  it('sets entryMomentumPct to null when fixture has none', () => {
+    const intent = applyPaperDecisionPolicy(makeFixture());
+    expect(intent.entryMomentumPct).toBeNull();
+  });
+
+  it('sets entryMomentumPct to null when fixture has undefined', () => {
+    const fixture = makeFixture();
+    delete (fixture as Partial<typeof fixture>).entryMomentumPct;
+    const intent = applyPaperDecisionPolicy(fixture);
+    expect(intent.entryMomentumPct).toBeNull();
+  });
+
+  it('entryMomentumPct does not affect paperEntryTiming decision', () => {
+    const withM5    = applyPaperDecisionPolicy(makeFixture({ entryMomentumPct: 50 }));
+    const withoutM5 = applyPaperDecisionPolicy(makeFixture());
+    expect(withM5.paperEntryTiming).toBe(withoutM5.paperEntryTiming);
+  });
+});
