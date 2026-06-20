@@ -52,6 +52,10 @@ function base(over: Partial<LiveRunnerOptions> = {}): LiveRunnerOptions {
     ledgerPath, now: NOW, latestCycleTime: '2026-06-20T11:58:00Z',
     loadCandidates: () => [goodCandidate()],
     fetchFn: QUOTE_STUB,
+    // Point the cluster resolver at the (empty) tmp dir so it reads no real files —
+    // deterministic: lookups return null, so raw cluster is preserved unchanged.
+    cachePath: path.join(root, 'bubblemaps-cache.jsonl'),
+    memoryPath: path.join(root, 'learning-memory.jsonl'),
     ...over,
   };
 }
@@ -163,5 +167,60 @@ describe('Live Runner v1', () => {
     const adapter = createExecutionAdapter('dry-run', cfg, 'https://rpc', { fetchFn });
     const r = await runLiveRunner(base({ mode: 'dry-run', env: {}, adapter }));
     expect(r.candidateOutcomes[0].action).toBe('PLANNED_BUY');
+  });
+
+  it('cluster resolver enriches a raw-UNKNOWN candidate to CLEAN (fresh) → reaches quote stage', async () => {
+    // Raw candidate is UNKNOWN; an injected resolver returns CLEAN (fresh cache).
+    const unknownCand: RiskCandidate = goodCandidate({ contract: 'ENRICHME', clusterRisk: 'UNKNOWN' });
+    const r = await runLiveRunner(base({
+      mode: 'dry-run', env: {},
+      loadCandidates: () => [unknownCand],
+      resolveCluster: () => ({
+        clusterRisk: 'CLEAN', clusterProvider: 'bubblemaps', clusterConfidence: 'HIGH',
+        clusterUnknownReason: null, clusterFetchError: null, sourceUsed: 'cache', isFresh: true,
+        explanation: 'fresh cache CLEAN',
+      }),
+    }));
+    const outcome = r.candidateOutcomes.find(c => c.contract === 'ENRICHME')!;
+    expect(outcome.rawClusterRisk).toBe('UNKNOWN');
+    expect(outcome.resolvedClusterRisk).toBe('CLEAN');
+    expect(outcome.clusterSource).toBe('cache');
+    expect(outcome.gatePassed).toBe(true);
+    expect(outcome.action).toBe('PLANNED_BUY');     // reached quote → planned buy in dry-run
+    const events = readLedger(ledgerPath);
+    expect(events.some(e => e.type === 'LIVE_QUOTE_RECEIVED' && e.contract === 'ENRICHME')).toBe(true);
+  });
+
+  it('cluster resolver keeps UNKNOWN as UNKNOWN when no fresh source → still blocked', async () => {
+    const unknownCand: RiskCandidate = goodCandidate({ contract: 'STILLUNK', clusterRisk: 'UNKNOWN' });
+    const r = await runLiveRunner(base({
+      mode: 'dry-run', env: {},
+      loadCandidates: () => [unknownCand],
+      resolveCluster: () => ({
+        clusterRisk: 'UNKNOWN', clusterProvider: null, clusterConfidence: null,
+        clusterUnknownReason: null, clusterFetchError: null, sourceUsed: 'unresolved', isFresh: false,
+        explanation: 'no fresh source',
+      }),
+    }));
+    const outcome = r.candidateOutcomes.find(c => c.contract === 'STILLUNK')!;
+    expect(outcome.gatePassed).toBe(false);
+    expect(outcome.resolvedClusterRisk).toBe('UNKNOWN');
+    expect(outcome.reasons.join(' ')).toMatch(/UNKNOWN/);
+  });
+
+  it('cluster resolver RISKY blocks even if raw was UNKNOWN (risk preserved)', async () => {
+    const unknownCand: RiskCandidate = goodCandidate({ contract: 'RISKYNOW', clusterRisk: 'UNKNOWN' });
+    const r = await runLiveRunner(base({
+      mode: 'dry-run', env: {},
+      loadCandidates: () => [unknownCand],
+      resolveCluster: () => ({
+        clusterRisk: 'RISKY', clusterProvider: 'bubblemaps', clusterConfidence: 'HIGH',
+        clusterUnknownReason: null, clusterFetchError: null, sourceUsed: 'cache', isFresh: true,
+        explanation: 'cache RISKY',
+      }),
+    }));
+    const outcome = r.candidateOutcomes.find(c => c.contract === 'RISKYNOW')!;
+    expect(outcome.gatePassed).toBe(false);
+    expect(outcome.resolvedClusterRisk).toBe('RISKY');
   });
 });

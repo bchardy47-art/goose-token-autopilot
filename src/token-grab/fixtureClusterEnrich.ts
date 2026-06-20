@@ -8,6 +8,10 @@ import {
   type ClusterRiskProvider,
   type ClusterRiskResult,
 } from './clusterRiskProvider';
+import {
+  callPriorityTier,
+  type TargetingFixture,
+} from './ripperBubbleMapsTargeting';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -23,6 +27,24 @@ export interface FixtureClusterEnrichOptions {
   apiUrl?:      string;
   apiKey?:      string;
   generatedAt?: string;
+  // ── Approved+M5+live-runner-first targeting (opt-in; default off keeps order stable) ──
+  // When set, the capped BubbleMaps budget is spent in priority order so the live
+  // runner's approved+M5+UNKNOWN candidates are covered FIRST. Never changes gates,
+  // never re-cleans a known result, never forces UNKNOWN→CLEAN.
+  prioritize?:             boolean;
+  topLiveRunnerContracts?: string[];
+}
+
+// Map a fixture to the targeting view (gate + M5 + current clusterRisk).
+function toTargetingFixture(f: LiveRipperFixture): TargetingFixture {
+  const raw = f.raw as Record<string, unknown> | undefined;
+  return {
+    contract: extractContractForCluster(f),
+    buyGateDecision: (f.buyGateDecision as string | undefined) ?? null,
+    entryDecision: (f.entryDecision as string | undefined) ?? null,
+    entryMomentumPct: typeof f.entryMomentumPct === 'number' ? f.entryMomentumPct : null,
+    clusterRisk: typeof raw?.['clusterRisk'] === 'string' ? (raw['clusterRisk'] as string) : null,
+  };
 }
 
 export interface FixtureClusterEnrichResult {
@@ -229,8 +251,20 @@ export async function runFixtureClusterEnrich(
     return { inputPath, outputPath, inputMissing: true, offlineMode: offline, dryRun, configNote: null, ...base };
   }
 
-  const fixtures = readFixturesFromJsonl(inputPath);
-  base.fixturesRead = fixtures.length;
+  const fixturesRaw = readFixturesFromJsonl(inputPath);
+  base.fixturesRead = fixturesRaw.length;
+
+  // ── Approved+M5+live-runner-first targeting (opt-in) ──
+  // Reorder so the capped budget is spent on the highest-priority UNKNOWN candidates
+  // first. Stable sort by call priority tier; original order within a tier is preserved.
+  const topSet = new Set(options.topLiveRunnerContracts ?? []);
+  const tierOf = (f: LiveRipperFixture): number =>
+    options.prioritize ? callPriorityTier(toTargetingFixture(f), topSet) : 99;
+  const fixtures = options.prioritize
+    ? fixturesRaw.map((f, i) => ({ f, i, tier: tierOf(f) }))
+        .sort((a, b) => (a.tier - b.tier) || (a.i - b.i))
+        .map(x => x.f)
+    : fixturesRaw;
 
   let provider: ClusterRiskProvider;
   let configNote: string | null = null;
@@ -254,6 +288,18 @@ export async function runFixtureClusterEnrich(
     const underLimit = limitN === undefined || candidatesEvaluated < limitN;
 
     if (!underLimit) {
+      if (options.prioritize) {
+        const tier = tierOf(fixture);
+        const praw = (fixture.raw ?? {}) as Record<string, unknown>;
+        if (tier < 99) {   // a real UNKNOWN target that the cap skipped
+          praw['bubbleMapsCallPriorityTier']  = tier;
+          praw['bubbleMapsSelectedForCall']   = false;
+          praw['bubbleMapsLiveCallUsed']      = false;
+          praw['bubbleMapsCacheHit']          = false;
+          praw['bubbleMapsCallSkippedReason'] = 'CAP_REACHED';
+          (fixture as unknown as Record<string, unknown>)['raw'] = praw;
+        }
+      }
       enriched.push(fixture);
       continue;
     }
@@ -281,6 +327,24 @@ export async function runFixtureClusterEnrich(
       }
     }
     if (pr.patched) fixturesPatched++;
+
+    // ── Stamp call-allocation metadata (only when targeting is enabled) ──
+    if (options.prioritize) {
+      const tier = tierOf(patched);
+      const praw = (patched.raw ?? {}) as Record<string, unknown>;
+      const resultRisk = clusterRiskFromRaw(praw);
+      const isTarget = tier < 99;
+      const liveCallUsed = pr.attempted && !offline;
+      const cacheHit = isTarget && !pr.attempted && pr.patched;  // resolved without a live attempt
+      praw['bubbleMapsCallPriorityTier']  = tier;
+      praw['bubbleMapsSelectedForCall']   = isTarget;
+      praw['bubbleMapsLiveCallUsed']      = liveCallUsed;
+      praw['bubbleMapsCacheHit']          = cacheHit;
+      praw['bubbleMapsCallResult']        = resultRisk;
+      praw['bubbleMapsCallSkippedReason'] =
+        !isTarget ? 'ALREADY_KNOWN' : cacheHit ? 'CACHE_HIT_FRESH' : liveCallUsed ? null : 'NOT_ATTEMPTED';
+      (patched as unknown as Record<string, unknown>)['raw'] = praw;
+    }
 
     enriched.push(patched);
 

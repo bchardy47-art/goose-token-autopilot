@@ -259,6 +259,8 @@ import { runLiveRunner, renderLiveRunner } from './token-grab/ripperLiveRunner';
 import { runLiveDaemon, renderLiveDaemon } from './token-grab/ripperLiveDaemon';
 import { runLiveControl, renderLiveControl } from './token-grab/ripperLiveControl';
 import { runFinalAcceptanceLive, renderFinalAcceptanceLive } from './token-grab/ripperFinalAcceptanceLive';
+import { runCoverageDiagnostic, renderCoverageDiagnostic } from './token-grab/ripperBubbleMapsLiveRunnerCoverageDiagnostic';
+import { runFinalAcceptanceProduct, renderFinalAcceptanceProduct } from './token-grab/ripperFinalAcceptanceProduct';
 import {
   runWatchObservationEnroll,
   runWatchObservationCloseout,
@@ -4022,6 +4024,37 @@ async function main(): Promise<void> {
         else console.log(renderFinalAcceptanceLive(acc));
         // Non-zero exit if not finished, so CI can gate on it.
         if (acc.FINISHED_FOR_AUTONOMOUS_REAL_TRADING_CAPABILITY !== 'YES') process.exitCode = 1;
+        break;
+      }
+
+      case 'token:ripper-bubblemaps-live-runner-coverage-diagnostic': {
+        const cap = getArgValue('--bubblemaps-cap');
+        const covDiag = runCoverageDiagnostic({
+          cyclesDir:  getArgValue('--cycles-dir')  ?? 'data/token-grab/ripper/cycles',
+          cachePath:  getArgValue('--cache-path')  ?? undefined,
+          memoryPath: getArgValue('--memory-path') ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          topN:       getArgValue('--top') != null ? Number(getArgValue('--top')) : undefined,
+          observedPerRunCap: cap != null ? Number(cap) : undefined,
+          // The live runner now resolves cluster via cache+memory before the gate
+          // (resolver default-on), and approved+M5+live-runner-first targeting is
+          // implemented in the call lane. These reflect the wired post-fix state.
+          liveRunnerReadsRawRows:   false,
+          approvedFirstImplemented: true,
+        });
+        if (process.argv.includes('--json')) console.log(JSON.stringify(covDiag, null, 2));
+        else console.log(renderCoverageDiagnostic(covDiag));
+        break;
+      }
+
+      case 'token:ripper-final-acceptance-product': {
+        const prodAcc = await runFinalAcceptanceProduct({
+          cyclesDir:  getArgValue('--cycles-dir')  ?? 'data/token-grab/ripper/cycles',
+          cachePath:  getArgValue('--cache-path')  ?? undefined,
+          memoryPath: getArgValue('--memory-path') ?? 'data/token-grab/ripper/learning-memory.jsonl',
+        });
+        if (process.argv.includes('--json')) console.log(JSON.stringify(prodAcc, null, 2));
+        else console.log(renderFinalAcceptanceProduct(prodAcc));
+        if (prodAcc.FINISHED_FOR_AUTONOMOUS_TRADING_PRODUCT !== 'YES') process.exitCode = 1;
         break;
       }
 

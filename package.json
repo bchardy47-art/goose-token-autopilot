@@ -185,6 +185,8 @@
     "token:ripper-live-daemon": "tsx src/cli.ts token:ripper-live-daemon",
     "token:ripper-live-control": "tsx src/cli.ts token:ripper-live-control",
     "token:ripper-final-acceptance-live": "tsx src/cli.ts token:ripper-final-acceptance-live",
+    "token:ripper-bubblemaps-live-runner-coverage-diagnostic": "tsx src/cli.ts token:ripper-bubblemaps-live-runner-coverage-diagnostic",
+    "token:ripper-final-acceptance-product": "tsx src/cli.ts token:ripper-final-acceptance-product",
     "token:prime-gate-audit": "tsx src/cli.ts token:prime-gate-audit",
     "token:holder-risk-audit": "tsx src/cli.ts token:holder-risk-audit",
     "token:fixture-holder-enrich": "tsx src/cli.ts token:fixture-holder-enrich",

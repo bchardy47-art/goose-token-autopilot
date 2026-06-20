@@ -24,6 +24,10 @@ import {
 } from './ripperRealExecutionAdapter';
 import { evaluateLiveRiskGate, type RiskCandidate } from './ripperLiveRiskGate';
 import {
+  resolveCandidateClusterForLiveRisk, buildCacheLookup, buildMemoryLookup,
+  type ResolvedCluster, type ResolverContext,
+} from './ripperCandidateClusterResolver';
+import {
   recoverOpenPositions, priceOpenPositions, evaluateExit, buildExitOrder, closePosition,
   DEFAULT_EXIT_POLICY, type Pricer, type ExitPolicy,
 } from './ripperLivePositionManager';
@@ -47,6 +51,8 @@ export interface LiveRunnerOptions {
   // paths / injection
   cyclesDir?:       string;
   ledgerPath?:      string;
+  cachePath?:       string;
+  memoryPath?:      string;
   runId?:           string;
   now?:             Date;
   // dependency injection (tests)
@@ -60,6 +66,11 @@ export interface LiveRunnerOptions {
   exitPolicy?:      ExitPolicy;
   fetchFn?:         FetchLike;
   solUsdPrice?:     number;
+  // Cluster resolver — enriches raw cycle clusterRisk with fresh cache/memory before
+  // the risk gate. Injectable for tests; default reads the real cache + memory files.
+  // Disable (resolveCluster=false) to evaluate raw rows only.
+  resolveCluster?:  boolean | ((candidate: RiskCandidate, now: Date) => ResolvedCluster);
+  resolverContext?: ResolverContext;
 }
 
 export interface CandidateOutcome {
@@ -70,6 +81,9 @@ export interface CandidateOutcome {
   reasons:     string[];
   txSignature: string | null;
   quoteId:     string | null;
+  rawClusterRisk?:      string | null;   // what the cycle row said
+  resolvedClusterRisk?: string | null;   // after cache/memory enrichment (UNKNOWN never→CLEAN)
+  clusterSource?:       string;          // cycle | cache | memory | unresolved
 }
 
 export interface ExitOutcome {
@@ -208,8 +222,21 @@ export async function runLiveRunner(opts: LiveRunnerOptions = {}): Promise<LiveR
   // Track open positions as we (hypothetically) add this run, so the gate respects max-open.
   const runningOpen = [...openPositions];
 
+  // ── Cluster resolver: enrich raw cycle clusterRisk with FRESH cache/memory before
+  // the risk gate. UNKNOWN is never turned into CLEAN; stale sources cannot clean. ──
+  const resolver = buildClusterResolver(opts, now);
+
   for (const cand of considered) {
     append({ type: 'LIVE_ENTRY_SIGNAL', contract: cand.contract, symbol: cand.symbol, side: 'BUY', decision: cand.buyGateDecision });
+
+    const rawClusterRisk = cand.clusterRisk;
+    let clusterSource = 'cycle';
+    if (resolver) {
+      const resolved = resolver(cand, now);
+      cand.clusterRisk = resolved.clusterRisk;   // safety-first; UNKNOWN never → CLEAN
+      clusterSource = resolved.sourceUsed;
+    }
+
     const gate = evaluateLiveRiskGate({
       candidate: cand, intendedUsd, mode, config,
       openPositions: runningOpen, tradesToday, dailyLoss, latestCycleTime, now,
@@ -217,7 +244,7 @@ export async function runLiveRunner(opts: LiveRunnerOptions = {}): Promise<LiveR
     });
     if (!gate.allow) {
       append({ type: 'LIVE_ENTRY_PRECHECK_BLOCKED', contract: cand.contract, reason: gate.blockReasons.join('; '), riskSnapshot: { ...gate.riskSnapshot } });
-      candidateOutcomes.push({ contract: cand.contract, symbol: cand.symbol, gatePassed: false, action: 'BLOCKED', reasons: gate.blockReasons, txSignature: null, quoteId: null });
+      candidateOutcomes.push({ contract: cand.contract, symbol: cand.symbol, gatePassed: false, action: 'BLOCKED', reasons: gate.blockReasons, txSignature: null, quoteId: null, rawClusterRisk, resolvedClusterRisk: cand.clusterRisk, clusterSource });
       continue;
     }
     append({ type: 'LIVE_ENTRY_PRECHECK_PASSED', contract: cand.contract, riskSnapshot: { ...gate.riskSnapshot }, intendedUsd });
@@ -234,7 +261,7 @@ export async function runLiveRunner(opts: LiveRunnerOptions = {}): Promise<LiveR
       if (dryRun) {
         // Plan only — never build/submit.
         append({ type: 'LIVE_BUY_SUBMITTED', contract: cand.contract, side: 'BUY', quoteId, intendedUsd, reason: 'DRY_RUN_PLANNED (not submitted)' });
-        candidateOutcomes.push({ contract: cand.contract, symbol: cand.symbol, gatePassed: true, action: 'PLANNED_BUY', reasons: [], txSignature: null, quoteId });
+        candidateOutcomes.push({ contract: cand.contract, symbol: cand.symbol, gatePassed: true, action: 'PLANNED_BUY', reasons: [], txSignature: null, quoteId, rawClusterRisk, resolvedClusterRisk: cand.clusterRisk, clusterSource });
         continue;
       }
       // mock or live: build + submit (adapter enforces dry-run/unlock rules).
@@ -245,14 +272,14 @@ export async function runLiveRunner(opts: LiveRunnerOptions = {}): Promise<LiveR
         append({ type: 'LIVE_BUY_CONFIRMED', contract: cand.contract, side: 'BUY', txSignature: res.txSignature, intendedUsd, actualUsd: intendedUsd });
         append({ type: 'LIVE_POSITION_OPENED', contract: cand.contract, symbol: cand.symbol, entryPrice: priceFromQuote(quote.inAmountRaw, quote.outAmountRaw), tokenAmount: Number(quote.outAmountRaw), intendedUsd, actualUsd: intendedUsd, txSignature: res.txSignature });
         runningOpen.push({ contract: cand.contract, symbol: cand.symbol, runId, openedAt: now.toISOString(), entryPrice: null, tokenAmount: Number(quote.outAmountRaw), intendedUsd, actualUsd: intendedUsd, txSignature: res.txSignature, walletPublicKey: config.walletPublicKey, mode });
-        candidateOutcomes.push({ contract: cand.contract, symbol: cand.symbol, gatePassed: true, action: mock ? 'MOCK_BUY' : 'LIVE_BUY_SUBMITTED', reasons: [], txSignature: res.txSignature, quoteId });
+        candidateOutcomes.push({ contract: cand.contract, symbol: cand.symbol, gatePassed: true, action: mock ? 'MOCK_BUY' : 'LIVE_BUY_SUBMITTED', reasons: [], txSignature: res.txSignature, quoteId, rawClusterRisk, resolvedClusterRisk: cand.clusterRisk, clusterSource });
       } else {
         append({ type: 'LIVE_BUY_FAILED', contract: cand.contract, reason: res.reason });
-        candidateOutcomes.push({ contract: cand.contract, symbol: cand.symbol, gatePassed: true, action: 'BLOCKED', reasons: [res.reason], txSignature: null, quoteId });
+        candidateOutcomes.push({ contract: cand.contract, symbol: cand.symbol, gatePassed: true, action: 'BLOCKED', reasons: [res.reason], txSignature: null, quoteId, rawClusterRisk, resolvedClusterRisk: cand.clusterRisk, clusterSource });
       }
     } catch (err) {
       append({ type: 'LIVE_BUY_FAILED', contract: cand.contract, reason: errMsg(err) });
-      candidateOutcomes.push({ contract: cand.contract, symbol: cand.symbol, gatePassed: true, action: 'BLOCKED', reasons: [errMsg(err)], txSignature: null, quoteId });
+      candidateOutcomes.push({ contract: cand.contract, symbol: cand.symbol, gatePassed: true, action: 'BLOCKED', reasons: [errMsg(err)], txSignature: null, quoteId, rawClusterRisk, resolvedClusterRisk: cand.clusterRisk, clusterSource });
     }
   }
 
@@ -272,6 +299,25 @@ function blockedResult(runId: string, mode: ExecutionMode, config: LiveTradingCo
     openPositionsAtStart: 0, exitsEvaluated: [], candidatesConsidered: 0, candidateOutcomes: [],
     tradesToday: 0, dailyLoss: 0, ledgerEventsWritten: writes, safetyFlags,
   };
+}
+
+// Build the cluster resolver used before the risk gate. Returns null when disabled.
+// Default reads the real BubbleMaps cache + learning memory (read once, indexed).
+function buildClusterResolver(
+  opts: LiveRunnerOptions,
+  now: Date,
+): ((cand: RiskCandidate, now: Date) => ResolvedCluster) | null {
+  if (opts.resolveCluster === false) return null;
+  if (typeof opts.resolveCluster === 'function') return opts.resolveCluster;
+  const ctx: ResolverContext = opts.resolverContext ?? {
+    now,
+    cacheLookup: buildCacheLookup(opts.cachePath),
+    memoryLookup: buildMemoryLookup(opts.memoryPath),
+  };
+  return (cand: RiskCandidate) => resolveCandidateClusterForLiveRisk(
+    { contract: cand.contract, clusterRisk: cand.clusterRisk },
+    { ...ctx, now: ctx.now ?? now },
+  );
 }
 
 function priceFromQuote(inRaw: string, outRaw: string): number | null {
