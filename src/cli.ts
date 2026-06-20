@@ -249,6 +249,11 @@ import { runM5EvidenceDashboard, renderM5EvidenceDashboard } from './token-grab/
 import { runM5UsableSampleDeepDive, renderM5UsableSampleDeepDive } from './token-grab/ripperM5UsableSampleDeepDive';
 import { runClusterCoverageAudit, renderClusterCoverageAudit } from './token-grab/ripperClusterCoverageAudit';
 import { runApprovedPriorityStudy, renderApprovedPriorityStudy } from './token-grab/ripperBubbleMapsApprovedPriorityStudy';
+import { runPaperCoverageProposal, renderPaperCoverageProposal } from './token-grab/ripperBubbleMapsPaperCoverageProposal';
+import { runRejectedOutcomeTracker, renderRejectedOutcomeTracker } from './token-grab/ripperRejectedOutcomeTracker';
+import { runExecutionRealismSimulator, renderExecutionRealismSimulator } from './token-grab/ripperExecutionRealismSimulator';
+import { runShadowPolicyBacktester, renderShadowPolicyBacktester } from './token-grab/ripperShadowPolicyBacktester';
+import { runAppReadinessDashboard, renderAppReadinessDashboard } from './token-grab/ripperAppReadinessDashboard';
 import {
   runWatchObservationEnroll,
   runWatchObservationCloseout,
@@ -3863,6 +3868,84 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(apsResult, null, 2));
         } else {
           console.log(renderApprovedPriorityStudy(apsResult));
+        }
+        break;
+      }
+
+      case 'token:ripper-bubblemaps-paper-coverage-proposal': {
+        const pcpResult = runPaperCoverageProposal({
+          cyclesDir:   getArgValue('--cycles-dir')  ?? 'data/token-grab/ripper/cycles',
+          memoryPath:  getArgValue('--memory-path') ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          intentsPath: getArgValue('--intents-path') ?? 'data/token-grab/ripper/paper-intents.jsonl',
+          cachePath:   getArgValue('--cache-path')  ?? undefined,
+          recent:      getArgValue('--recent') != null ? Number(getArgValue('--recent')) : undefined,
+        });
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(pcpResult, null, 2));
+        } else {
+          console.log(renderPaperCoverageProposal(pcpResult));
+        }
+        break;
+      }
+
+      case 'token:ripper-rejected-outcome-tracker': {
+        const rotResult = runRejectedOutcomeTracker({
+          memoryPath: getArgValue('--memory-path') ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          topN:       getArgValue('--top')         != null ? Number(getArgValue('--top'))         : undefined,
+          winPct:     getArgValue('--win-pct')     != null ? Number(getArgValue('--win-pct'))     : undefined,
+          bigWinPct:  getArgValue('--big-win-pct') != null ? Number(getArgValue('--big-win-pct')) : undefined,
+          lossPct:    getArgValue('--loss-pct')    != null ? Number(getArgValue('--loss-pct'))    : undefined,
+        });
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(rotResult, null, 2));
+        } else {
+          console.log(renderRejectedOutcomeTracker(rotResult));
+        }
+        break;
+      }
+
+      case 'token:ripper-execution-realism-simulator': {
+        const ersResult = runExecutionRealismSimulator({
+          memoryPath:        getArgValue('--memory-path') ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          topN:              getArgValue('--top')                != null ? Number(getArgValue('--top'))                : undefined,
+          slippageBps:       getArgValue('--slippage-bps')       != null ? Number(getArgValue('--slippage-bps'))       : undefined,
+          feeBps:            getArgValue('--fee-bps')            != null ? Number(getArgValue('--fee-bps'))            : undefined,
+          latencySeconds:    getArgValue('--latency-seconds')    != null ? Number(getArgValue('--latency-seconds'))    : undefined,
+          maxPnlCap:         getArgValue('--max-pnl-cap')        != null ? Number(getArgValue('--max-pnl-cap'))        : undefined,
+          thinLiqPenalty:    getArgValue('--thin-liq-penalty')   != null ? Number(getArgValue('--thin-liq-penalty'))   : undefined,
+          failedExitHaircut: getArgValue('--failed-exit-haircut') != null ? Number(getArgValue('--failed-exit-haircut')) : undefined,
+        });
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(ersResult, null, 2));
+        } else {
+          console.log(renderExecutionRealismSimulator(ersResult));
+        }
+        break;
+      }
+
+      case 'token:ripper-shadow-policy-backtester': {
+        const spbResult = runShadowPolicyBacktester({
+          memoryPath: getArgValue('--memory-path') ?? 'data/token-grab/ripper/learning-memory.jsonl',
+        });
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(spbResult, null, 2));
+        } else {
+          console.log(renderShadowPolicyBacktester(spbResult));
+        }
+        break;
+      }
+
+      case 'token:ripper-app-readiness-dashboard': {
+        const ardResult = runAppReadinessDashboard({
+          memoryPath:       getArgValue('--memory-path')       ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          cyclesDir:        getArgValue('--cycles-dir')        ?? 'data/token-grab/ripper/cycles',
+          intentsPath:      getArgValue('--intents-path')      ?? 'data/token-grab/ripper/paper-intents.jsonl',
+          observationsPath: getArgValue('--observations-path') ?? 'data/token-grab/ripper/paper-intent-observations.jsonl',
+        });
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(ardResult, null, 2));
+        } else {
+          console.log(renderAppReadinessDashboard(ardResult));
         }
         break;
       }
