@@ -248,6 +248,7 @@ import { runLearningLoopAudit, renderLearningLoopAudit } from './token-grab/ripp
 import { runM5EvidenceDashboard, renderM5EvidenceDashboard } from './token-grab/ripperM5EvidenceDashboard';
 import { runM5UsableSampleDeepDive, renderM5UsableSampleDeepDive } from './token-grab/ripperM5UsableSampleDeepDive';
 import { runClusterCoverageAudit, renderClusterCoverageAudit } from './token-grab/ripperClusterCoverageAudit';
+import { runApprovedPriorityStudy, renderApprovedPriorityStudy } from './token-grab/ripperBubbleMapsApprovedPriorityStudy';
 import {
   runWatchObservationEnroll,
   runWatchObservationCloseout,
@@ -3845,6 +3846,23 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(cca, null, 2));
         } else {
           console.log(renderClusterCoverageAudit(cca));
+        }
+        break;
+      }
+
+      case 'token:ripper-bubblemaps-approved-priority-study': {
+        const apsResult = runApprovedPriorityStudy({
+          cyclesDir:   getArgValue('--cycles-dir')  ?? 'data/token-grab/ripper/cycles',
+          memoryPath:  getArgValue('--memory-path') ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          intentsPath: getArgValue('--intents-path') ?? 'data/token-grab/ripper/paper-intents.jsonl',
+          recent:      getArgValue('--recent') != null ? Number(getArgValue('--recent')) : undefined,
+          topN:        getArgValue('--top')    != null ? Number(getArgValue('--top'))    : undefined,
+          assumedCap:  getArgValue('--assumed-cap') != null ? Number(getArgValue('--assumed-cap')) : undefined,
+        });
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(apsResult, null, 2));
+        } else {
+          console.log(renderApprovedPriorityStudy(apsResult));
         }
         break;
       }

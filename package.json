@@ -174,6 +174,7 @@
     "token:ripper-m5-evidence-dashboard": "tsx src/cli.ts token:ripper-m5-evidence-dashboard",
     "token:ripper-m5-usable-sample-deep-dive": "tsx src/cli.ts token:ripper-m5-usable-sample-deep-dive",
     "token:ripper-cluster-coverage-audit": "tsx src/cli.ts token:ripper-cluster-coverage-audit",
+    "token:ripper-bubblemaps-approved-priority-study": "tsx src/cli.ts token:ripper-bubblemaps-approved-priority-study",
     "token:prime-gate-audit": "tsx src/cli.ts token:prime-gate-audit",
     "token:holder-risk-audit": "tsx src/cli.ts token:holder-risk-audit",
     "token:fixture-holder-enrich": "tsx src/cli.ts token:fixture-holder-enrich",
