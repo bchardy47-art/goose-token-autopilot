@@ -5,6 +5,22 @@ allowed** to do. Every report command in the learning stack restates these guara
 its own safety footer. If a command's output ever contradicts this document, stop and
 investigate.
 
+## Real trading capability (added) — defaults OFF
+
+Token Grab now has a **real** live-trading capability (Solana / Jupiter). It is **OFF by
+default** and cannot place a real order without ALL of:
+
+1. Full unlock env set (`TOKEN_GRAB_LIVE_TRADING_ENABLED=1`,
+   `TOKEN_GRAB_LIVE_TRADING_CONFIRM=I_UNDERSTAND_THIS_CAN_LOSE_REAL_MONEY`, all positive
+   limits, RPC, public key, provider).
+2. `TOKEN_GRAB_REAL_KILL_SWITCH` not `1`.
+3. A **runtime-injected signer** (no private keys in the repo).
+
+Dry-run (default) and mock modes never touch real money. Every real order passes the Live
+Risk Gate and is written to the durable ledger before and after submission. The build/test
+process **never executes a real trade**. See
+[`token-grab-live-trading.md`](./token-grab-live-trading.md).
+
 ## Current posture (hard-locked)
 
 | Flag | Value |

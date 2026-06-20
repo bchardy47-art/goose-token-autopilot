@@ -88,6 +88,24 @@ then re-run the dashboards.
 3. Write a **separate** human gate-proposal document for manual review. Nothing in this
    repo applies it. Real trading remains out of scope.
 
+## 7b. Live (real) trading commands
+
+Real trading capability exists and **defaults OFF** (Solana / Jupiter). Full details in
+[`token-grab-live-trading.md`](./token-grab-live-trading.md). Quick reference:
+
+```bash
+npm run token:ripper-live-config-doctor                 # capability/config (no trade)
+npm run token:ripper-live-runner -- --dry-run --once    # real quotes, never submits
+npm run token:ripper-live-runner -- --mock --once       # synthetic fills
+npm run token:ripper-live-daemon -- --dry-run --once     # daemon, one cycle
+npm run token:ripper-live-control -- --status            # operator control center
+npm run token:ripper-live-control -- --create-stop       # pause daemon (stop file)
+npm run token:ripper-final-acceptance-live               # prove finished (no real trade)
+```
+
+Live mode requires the full unlock env, kill switch off, and a runtime-injected signer
+(no keys in repo). Always `--dry-run` first.
+
 ## 8. Why real trading is locked
 
 Paper P/L is systematically optimistic (see Execution Realism). Holder coverage is

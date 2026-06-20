@@ -254,6 +254,11 @@ import { runRejectedOutcomeTracker, renderRejectedOutcomeTracker } from './token
 import { runExecutionRealismSimulator, renderExecutionRealismSimulator } from './token-grab/ripperExecutionRealismSimulator';
 import { runShadowPolicyBacktester, renderShadowPolicyBacktester } from './token-grab/ripperShadowPolicyBacktester';
 import { runAppReadinessDashboard, renderAppReadinessDashboard } from './token-grab/ripperAppReadinessDashboard';
+import { resolveLiveTradingConfig, renderLiveConfigDoctor, type ExecutionMode } from './token-grab/ripperLiveTradingConfig';
+import { runLiveRunner, renderLiveRunner } from './token-grab/ripperLiveRunner';
+import { runLiveDaemon, renderLiveDaemon } from './token-grab/ripperLiveDaemon';
+import { runLiveControl, renderLiveControl } from './token-grab/ripperLiveControl';
+import { runFinalAcceptanceLive, renderFinalAcceptanceLive } from './token-grab/ripperFinalAcceptanceLive';
 import {
   runWatchObservationEnroll,
   runWatchObservationCloseout,
@@ -3947,6 +3952,76 @@ async function main(): Promise<void> {
         } else {
           console.log(renderAppReadinessDashboard(ardResult));
         }
+        break;
+      }
+
+      case 'token:ripper-live-config-doctor': {
+        const cfg = resolveLiveTradingConfig({});
+        if (process.argv.includes('--json')) console.log(JSON.stringify(cfg, null, 2));
+        else console.log(renderLiveConfigDoctor(cfg));
+        break;
+      }
+
+      case 'token:ripper-live-runner': {
+        const liveMode: ExecutionMode =
+          process.argv.includes('--live') ? 'live' :
+          process.argv.includes('--mock') ? 'mock' : 'dry-run';
+        const runnerResult = await runLiveRunner({
+          mode: liveMode,
+          once: process.argv.includes('--once'),
+          maxCandidates:    getArgValue('--max-candidates')     != null ? Number(getArgValue('--max-candidates'))     : undefined,
+          maxPositionUsd:   getArgValue('--max-position-usd')    != null ? Number(getArgValue('--max-position-usd'))    : undefined,
+          maxOpenPositions: getArgValue('--max-open-positions')  != null ? Number(getArgValue('--max-open-positions'))  : undefined,
+          maxDailyLossUsd:  getArgValue('--max-daily-loss-usd')  != null ? Number(getArgValue('--max-daily-loss-usd'))  : undefined,
+          maxTradesPerDay:  getArgValue('--max-trades-per-day')  != null ? Number(getArgValue('--max-trades-per-day'))  : undefined,
+          bubbleMapsCap:    getArgValue('--bubblemaps-cap')      != null ? Number(getArgValue('--bubblemaps-cap'))      : undefined,
+        });
+        if (process.argv.includes('--json')) console.log(JSON.stringify(runnerResult, null, 2));
+        else console.log(renderLiveRunner(runnerResult));
+        break;
+      }
+
+      case 'token:ripper-live-daemon': {
+        const daemonMode: ExecutionMode =
+          process.argv.includes('--live') ? 'live' :
+          process.argv.includes('--mock') ? 'mock' : 'dry-run';
+        const daemonResult = await runLiveDaemon({
+          mode: daemonMode,
+          once: process.argv.includes('--once'),
+          intervalMinutes: getArgValue('--interval-minutes') != null ? Number(getArgValue('--interval-minutes')) : undefined,
+          maxRuns:         getArgValue('--max-runs')         != null ? Number(getArgValue('--max-runs'))         : undefined,
+          allowShortInterval: process.argv.includes('--allow-short-interval'),
+        });
+        if (process.argv.includes('--json')) console.log(JSON.stringify(daemonResult, null, 2));
+        else console.log(renderLiveDaemon(daemonResult));
+        break;
+      }
+
+      case 'token:ripper-live-control': {
+        const { status, config: liveCfg } = runLiveControl({
+          createStop: process.argv.includes('--create-stop'),
+          clearStop:  process.argv.includes('--clear-stop'),
+        });
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(status, null, 2));
+        } else if (process.argv.includes('--open-positions')) {
+          console.log(JSON.stringify(status.openPositions, null, 2));
+        } else if (process.argv.includes('--closed-positions')) {
+          console.log(JSON.stringify(status.closedPositions, null, 2));
+        } else if (process.argv.includes('--ledger-summary')) {
+          console.log(renderLiveControl(status, liveCfg));
+        } else {
+          console.log(renderLiveControl(status, liveCfg, { doctor: process.argv.includes('--doctor') }));
+        }
+        break;
+      }
+
+      case 'token:ripper-final-acceptance-live': {
+        const acc = await runFinalAcceptanceLive({});
+        if (process.argv.includes('--json')) console.log(JSON.stringify(acc, null, 2));
+        else console.log(renderFinalAcceptanceLive(acc));
+        // Non-zero exit if not finished, so CI can gate on it.
+        if (acc.FINISHED_FOR_AUTONOMOUS_REAL_TRADING_CAPABILITY !== 'YES') process.exitCode = 1;
         break;
       }
 
