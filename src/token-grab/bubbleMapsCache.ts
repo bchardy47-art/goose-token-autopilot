@@ -69,6 +69,7 @@ export class BubbleMapsCache implements ClusterRiskProvider {
           'BubbleMaps disabled (TOKEN_GRAB_BUBBLEMAPS_DISABLED=1)',
           'No live calls will be made; set TOKEN_GRAB_BUBBLEMAPS_DISABLED=0 to re-enable',
         ],
+        unknownReason: 'DISABLED',
       };
     }
 
@@ -84,6 +85,7 @@ export class BubbleMapsCache implements ClusterRiskProvider {
           `BubbleMaps call skipped: per-run cap of ${this.maxCallsPerRun} reached`,
           `Set TOKEN_GRAB_BUBBLEMAPS_MAX_CALLS_PER_RUN to raise cap (current: ${this.maxCallsPerRun})`,
         ],
+        unknownReason: 'CAP_REACHED',
       };
     }
 

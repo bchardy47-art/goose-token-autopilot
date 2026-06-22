@@ -472,7 +472,7 @@ describe('createBubbleMapsClusterProvider', () => {
     const originalFetch = global.fetch;
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({
+      text: async () => JSON.stringify({
         metadata: { token: 'TEST_MINT', chain: 'solana' },
         metrics: {
           supply_stats: {},
@@ -502,7 +502,7 @@ describe('createBubbleMapsClusterProvider', () => {
     const originalFetch = global.fetch;
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({
+      text: async () => JSON.stringify({
         metrics: {
           scores: { bubblemaps_score: 45.0 },
         },
@@ -522,7 +522,7 @@ describe('createBubbleMapsClusterProvider', () => {
     const originalFetch = global.fetch;
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({
+      text: async () => JSON.stringify({
         metrics: {
           scores: { bubblemaps_score: 10.0 },
         },
@@ -541,7 +541,7 @@ describe('createBubbleMapsClusterProvider', () => {
     const originalFetch = global.fetch;
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({
+      text: async () => JSON.stringify({
         metadata: { token: 'TEST_MINT' },
         nodes: [],
         relationships: [],
@@ -565,7 +565,7 @@ describe('createBubbleMapsClusterProvider', () => {
     const originalFetch = global.fetch;
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ risk_score: 10, top_cluster_pct: 5 }),
+      text: async () => JSON.stringify({ risk_score: 10, top_cluster_pct: 5 }),
     }) as unknown as typeof fetch;
 
     const p = createBubbleMapsClusterProvider({ apiUrl: 'https://test.api/v1' });
@@ -579,7 +579,7 @@ describe('createBubbleMapsClusterProvider', () => {
     const originalFetch = global.fetch;
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ risk_score: 85 }),
+      text: async () => JSON.stringify({ risk_score: 85 }),
     }) as unknown as typeof fetch;
 
     const p = createBubbleMapsClusterProvider({ apiUrl: 'https://test.api/v1' });
@@ -593,7 +593,7 @@ describe('createBubbleMapsClusterProvider', () => {
     const originalFetch = global.fetch;
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ is_rug: true }),
+      text: async () => JSON.stringify({ is_rug: true }),
     }) as unknown as typeof fetch;
 
     const p = createBubbleMapsClusterProvider({ apiUrl: 'https://test.api/v1' });
@@ -607,7 +607,7 @@ describe('createBubbleMapsClusterProvider', () => {
     const originalFetch = global.fetch;
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ unrecognised_field: 'value' }),
+      text: async () => JSON.stringify({ unrecognised_field: 'value' }),
     }) as unknown as typeof fetch;
 
     const p = createBubbleMapsClusterProvider({ apiUrl: 'https://test.api/v1' });

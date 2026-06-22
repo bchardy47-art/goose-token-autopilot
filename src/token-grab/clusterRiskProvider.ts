@@ -34,8 +34,10 @@ export interface ClusterRiskResult {
   clusterNotes:      string[];
   clusterFetchError?: string;
   rawMetrics?:       ClusterMetrics;
-  httpStatus?:       number;    // HTTP status code for diagnostics
-  dataAvailable?:    boolean;   // false when API says map not available (400)
+  httpStatus?:       number;              // HTTP status code for diagnostics
+  dataAvailable?:    boolean;             // false when API says map not available (400)
+  unknownReason?:    BubbleMapsUnknownReason; // WHY this call returned UNKNOWN
+  chain?:            string;              // blockchain targeted ('solana')
 }
 
 // ── Provider interface ────────────────────────────────────────────────────────
@@ -44,6 +46,31 @@ export interface ClusterRiskProvider {
   readonly name: string;
   fetchClusterRisk(tokenMint: string): Promise<ClusterRiskResult>;
 }
+
+// ── BubbleMaps UNKNOWN reason classification ──────────────────────────────────
+//
+// Classifies WHY a BubbleMaps call returned UNKNOWN so diagnostics can tell
+// apart "fresh token not yet indexed" (NO_MAP_YET — expected and common) from
+// config errors (AUTH_ERROR), provider issues (RATE_LIMITED, PROVIDER_ERROR),
+// or integration gaps (PARSE_ERROR, UNKNOWN_UNCLASSIFIED).
+//
+// CAP_REACHED and DISABLED are infrastructure reasons (set by the caching
+// layer, not the provider). OFFLINE is for the offline provider fallback.
+
+export type BubbleMapsUnknownReason =
+  | 'NO_MAP_YET'           // 400/404 — token not yet indexed by BubbleMaps (normal for fresh tokens)
+  | 'UNSUPPORTED_CHAIN'    // 400 — chain not supported by this API endpoint
+  | 'INVALID_CONTRACT'     // 400 — contract address format rejected
+  | 'RATE_LIMITED'         // 429 — too many requests
+  | 'AUTH_ERROR'           // 401/403 — check BUBBLEMAPS_API_KEY
+  | 'PROVIDER_ERROR'       // other non-2xx or network-level failure
+  | 'PARSE_ERROR'          // 200 — response body is not valid JSON
+  | 'EMPTY_RESPONSE'       // 200 — response body is empty
+  | 'TIMEOUT'              // request aborted after 10 s
+  | 'UNKNOWN_UNCLASSIFIED' // 200 — parsed but no recognisable cluster metrics
+  | 'OFFLINE'              // offline provider — no API configured
+  | 'CAP_REACHED'          // skipped — per-run call cap exhausted
+  | 'DISABLED';            // skipped — TOKEN_GRAB_BUBBLEMAPS_DISABLED=1
 
 // ── Cache stats (optional — surfaced by caching providers only) ───────────────
 
@@ -176,6 +203,8 @@ export const offlineClusterRiskProvider: ClusterRiskProvider = {
       clusterCheckedAt:  new Date().toISOString(),
       clusterConfidence: 'UNKNOWN',
       clusterNotes:      ['cluster data not available (offline provider)'],
+      unknownReason:     'OFFLINE',
+      chain:             'solana',
     };
   },
 };
@@ -211,6 +240,11 @@ export interface BubbleMapsProviderConfig {
 export function createBubbleMapsClusterProvider(
   config: BubbleMapsProviderConfig,
 ): ClusterRiskProvider {
+  function redactKey(msg: string): string {
+    if (!config.apiKey || config.apiKey.length < 4) return msg;
+    return msg.replaceAll(config.apiKey, '[REDACTED]');
+  }
+
   return {
     name: 'bubblemaps',
     async fetchClusterRisk(tokenMint: string): Promise<ClusterRiskResult> {
@@ -229,45 +263,105 @@ export function createBubbleMapsClusterProvider(
 
         const response = await fetch(url, { signal: controller.signal, headers });
 
-        // 400 may mean "map data not yet available for this token" (normal, not a failure)
-        if (response.status === 400) {
-          let bodyText = '';
-          try { bodyText = await response.text(); } catch (_) { /* ignore */ }
-          const isNoData =
-            bodyText.toLowerCase().includes('not available') ||
-            bodyText.toLowerCase().includes('no data') ||
-            bodyText.toLowerCase().includes('not found') ||
-            bodyText.toLowerCase().includes('map data');
-          if (isNoData || bodyText === '') {
-            // Token not yet mapped by BubbleMaps — expected, not a provider failure
+        if (!response.ok) {
+          const status = response.status;
+
+          // 404 — token not found / not yet indexed by BubbleMaps (normal for fresh tokens)
+          if (status === 404) {
             return {
               clusterRisk:       'UNKNOWN',
               clusterProvider:   'bubblemaps',
               clusterCheckedAt:  checkedAt,
               clusterConfidence: 'UNKNOWN',
-              clusterNotes:      ['BubbleMaps: map data not yet available for this token'],
-              httpStatus:        400,
+              clusterNotes:      ['BubbleMaps: token not found (404) — not yet indexed'],
+              httpStatus:        404,
               dataAvailable:     false,
-              // No clusterFetchError → counts as rpcSucceeded
+              unknownReason:     'NO_MAP_YET',
+              chain:             'solana',
             };
           }
-          return {
-            clusterRisk:       'UNKNOWN',
-            clusterProvider:   'bubblemaps',
-            clusterCheckedAt:  checkedAt,
-            clusterConfidence: 'UNKNOWN',
-            clusterNotes:      ['BubbleMaps HTTP 400'],
-            clusterFetchError: 'http 400 (bad request)',
-            httpStatus:        400,
-          };
-        }
 
-        if (!response.ok) {
-          const status = response.status;
+          // 400 — may mean "not yet mapped" or a bad-format request
+          if (status === 400) {
+            let bodyText = '';
+            try { bodyText = await response.text(); } catch (_) { /* ignore */ }
+            const lower = bodyText.toLowerCase();
+
+            const isNoData =
+              lower.includes('not available') ||
+              lower.includes('no data') ||
+              lower.includes('not found') ||
+              lower.includes('map data') ||
+              bodyText === '';
+
+            const isChain =
+              (lower.includes('chain') && (lower.includes('unsupported') || lower.includes('not supported'))) ||
+              lower.includes('unsupported chain');
+
+            const isInvalidContract =
+              (lower.includes('invalid') && (lower.includes('address') || lower.includes('contract') || lower.includes('token') || lower.includes('mint'))) ||
+              (lower.includes('format') && lower.includes('invalid'));
+
+            if (isNoData) {
+              return {
+                clusterRisk:       'UNKNOWN',
+                clusterProvider:   'bubblemaps',
+                clusterCheckedAt:  checkedAt,
+                clusterConfidence: 'UNKNOWN',
+                clusterNotes:      ['BubbleMaps: map data not yet available for this token'],
+                httpStatus:        400,
+                dataAvailable:     false,
+                unknownReason:     'NO_MAP_YET',
+                chain:             'solana',
+              };
+            }
+            if (isChain) {
+              return {
+                clusterRisk:       'UNKNOWN',
+                clusterProvider:   'bubblemaps',
+                clusterCheckedAt:  checkedAt,
+                clusterConfidence: 'UNKNOWN',
+                clusterNotes:      ['BubbleMaps: chain not supported for this endpoint'],
+                clusterFetchError: 'http 400 (unsupported chain)',
+                httpStatus:        400,
+                unknownReason:     'UNSUPPORTED_CHAIN',
+                chain:             'solana',
+              };
+            }
+            if (isInvalidContract) {
+              return {
+                clusterRisk:       'UNKNOWN',
+                clusterProvider:   'bubblemaps',
+                clusterCheckedAt:  checkedAt,
+                clusterConfidence: 'UNKNOWN',
+                clusterNotes:      ['BubbleMaps: invalid contract address format'],
+                clusterFetchError: 'http 400 (invalid contract)',
+                httpStatus:        400,
+                unknownReason:     'INVALID_CONTRACT',
+                chain:             'solana',
+              };
+            }
+            return {
+              clusterRisk:       'UNKNOWN',
+              clusterProvider:   'bubblemaps',
+              clusterCheckedAt:  checkedAt,
+              clusterConfidence: 'UNKNOWN',
+              clusterNotes:      ['BubbleMaps HTTP 400'],
+              clusterFetchError: 'http 400 (bad request)',
+              httpStatus:        400,
+              unknownReason:     'PROVIDER_ERROR',
+              chain:             'solana',
+            };
+          }
+
+          // 401 / 403 / 429 / other non-2xx
+          const unknownReason: BubbleMapsUnknownReason =
+            status === 401 || status === 403 ? 'AUTH_ERROR' :
+            status === 429                   ? 'RATE_LIMITED' : 'PROVIDER_ERROR';
           const detail =
-            status === 401 ? `http 401 (auth failed — check BUBBLEMAPS_API_KEY)` :
-            status === 403 ? `http 403 (access denied — check API key permissions)` :
-            status === 429 ? `http 429 (rate limited)` :
+            status === 401 ? 'http 401 (auth failed — check BUBBLEMAPS_API_KEY)' :
+            status === 403 ? 'http 403 (access denied — check API key permissions)' :
+            status === 429 ? 'http 429 (rate limited)' :
             `http ${status}`;
           return {
             clusterRisk:       'UNKNOWN',
@@ -277,16 +371,67 @@ export function createBubbleMapsClusterProvider(
             clusterNotes:      [`BubbleMaps HTTP ${status}`],
             clusterFetchError: detail,
             httpStatus:        status,
+            unknownReason,
+            chain:             'solana',
           };
         }
 
-        const data = await response.json() as Record<string, unknown>;
+        // 200 — read body text first to detect empty / malformed responses distinctly
+        let bodyText: string;
+        try {
+          bodyText = await response.text();
+        } catch (textErr) {
+          const isTimeout = textErr instanceof Error && textErr.name === 'AbortError';
+          return {
+            clusterRisk:       'UNKNOWN',
+            clusterProvider:   'bubblemaps',
+            clusterCheckedAt:  checkedAt,
+            clusterConfidence: 'UNKNOWN',
+            clusterNotes:      [],
+            clusterFetchError: isTimeout ? 'timeout reading response body' : 'failed to read response body',
+            httpStatus:        200,
+            unknownReason:     isTimeout ? 'TIMEOUT' : 'PROVIDER_ERROR',
+            chain:             'solana',
+          };
+        }
+
+        if (!bodyText.trim()) {
+          return {
+            clusterRisk:       'UNKNOWN',
+            clusterProvider:   'bubblemaps',
+            clusterCheckedAt:  checkedAt,
+            clusterConfidence: 'UNKNOWN',
+            clusterNotes:      ['BubbleMaps: 200 with empty response body'],
+            clusterFetchError: 'empty response body',
+            httpStatus:        200,
+            unknownReason:     'EMPTY_RESPONSE',
+            chain:             'solana',
+          };
+        }
+
+        let data: Record<string, unknown>;
+        try {
+          data = JSON.parse(bodyText) as Record<string, unknown>;
+        } catch (_) {
+          return {
+            clusterRisk:       'UNKNOWN',
+            clusterProvider:   'bubblemaps',
+            clusterCheckedAt:  checkedAt,
+            clusterConfidence: 'UNKNOWN',
+            clusterNotes:      ['BubbleMaps: 200 with malformed JSON response'],
+            clusterFetchError: 'malformed JSON response',
+            httpStatus:        200,
+            unknownReason:     'PARSE_ERROR',
+            chain:             'solana',
+          };
+        }
+
         const metrics = parseClusterMetrics(data);
         const clusterRisk = classifyClusterRisk(metrics);
 
         const hasRichMetrics = metrics && (
-          metrics.riskScore         !== undefined ||
-          metrics.topClusterPct     !== undefined ||
+          metrics.riskScore             !== undefined ||
+          metrics.topClusterPct         !== undefined ||
           metrics.decentralisationScore !== undefined
         );
         const confidence: ClusterRiskResult['clusterConfidence'] =
@@ -306,6 +451,9 @@ export function createBubbleMapsClusterProvider(
           notes.push(`riskScore ${metrics.riskScore.toFixed(1)}`);
         }
 
+        const unknownReason: BubbleMapsUnknownReason | undefined =
+          clusterRisk === 'UNKNOWN' ? 'UNKNOWN_UNCLASSIFIED' : undefined;
+
         return {
           clusterRisk,
           clusterProvider:   'bubblemaps',
@@ -314,16 +462,23 @@ export function createBubbleMapsClusterProvider(
           clusterNotes:      notes,
           rawMetrics:        metrics ?? undefined,
           httpStatus:        200,
+          unknownReason,
+          chain:             'solana',
         };
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'cluster fetch failed';
+        // Network error or timeout from fetch() itself
+        const isTimeout = err instanceof Error && err.name === 'AbortError';
+        const rawMsg = err instanceof Error ? err.message : 'cluster fetch failed';
+        const msg = redactKey(rawMsg);
         return {
           clusterRisk:       'UNKNOWN',
           clusterProvider:   'bubblemaps',
           clusterCheckedAt:  checkedAt,
           clusterConfidence: 'UNKNOWN',
           clusterNotes:      [],
-          clusterFetchError: msg,
+          clusterFetchError: isTimeout ? 'timeout after 10s' : msg,
+          unknownReason:     isTimeout ? 'TIMEOUT' : 'PROVIDER_ERROR',
+          chain:             'solana',
         };
       } finally {
         clearTimeout(timer);

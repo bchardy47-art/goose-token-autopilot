@@ -51,6 +51,12 @@ export interface RecentCallTarget {
   cachedAt:        string;
   cacheRisk:       ClusterCat;
   classification:  'CURRENT_APPROVED' | 'CURRENT_REJECTED' | 'NOT_IN_CURRENT_CYCLE' | 'DUPLICATE';
+  // UNKNOWN reason visibility fields (populated from cache result)
+  unknownReason:   string | null;
+  httpStatus:      number | null;
+  errorMessage:    string | null;
+  chain:           string | null;
+  symbol:          string | null;
 }
 
 export type CoverageDiagnosis =
@@ -79,6 +85,10 @@ export interface CoverageDiagnosticResult {
   recentCalls:       RecentCallTarget[];
   recentCallsOnCurrentApproved: number;
   recentCallsOnRejectedOrOld:   number;
+
+  // UNKNOWN reason breakdown (counts from cache entries with clusterRisk=UNKNOWN)
+  unknownReasonCounts:          Partial<Record<string, number>>;
+  unknownWithoutReason:         number;  // legacy cache entries lacking unknownReason field
 
   // structural facts
   liveRunnerReadsRawRows: boolean;        // the runner sources clusterRisk from raw cycle only
@@ -130,7 +140,18 @@ function normCluster(v: unknown): ClusterCat {
   return 'MISSING';
 }
 
-interface CacheEntry { contract?: string; cachedAt?: string; result?: { clusterRisk?: string } }
+interface CacheEntry {
+  contract?: string;
+  cachedAt?: string;
+  result?: {
+    clusterRisk?:      string;
+    unknownReason?:    string;
+    httpStatus?:       number;
+    clusterFetchError?: string;
+    clusterNotes?:     string[];
+    chain?:            string;
+  };
+}
 interface CycleRow {
   capturedAt?: string; buyGateDecision?: string; entryMomentumPct?: number | null;
   normalizedSignal?: { contract?: string; symbol?: string };
@@ -193,6 +214,41 @@ export function runCoverageDiagnostic(opts: CoverageDiagnosticOptions = {}): Cov
     if (r === 'CLEAN' || r === 'WATCH' || r === 'RISKY') memByContract.set(m.contract, r);
   }
 
+  // ── UNKNOWN reason counts from all cache entries ──────────────────────────────
+  const unknownReasonCounts: Partial<Record<string, number>> = {};
+  let unknownWithoutReason = 0;
+  for (const c of cacheRows) {
+    if (normCluster(c.result?.clusterRisk) !== 'UNKNOWN') continue;
+    const reason = c.result?.unknownReason;
+    if (reason) {
+      unknownReasonCounts[reason] = (unknownReasonCounts[reason] ?? 0) + 1;
+    } else {
+      // Legacy entry — infer from available fields
+      const status = c.result?.httpStatus;
+      const err = c.result?.clusterFetchError ?? '';
+      const notes = (c.result?.clusterNotes ?? []).join(' ');
+      const inferred =
+        status === 404 ? 'NO_MAP_YET' :
+        status === 400 && !err ? 'NO_MAP_YET' :
+        status === 400 && err.includes('unsupported chain') ? 'UNSUPPORTED_CHAIN' :
+        status === 400 && err.includes('invalid contract') ? 'INVALID_CONTRACT' :
+        status === 400 ? 'PROVIDER_ERROR' :
+        status === 401 || status === 403 ? 'AUTH_ERROR' :
+        status === 429 ? 'RATE_LIMITED' :
+        err.includes('timeout') || err.includes('aborted') ? 'TIMEOUT' :
+        err.includes('JSON') || err.includes('parse') ? 'PARSE_ERROR' :
+        err.includes('empty') ? 'EMPTY_RESPONSE' :
+        notes.includes('not yet available') ? 'NO_MAP_YET' :
+        status === 200 ? 'UNKNOWN_UNCLASSIFIED' :
+        null;
+      if (inferred) {
+        unknownReasonCounts[inferred] = (unknownReasonCounts[inferred] ?? 0) + 1;
+      } else {
+        unknownWithoutReason++;
+      }
+    }
+  }
+
   // ── Latest cycle: approved candidates (the live runner's universe) ────────────
   const cycleFile = latestCycleFile(cyclesDir);
   const cycleRows = cycleFile ? readJsonl<CycleRow>(path.join(cyclesDir, cycleFile)) : [];
@@ -202,6 +258,14 @@ export function runCoverageDiagnostic(opts: CoverageDiagnosticOptions = {}): Cov
     .map(r => r.normalizedSignal?.contract ?? r.raw?.contract).filter(Boolean) as string[]);
   const approvedContracts = new Set(approvedRows
     .map(r => r.normalizedSignal?.contract ?? r.raw?.contract).filter(Boolean) as string[]);
+
+  // symbol lookup from cycle rows
+  const symByContract = new Map<string, string>();
+  for (const r of cycleRows) {
+    const contract = r.normalizedSignal?.contract ?? r.raw?.contract;
+    const symbol   = r.normalizedSignal?.symbol;
+    if (contract && symbol) symByContract.set(contract, symbol);
+  }
 
   const approvedTotal = approvedRows.length;
   const approvedUnknownTotal = approvedRows.filter(r => normCluster(r.raw?.clusterRisk) === 'UNKNOWN').length;
@@ -268,7 +332,18 @@ export function runCoverageDiagnostic(opts: CoverageDiagnosticOptions = {}): Cov
       approvedContracts.has(c.contract) ? 'CURRENT_APPROVED' :
       rejectedContracts.has(c.contract) ? 'CURRENT_REJECTED' :
       'NOT_IN_CURRENT_CYCLE';
-    recentCalls.push({ contract: c.contract, cachedAt: c.cachedAt ?? '', cacheRisk: normCluster(c.result?.clusterRisk), classification: cls });
+    const errorMessage = c.result?.clusterFetchError ?? (c.result?.clusterNotes?.[0] ?? null);
+    recentCalls.push({
+      contract:      c.contract,
+      cachedAt:      c.cachedAt ?? '',
+      cacheRisk:     normCluster(c.result?.clusterRisk),
+      classification: cls,
+      unknownReason: c.result?.unknownReason ?? null,
+      httpStatus:    c.result?.httpStatus ?? null,
+      errorMessage:  errorMessage ?? null,
+      chain:         c.result?.chain ?? null,
+      symbol:        symByContract.get(c.contract) ?? null,
+    });
   }
   const recentCallsOnCurrentApproved = recentCalls.filter(c => c.classification === 'CURRENT_APPROVED').length;
   const recentCallsOnRejectedOrOld = recentCalls.filter(c => c.classification === 'CURRENT_REJECTED' || c.classification === 'NOT_IN_CURRENT_CYCLE').length;
@@ -338,6 +413,8 @@ export function runCoverageDiagnostic(opts: CoverageDiagnosticOptions = {}): Cov
     recentCalls,
     recentCallsOnCurrentApproved,
     recentCallsOnRejectedOrOld,
+    unknownReasonCounts,
+    unknownWithoutReason,
     liveRunnerReadsRawRows,
     approvedFirstImplemented,
     observedPerRunCap,
@@ -366,6 +443,51 @@ export function renderCoverageDiagnostic(r: CoverageDiagnosticResult): string {
   L.push(`  Cache entries       : ${r.cacheEntryCount}  (fresh-known: ${r.cacheFreshKnownCount}, stale: ${r.cacheStaleCount})`);
   L.push(`  Live runner reads   : ${r.liveRunnerReadsRawRows ? 'RAW cycle rows (unenriched)' : 'ENRICHED via resolver'}`);
   L.push(`  Approved-first       : ${r.approvedFirstImplemented ? 'IMPLEMENTED in call lane' : 'NOT implemented (simulation only)'}`);
+  L.push('');
+
+  L.push(`  ${SEP2}`);
+  L.push('  BUBBLEMAPS UNKNOWN REASONS');
+  L.push(`  ${SEP2}`, '');
+  const REASON_ORDER = [
+    'NO_MAP_YET', 'UNKNOWN_UNCLASSIFIED', 'EMPTY_RESPONSE', 'PARSE_ERROR',
+    'AUTH_ERROR', 'RATE_LIMITED', 'PROVIDER_ERROR', 'TIMEOUT',
+    'UNSUPPORTED_CHAIN', 'INVALID_CONTRACT', 'OFFLINE', 'CAP_REACHED', 'DISABLED',
+  ];
+  const allUnknownCount = Object.values(r.unknownReasonCounts).reduce((s, v) => s + (v ?? 0), 0) + r.unknownWithoutReason;
+  if (allUnknownCount === 0) {
+    L.push('  (no UNKNOWN results in cache)');
+  } else {
+    L.push('  Reason breakdown from cache entries (all-time UNKNOWN results):');
+    for (const reason of REASON_ORDER) {
+      const count = r.unknownReasonCounts[reason] ?? 0;
+      if (count > 0) L.push(`    ${reason.padEnd(22)}: ${count}`);
+    }
+    // show any extra reasons not in the canonical list
+    for (const [reason, count] of Object.entries(r.unknownReasonCounts)) {
+      if (!REASON_ORDER.includes(reason) && (count ?? 0) > 0) {
+        L.push(`    ${reason.padEnd(22)}: ${count}`);
+      }
+    }
+    if (r.unknownWithoutReason > 0) {
+      L.push(`    ${'(no reason field)'.padEnd(22)}: ${r.unknownWithoutReason}  ← legacy entries; re-run enrichment to classify`);
+    }
+  }
+  L.push('');
+
+  // Recent calls table (last N entries from cache)
+  if (r.recentCalls.length > 0) {
+    L.push('  Last cache entries (most recent first, read from JSONL tail):');
+    L.push(`  ${'symbol'.padEnd(10)} ${'contract'.padEnd(14)} ${'chain'.padEnd(7)} ${'HTTP'.padStart(4)} ${'reason'.padEnd(22)} message`);
+    for (const c of [...r.recentCalls].reverse().slice(0, 10)) {
+      const sym      = (c.symbol ?? '-').slice(0, 9).padEnd(10);
+      const contract = (c.contract.slice(0, 6) + '..' + c.contract.slice(-4)).padEnd(14);
+      const chain    = (c.chain ?? '-').slice(0, 6).padEnd(7);
+      const status   = c.httpStatus != null ? String(c.httpStatus).padStart(4) : '   -';
+      const reason   = (c.unknownReason ?? (c.cacheRisk !== 'UNKNOWN' ? `(${c.cacheRisk})` : '?')).padEnd(22);
+      const msg      = (c.errorMessage ?? '').slice(0, 50);
+      L.push(`  ${sym} ${contract} ${chain} ${status} ${reason} ${msg}`);
+    }
+  }
   L.push('');
 
   L.push(`  ${SEP2}`);
