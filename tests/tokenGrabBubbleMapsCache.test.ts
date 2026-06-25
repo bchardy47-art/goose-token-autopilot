@@ -311,12 +311,39 @@ describe('persistent disk cache', () => {
     expect(entry.result.clusterRisk).toBe('CLEAN');
   });
 
-  it('does NOT write error results (transient failures) to disk', async () => {
+  it('writes UNKNOWN results from live calls to disk, including transient-error results', async () => {
     const cachePath = makeCachePath();
     const { provider } = makeMockProvider(makeFailResult());
     const cache = new BubbleMapsCache(provider, cachePath, 20, BUBBLEMAPS_CACHE_TTL_MS);
 
     await cache.fetchClusterRisk('pumpFAIL001');
+
+    // UNKNOWN live-call results must be cached so diagnostics can show WHY calls failed
+    expect(fs.existsSync(cachePath)).toBe(true);
+    const lines = fs.readFileSync(cachePath, 'utf-8').split('\n').filter(Boolean);
+    expect(lines.length).toBe(1);
+    const stored = JSON.parse(lines[0]!) as BubbleMapsCacheEntry;
+    expect(stored.contract).toBe('pumpFAIL001');
+    expect(stored.result.clusterRisk).toBe('UNKNOWN');
+    expect(stored.result.clusterFetchError).toBeDefined();
+  });
+
+  it('does NOT write DISABLED results to disk (returns before live call)', async () => {
+    const cachePath = makeCachePath();
+    const { provider } = makeMockProvider(makeCleanResult('any'));
+    const cache = new BubbleMapsCache(provider, cachePath, 20, BUBBLEMAPS_CACHE_TTL_MS, undefined, true);
+
+    await cache.fetchClusterRisk('contractA');
+
+    expect(fs.existsSync(cachePath)).toBe(false);
+  });
+
+  it('does NOT write CAP_REACHED results to disk (returns before live call)', async () => {
+    const cachePath = makeCachePath();
+    const { provider } = makeMockProvider(makeCleanResult('any'));
+    const cache = new BubbleMapsCache(provider, cachePath, 0, BUBBLEMAPS_CACHE_TTL_MS); // cap=0
+
+    await cache.fetchClusterRisk('contractA');
 
     expect(fs.existsSync(cachePath)).toBe(false);
   });
@@ -466,7 +493,7 @@ describe('provider error handling', () => {
     expect(result.clusterFetchError).toContain('network failure');
   });
 
-  it('does not write thrown errors to cache file', async () => {
+  it('writes unexpected-throw results to disk as UNKNOWN/PROVIDER_ERROR', async () => {
     const cachePath = makeCachePath();
     const throwingProvider: ClusterRiskProvider = {
       name: 'throwing-provider',
@@ -476,7 +503,13 @@ describe('provider error handling', () => {
     };
     const cache = new BubbleMapsCache(throwingProvider, cachePath, 20, BUBBLEMAPS_CACHE_TTL_MS);
     await cache.fetchClusterRisk('anyContract');
-    expect(fs.existsSync(cachePath)).toBe(false);
+    // Unexpected throws are also live-call results and must be cached
+    expect(fs.existsSync(cachePath)).toBe(true);
+    const lines = fs.readFileSync(cachePath, 'utf-8').split('\n').filter(Boolean);
+    const stored = JSON.parse(lines[0]!) as BubbleMapsCacheEntry;
+    expect(stored.result.clusterRisk).toBe('UNKNOWN');
+    expect(stored.result.clusterFetchError).toContain('boom');
+    expect(stored.result.unknownReason).toBe('PROVIDER_ERROR');
   });
 });
 

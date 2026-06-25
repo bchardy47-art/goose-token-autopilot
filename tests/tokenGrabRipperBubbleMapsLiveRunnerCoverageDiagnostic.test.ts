@@ -180,4 +180,45 @@ describe('BubbleMaps Live-Runner Coverage Diagnostic v1', () => {
     expect(parsed.reportOnly).toBe(true);
     expect(parsed.diagnoses.length).toBeGreaterThan(0);
   });
+
+  it('unknownReasonCounts shows reasons from cached UNKNOWN entries with unknownReason field', () => {
+    // Simulates what happens after the cache-persistence fix: UNKNOWN live-call results
+    // are written with their unknownReason so the diagnostic can explain coverage failures.
+    writeJsonl(cachePath, [
+      { contract: 'C1', cachedAt: '2026-06-20T12:30:00.000Z', result: { clusterRisk: 'UNKNOWN', unknownReason: 'NO_MAP_YET',  clusterProvider: 'bubblemaps', chain: 'solana' } },
+      { contract: 'C2', cachedAt: '2026-06-20T12:31:00.000Z', result: { clusterRisk: 'UNKNOWN', unknownReason: 'AUTH_ERROR',   clusterProvider: 'bubblemaps' } },
+      { contract: 'C3', cachedAt: '2026-06-20T12:32:00.000Z', result: { clusterRisk: 'UNKNOWN', unknownReason: 'NO_MAP_YET',  clusterProvider: 'bubblemaps' } },
+      { contract: 'C4', cachedAt: '2026-06-20T12:33:00.000Z', result: { clusterRisk: 'CLEAN',                                 clusterProvider: 'bubblemaps' } }, // CLEAN — not counted
+    ]);
+    writeJsonl(path.join(cyclesDir, 'cycle-2026-06-20-120000.jsonl'), []);
+    const r = runCoverageDiagnostic(opts());
+    expect(r.unknownReasonCounts['NO_MAP_YET']).toBe(2);
+    expect(r.unknownReasonCounts['AUTH_ERROR']).toBe(1);
+    expect(r.unknownWithoutReason).toBe(0);
+  });
+
+  it('renders cached UNKNOWN reasons in BUBBLEMAPS UNKNOWN REASONS section', () => {
+    writeJsonl(cachePath, [
+      { contract: 'D1', cachedAt: '2026-06-20T12:30:00.000Z', result: { clusterRisk: 'UNKNOWN', unknownReason: 'RATE_LIMITED', clusterProvider: 'bubblemaps', httpStatus: 429, clusterFetchError: 'http 429 (rate limited)' } },
+      { contract: 'D2', cachedAt: '2026-06-20T12:31:00.000Z', result: { clusterRisk: 'UNKNOWN', unknownReason: 'NO_MAP_YET',   clusterProvider: 'bubblemaps', httpStatus: 404 } },
+    ]);
+    writeJsonl(path.join(cyclesDir, 'cycle-2026-06-20-120000.jsonl'), []);
+    const text = renderCoverageDiagnostic(runCoverageDiagnostic(opts()));
+    expect(text).toContain('BUBBLEMAPS UNKNOWN REASONS');
+    expect(text).toContain('RATE_LIMITED');
+    expect(text).toContain('NO_MAP_YET');
+    expect(text).not.toContain('(no UNKNOWN results in cache)');
+  });
+
+  it('unknownWithoutReason counts legacy cache entries lacking unknownReason', () => {
+    // Legacy entries (pre-fix) have no unknownReason but still have httpStatus/clusterFetchError
+    writeJsonl(cachePath, [
+      { contract: 'E1', cachedAt: '2026-06-20T12:30:00.000Z', result: { clusterRisk: 'UNKNOWN', httpStatus: 404, clusterProvider: 'bubblemaps' } }, // inferred → NO_MAP_YET
+      { contract: 'E2', cachedAt: '2026-06-20T12:31:00.000Z', result: { clusterRisk: 'UNKNOWN', clusterProvider: 'bubblemaps' } }, // no reason, no httpStatus → unknownWithoutReason
+    ]);
+    writeJsonl(path.join(cyclesDir, 'cycle-2026-06-20-120000.jsonl'), []);
+    const r = runCoverageDiagnostic(opts());
+    expect(r.unknownReasonCounts['NO_MAP_YET']).toBe(1); // inferred from httpStatus=404
+    expect(r.unknownWithoutReason).toBe(1);              // no inference possible
+  });
 });

@@ -103,19 +103,22 @@ export class BubbleMapsCache implements ClusterRiskProvider {
         clusterConfidence: 'UNKNOWN',
         clusterNotes:      ['CLUSTER_PROVIDER_UNAVAILABLE — provider threw unexpectedly'],
         clusterFetchError: err instanceof Error ? err.message : 'unexpected provider error',
+        unknownReason:     'PROVIDER_ERROR',
       };
     }
 
-    // 5. Persist only clean results — don't cache transient errors (429, 401, network)
-    if (!result.clusterFetchError) {
-      const entry: BubbleMapsCacheEntry = {
-        contract: tokenMint,
-        cachedAt: new Date(this.nowMs()).toISOString(),
-        result,
-      };
-      this.memCache.set(tokenMint, entry);
-      this.appendToDisk(entry);
-    }
+    // 5. Persist all live-call results, including UNKNOWN with clusterFetchError.
+    // DISABLED (step 2) and CAP_REACHED (step 3) return early above and never reach here.
+    // Caching error-UNKNOWN results is intentional: diagnostics can show WHY calls are failing
+    // (AUTH_ERROR, RATE_LIMITED, NO_MAP_YET, etc.), and the 24h TTL ensures eventual retry.
+    // clusterFetchError is already API-key-redacted by the BubbleMaps HTTP provider.
+    const entry: BubbleMapsCacheEntry = {
+      contract: tokenMint,
+      cachedAt: new Date(this.nowMs()).toISOString(),
+      result,
+    };
+    this.memCache.set(tokenMint, entry);
+    this.appendToDisk(entry);
 
     return result;
   }

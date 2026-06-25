@@ -396,6 +396,14 @@ describe('BubbleMapsCache cap-skipped → CAP_REACHED', () => {
     expect(result.unknownReason).toBe('CAP_REACHED');
     expect(result.clusterRisk).not.toBe('CLEAN');
   });
+
+  it('CAP_REACHED skip result is NOT written to cache file (no live call was made)', async () => {
+    const cachePath = path.join(tmpDir, 'cache.jsonl');
+    const cache = new BubbleMapsCache(makeMockProvider(), cachePath, 0, 24 * 60 * 60 * 1000);
+    await cache.fetchClusterRisk('contractA');  // cap=0 → immediate skip, no live call
+    // CAP_REACHED is an infrastructure skip, not a live-call result — must NOT be cached
+    expect(fs.existsSync(cachePath)).toBe(false);
+  });
 });
 
 // ── BubbleMapsCache disabled → DISABLED ──────────────────────────────────────
@@ -417,6 +425,36 @@ describe('BubbleMapsCache disabled → DISABLED', () => {
     const cache = new BubbleMapsCache(provider, cachePath, 20, 24 * 60 * 60 * 1000, undefined, true);
     const result = await cache.fetchClusterRisk('contractA');
     expect(result.unknownReason).toBe('DISABLED');
+    expect(result.clusterRisk).toBe('UNKNOWN');
+  });
+
+  it('DISABLED skip result is NOT written to cache file (no live call was made)', async () => {
+    const provider: ClusterRiskProvider = {
+      name: 'mock',
+      fetchClusterRisk: async () => ({
+        clusterRisk: 'CLEAN', clusterProvider: 'mock', clusterCheckedAt: new Date().toISOString(),
+        clusterConfidence: 'HIGH', clusterNotes: [],
+      }),
+    };
+    const cachePath = path.join(tmpDir, 'cache.jsonl');
+    const cache = new BubbleMapsCache(provider, cachePath, 20, 24 * 60 * 60 * 1000, undefined, true);
+    await cache.fetchClusterRisk('contractA');
+    // DISABLED is an infrastructure skip, not a live-call result — must NOT be cached
+    expect(fs.existsSync(cachePath)).toBe(false);
+  });
+
+  it('DISABLED result clusterRisk is never promoted to CLEAN', async () => {
+    const provider: ClusterRiskProvider = {
+      name: 'mock',
+      fetchClusterRisk: async () => ({
+        clusterRisk: 'CLEAN', clusterProvider: 'mock', clusterCheckedAt: new Date().toISOString(),
+        clusterConfidence: 'HIGH', clusterNotes: [],
+      }),
+    };
+    const cachePath = path.join(tmpDir, 'cache.jsonl');
+    const cache = new BubbleMapsCache(provider, cachePath, 20, 24 * 60 * 60 * 1000, undefined, true);
+    const result = await cache.fetchClusterRisk('contractA');
+    expect(result.clusterRisk).not.toBe('CLEAN');
     expect(result.clusterRisk).toBe('UNKNOWN');
   });
 });
