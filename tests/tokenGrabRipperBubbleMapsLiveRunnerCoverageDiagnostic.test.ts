@@ -221,4 +221,47 @@ describe('BubbleMaps Live-Runner Coverage Diagnostic v1', () => {
     expect(r.unknownReasonCounts['NO_MAP_YET']).toBe(1); // inferred from httpStatus=404
     expect(r.unknownWithoutReason).toBe(1);              // no inference possible
   });
+
+  // ── Rate-limit cooldown status ──────────────────────────────────────────────
+  function cooldownPath(): string {
+    return path.join(root, 'bubblemaps-rate-limit-cooldown.json');
+  }
+
+  it('reports rateLimitCooldown=null when no marker file exists', () => {
+    writeJsonl(path.join(cyclesDir, 'cycle-2026-06-20-120000.jsonl'), []);
+    const r = runCoverageDiagnostic(opts());
+    expect(r.rateLimitCooldown).toBeNull();
+    expect(renderCoverageDiagnostic(r)).toContain('Rate-limit cooldown : inactive (no marker file)');
+  });
+
+  it('reports an ACTIVE cooldown with minutes remaining and renders it', () => {
+    fs.writeFileSync(cooldownPath(), JSON.stringify({
+      createdAt:    '2026-06-20T12:30:00.000Z',
+      expiresAt:    '2026-06-20T13:30:00.000Z', // 30 min after NOW (13:00)
+      reason:       'RATE_LIMITED',
+      httpStatus:   429,
+      lastContract: 'pumpRL',
+      note:         'prior 429',
+    }));
+    writeJsonl(path.join(cyclesDir, 'cycle-2026-06-20-120000.jsonl'), []);
+    const r = runCoverageDiagnostic(opts());
+    expect(r.rateLimitCooldown?.active).toBe(true);
+    expect(r.rateLimitCooldown?.minutesRemaining).toBe(30);
+    expect(r.rateLimitCooldown?.lastContract).toBe('pumpRL');
+    expect(renderCoverageDiagnostic(r)).toContain('Rate-limit cooldown : ACTIVE');
+  });
+
+  it('reports an expired cooldown as inactive', () => {
+    fs.writeFileSync(cooldownPath(), JSON.stringify({
+      createdAt:  '2026-06-20T11:00:00.000Z',
+      expiresAt:  '2026-06-20T12:00:00.000Z', // 60 min before NOW
+      reason:     'RATE_LIMITED',
+      httpStatus: 429,
+      note:       'old 429',
+    }));
+    writeJsonl(path.join(cyclesDir, 'cycle-2026-06-20-120000.jsonl'), []);
+    const r = runCoverageDiagnostic(opts());
+    expect(r.rateLimitCooldown?.active).toBe(false);
+    expect(r.rateLimitCooldown?.minutesRemaining).toBeNull();
+  });
 });

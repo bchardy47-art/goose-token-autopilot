@@ -20,6 +20,35 @@ export const BUBBLEMAPS_MAX_CALLS_PER_RUN_DEFAULT = 20;
 export const DEFAULT_CACHE_PATH =
   'data/token-grab/ripper/bubblemaps-cache.jsonl';
 
+// ── Rate-limit cooldown ─────────────────────────────────────────────────────────
+//
+// When a live BubbleMaps call returns 429 RATE_LIMITED, we persist a small cooldown
+// marker so that LATER runs do not immediately hammer the API again. While the marker
+// is unexpired, live calls are skipped (UNKNOWN, never CLEAN). This is the cross-run
+// companion to the in-run stop-on-first-429 guard.
+
+export const BUBBLEMAPS_RATE_LIMIT_COOLDOWN_MINUTES_DEFAULT = 60;          // conservative default
+export const BUBBLEMAPS_RATE_LIMIT_COOLDOWN_MS_DEFAULT =
+  BUBBLEMAPS_RATE_LIMIT_COOLDOWN_MINUTES_DEFAULT * 60 * 1000;
+export const BUBBLEMAPS_COOLDOWN_FILENAME = 'bubblemaps-rate-limit-cooldown.json';
+export const DEFAULT_COOLDOWN_PATH =
+  'data/token-grab/ripper/bubblemaps-rate-limit-cooldown.json';
+
+/** Cooldown marker persisted to disk after a 429 RATE_LIMITED live call. */
+export interface BubbleMapsCooldownFile {
+  createdAt:     string;            // ISO — when the cooldown was written
+  expiresAt:     string;            // ISO — live calls resume once now() passes this
+  reason:        'RATE_LIMITED';
+  httpStatus:    number;            // 429
+  lastContract?: string;            // the contract whose call triggered the 429
+  note:          string;
+}
+
+/** Default cooldown file path lives alongside the cache file. */
+export function deriveCooldownPath(cachePath: string): string {
+  return path.join(path.dirname(cachePath), BUBBLEMAPS_COOLDOWN_FILENAME);
+}
+
 // ── Cache entry ───────────────────────────────────────────────────────────────
 
 export interface BubbleMapsCacheEntry {
@@ -39,6 +68,8 @@ export class BubbleMapsCache implements ClusterRiskProvider {
   private skippedThisRun     = 0;
   private rateLimitedThisRun = false;
 
+  private readonly cooldownPath: string;
+
   constructor(
     private readonly provider:        ClusterRiskProvider,
     private readonly cachePath:       string,
@@ -46,7 +77,10 @@ export class BubbleMapsCache implements ClusterRiskProvider {
     private readonly ttlMs:           number,
     private readonly nowMs:           () => number = () => Date.now(),
     private readonly disabled:        boolean = false,
+    private readonly cooldownMs:      number = BUBBLEMAPS_RATE_LIMIT_COOLDOWN_MS_DEFAULT,
+    cooldownPath?:                    string,
   ) {
+    this.cooldownPath = cooldownPath ?? deriveCooldownPath(cachePath);
     this.loadFromDisk();
   }
 
@@ -108,6 +142,26 @@ export class BubbleMapsCache implements ClusterRiskProvider {
       };
     }
 
+    // 3.6. Cross-run rate-limit cooldown: a PREVIOUS run hit 429 and wrote a cooldown
+    // marker. While that marker is unexpired, skip live calls entirely so we don't hammer
+    // an already-rate-limited API on every fresh run. UNKNOWN, never CLEAN; this synthetic
+    // skip is NOT written to the cache. An expired marker is ignored (a call is allowed).
+    const cooldown = this.readActiveCooldown();
+    if (cooldown) {
+      this.skippedThisRun++;
+      return {
+        clusterRisk:       'UNKNOWN',
+        clusterProvider:   'bubblemaps-cached',
+        clusterCheckedAt:  new Date(this.nowMs()).toISOString(),
+        clusterConfidence: 'UNKNOWN',
+        clusterNotes: [
+          'BubbleMaps call skipped: rate-limit cooldown active',
+          `Cooldown active until ${cooldown.expiresAt} (set after a prior 429)`,
+        ],
+        unknownReason: 'CAP_REACHED',
+      };
+    }
+
     // 4. Live API call through wrapped provider
     this.liveCallsThisRun++;
     let result: ClusterRiskResult;
@@ -126,9 +180,11 @@ export class BubbleMapsCache implements ClusterRiskProvider {
       };
     }
 
-    // If this call was rate-limited, set flag to skip all further live calls this run.
+    // If this call was rate-limited, set the in-run flag (skip further live calls this run)
+    // AND persist a cross-run cooldown marker so later runs back off too.
     if (result.unknownReason === 'RATE_LIMITED') {
       this.rateLimitedThisRun = true;
+      this.writeCooldown(tokenMint, result.httpStatus);
     }
 
     // 5. Persist all live-call results, including UNKNOWN with clusterFetchError.
@@ -199,6 +255,50 @@ export class BubbleMapsCache implements ClusterRiskProvider {
     if (Number.isNaN(cachedAtMs)) return true;
     return this.nowMs() - cachedAtMs > this.ttlMs;
   }
+
+  /**
+   * Returns the cooldown marker only if it exists and has not yet expired.
+   * An expired (or malformed / unreadable) marker returns null → a live call is allowed.
+   */
+  private readActiveCooldown(): BubbleMapsCooldownFile | null {
+    if (this.cooldownMs <= 0) return null;        // cooldown disabled
+    if (!fs.existsSync(this.cooldownPath)) return null;
+    let raw: string;
+    try {
+      raw = fs.readFileSync(this.cooldownPath, 'utf-8');
+    } catch {
+      return null;                                 // unreadable → treat as no cooldown
+    }
+    let parsed: BubbleMapsCooldownFile;
+    try {
+      parsed = JSON.parse(raw) as BubbleMapsCooldownFile;
+    } catch {
+      return null;                                 // malformed → ignore
+    }
+    const expiresMs = new Date(parsed.expiresAt).getTime();
+    if (Number.isNaN(expiresMs)) return null;
+    return this.nowMs() < expiresMs ? parsed : null; // future → active; past → expired/ignore
+  }
+
+  /** Persist a cooldown marker after a 429 RATE_LIMITED live call. Non-fatal on write error. */
+  private writeCooldown(contract: string, httpStatus?: number): void {
+    if (this.cooldownMs <= 0) return;
+    const now = this.nowMs();
+    const minutes = Math.round(this.cooldownMs / 60_000);
+    const marker: BubbleMapsCooldownFile = {
+      createdAt:    new Date(now).toISOString(),
+      expiresAt:    new Date(now + this.cooldownMs).toISOString(),
+      reason:       'RATE_LIMITED',
+      httpStatus:   httpStatus ?? 429,
+      lastContract: contract,
+      note: `BubbleMaps returned 429 RATE_LIMITED; live calls paused for ~${minutes} min until expiresAt. ` +
+            'Override with TOKEN_GRAB_BUBBLEMAPS_RATE_LIMIT_COOLDOWN_MINUTES.',
+    };
+    try {
+      fs.mkdirSync(path.dirname(this.cooldownPath), { recursive: true });
+      fs.writeFileSync(this.cooldownPath, JSON.stringify(marker, null, 2) + '\n', 'utf-8');
+    } catch { /* non-fatal — cooldown is best-effort */ }
+  }
 }
 
 // ── Factory ───────────────────────────────────────────────────────────────────
@@ -211,6 +311,8 @@ export function createBubbleMapsCachedProvider(
     ttlMs?:          number;
     nowMs?:          () => number;
     disabled?:       boolean;
+    cooldownMs?:     number;
+    cooldownPath?:   string;
   } = {},
 ): BubbleMapsCache {
   const disabledEnv = process.env['TOKEN_GRAB_BUBBLEMAPS_DISABLED'];
@@ -222,6 +324,16 @@ export function createBubbleMapsCachedProvider(
     opts.maxCallsPerRun ??
     (Number.isFinite(envCap) && envCap >= 0 ? Math.floor(envCap) : BUBBLEMAPS_MAX_CALLS_PER_RUN_DEFAULT);
 
+  // Cooldown minutes: opts override env override default. Negative/NaN falls back to default.
+  const rawCooldownEnv = process.env['TOKEN_GRAB_BUBBLEMAPS_RATE_LIMIT_COOLDOWN_MINUTES'];
+  const envCooldownMin =
+    rawCooldownEnv != null && rawCooldownEnv.trim() !== '' ? Number(rawCooldownEnv) : NaN;
+  const cooldownMs =
+    opts.cooldownMs ??
+    (Number.isFinite(envCooldownMin) && envCooldownMin >= 0
+      ? Math.floor(envCooldownMin) * 60 * 1000
+      : BUBBLEMAPS_RATE_LIMIT_COOLDOWN_MS_DEFAULT);
+
   return new BubbleMapsCache(
     provider,
     opts.cachePath ?? DEFAULT_CACHE_PATH,
@@ -229,5 +341,7 @@ export function createBubbleMapsCachedProvider(
     opts.ttlMs     ?? BUBBLEMAPS_CACHE_TTL_MS,
     opts.nowMs,
     disabled,
+    cooldownMs,
+    opts.cooldownPath,
   );
 }

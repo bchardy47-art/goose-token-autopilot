@@ -606,6 +606,145 @@ describe('rate-limit guard stops live calls after first RATE_LIMITED result', ()
   });
 });
 
+// ── Cross-run rate-limit cooldown ─────────────────────────────────────────────
+
+describe('rate-limit cooldown persists across runs', () => {
+  function makeRateLimitedResult(): ClusterRiskResult {
+    return {
+      clusterRisk:       'UNKNOWN',
+      clusterProvider:   'bubblemaps',
+      clusterCheckedAt:  new Date().toISOString(),
+      clusterConfidence: 'UNKNOWN',
+      clusterNotes:      ['http 429 (rate limited)'],
+      clusterFetchError: 'http 429 (rate limited)',
+      httpStatus:        429,
+      unknownReason:     'RATE_LIMITED',
+    };
+  }
+
+  function cooldownPath(): string {
+    return path.join(tmpDir, 'bubblemaps-rate-limit-cooldown.json');
+  }
+
+  it('writes a cooldown file when a live call returns RATE_LIMITED', async () => {
+    const cachePath = makeCachePath();
+    const { provider } = makeMockProvider(makeRateLimitedResult());
+    const cache = new BubbleMapsCache(provider, cachePath, 20, BUBBLEMAPS_CACHE_TTL_MS);
+
+    await cache.fetchClusterRisk('pumpRL001');
+
+    expect(fs.existsSync(cooldownPath())).toBe(true);
+    const marker = JSON.parse(fs.readFileSync(cooldownPath(), 'utf-8')) as {
+      createdAt: string; expiresAt: string; reason: string; httpStatus: number;
+      lastContract?: string; note: string;
+    };
+    expect(marker.reason).toBe('RATE_LIMITED');
+    expect(marker.httpStatus).toBe(429);
+    expect(marker.lastContract).toBe('pumpRL001');
+    expect(new Date(marker.expiresAt).getTime()).toBeGreaterThan(new Date(marker.createdAt).getTime());
+    expect(marker.note.toLowerCase()).toContain('cooldown');
+  });
+
+  it('active cooldown (from a prior run) prevents any provider call', async () => {
+    const cachePath = makeCachePath();
+    // Simulate a previous run having written an active cooldown marker.
+    fs.writeFileSync(cooldownPath(), JSON.stringify({
+      createdAt:  new Date(Date.now() - 60_000).toISOString(),
+      expiresAt:  new Date(Date.now() + 30 * 60_000).toISOString(), // 30 min in future
+      reason:     'RATE_LIMITED',
+      httpStatus: 429,
+      note:       'prior 429',
+    }));
+
+    const { provider, callCount } = makeMockProvider(makeCleanResult('any'));
+    const cache = new BubbleMapsCache(provider, cachePath, 20, BUBBLEMAPS_CACHE_TTL_MS);
+
+    const result = await cache.fetchClusterRisk('pumpRL002');
+
+    expect(callCount()).toBe(0);
+    expect(cache.getStats().liveCallsThisRun).toBe(0);
+    expect(cache.getStats().skippedDueToCap).toBe(1);
+    expect(result.clusterNotes.some(n => n.includes('rate-limit cooldown active'))).toBe(true);
+  });
+
+  it('active cooldown skip is UNKNOWN, never CLEAN', async () => {
+    const cachePath = makeCachePath();
+    fs.writeFileSync(cooldownPath(), JSON.stringify({
+      createdAt:  new Date().toISOString(),
+      expiresAt:  new Date(Date.now() + 30 * 60_000).toISOString(),
+      reason:     'RATE_LIMITED',
+      httpStatus: 429,
+      note:       'prior 429',
+    }));
+
+    const { provider } = makeMockProvider(makeCleanResult('any'));
+    const cache = new BubbleMapsCache(provider, cachePath, 20, BUBBLEMAPS_CACHE_TTL_MS);
+
+    const result = await cache.fetchClusterRisk('pumpRL003');
+    expect(result.clusterRisk).toBe('UNKNOWN');
+    expect(result.clusterRisk).not.toBe('CLEAN');
+  });
+
+  it('active cooldown skip is NOT written to the cache file', async () => {
+    const cachePath = makeCachePath();
+    fs.writeFileSync(cooldownPath(), JSON.stringify({
+      createdAt:  new Date().toISOString(),
+      expiresAt:  new Date(Date.now() + 30 * 60_000).toISOString(),
+      reason:     'RATE_LIMITED',
+      httpStatus: 429,
+      note:       'prior 429',
+    }));
+
+    const { provider } = makeMockProvider(makeCleanResult('any'));
+    const cache = new BubbleMapsCache(provider, cachePath, 20, BUBBLEMAPS_CACHE_TTL_MS);
+
+    await cache.fetchClusterRisk('pumpRL004');
+    expect(fs.existsSync(cachePath)).toBe(false);
+  });
+
+  it('expired cooldown is ignored — provider IS called', async () => {
+    const cachePath = makeCachePath();
+    fs.writeFileSync(cooldownPath(), JSON.stringify({
+      createdAt:  new Date(Date.now() - 120 * 60_000).toISOString(),
+      expiresAt:  new Date(Date.now() - 60 * 60_000).toISOString(), // expired 60 min ago
+      reason:     'RATE_LIMITED',
+      httpStatus: 429,
+      note:       'old 429',
+    }));
+
+    const { provider, callCount } = makeMockProvider(makeCleanResult('pumpRL005'));
+    const cache = new BubbleMapsCache(provider, cachePath, 20, BUBBLEMAPS_CACHE_TTL_MS);
+
+    const result = await cache.fetchClusterRisk('pumpRL005');
+    expect(callCount()).toBe(1);
+    expect(result.clusterRisk).toBe('CLEAN');
+  });
+
+  it('cooldownMs=0 disables the cooldown (RATE_LIMITED writes no marker)', async () => {
+    const cachePath = makeCachePath();
+    const { provider } = makeMockProvider(makeRateLimitedResult());
+    const cache = new BubbleMapsCache(
+      provider, cachePath, 20, BUBBLEMAPS_CACHE_TTL_MS, undefined, false, 0,
+    );
+    await cache.fetchClusterRisk('pumpRL006');
+    expect(fs.existsSync(cooldownPath())).toBe(false);
+  });
+
+  it('factory reads TOKEN_GRAB_BUBBLEMAPS_RATE_LIMIT_COOLDOWN_MINUTES env override', async () => {
+    process.env['TOKEN_GRAB_BUBBLEMAPS_RATE_LIMIT_COOLDOWN_MINUTES'] = '5';
+    const cachePath = makeCachePath();
+    const { provider } = makeMockProvider(makeRateLimitedResult());
+    const cache = createBubbleMapsCachedProvider(provider, { cachePath });
+    await cache.fetchClusterRisk('pumpRL007');
+    const marker = JSON.parse(fs.readFileSync(cooldownPath(), 'utf-8')) as {
+      createdAt: string; expiresAt: string;
+    };
+    const spanMin = (new Date(marker.expiresAt).getTime() - new Date(marker.createdAt).getTime()) / 60_000;
+    expect(Math.round(spanMin)).toBe(5);
+    delete process.env['TOKEN_GRAB_BUBBLEMAPS_RATE_LIMIT_COOLDOWN_MINUTES'];
+  });
+});
+
 // ── package.json / CLI registration ──────────────────────────────────────────
 
 describe('CLI registration', () => {

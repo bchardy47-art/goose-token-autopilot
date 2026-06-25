@@ -11,7 +11,7 @@
 import * as fs   from 'fs';
 import * as path from 'path';
 
-import { BUBBLEMAPS_CACHE_TTL_MS, DEFAULT_CACHE_PATH } from './bubbleMapsCache';
+import { BUBBLEMAPS_CACHE_TTL_MS, DEFAULT_CACHE_PATH, deriveCooldownPath } from './bubbleMapsCache';
 
 const DEFAULT_CYCLES_DIR  = 'data/token-grab/ripper/cycles';
 const DEFAULT_MEMORY_PATH = 'data/token-grab/ripper/learning-memory.jsonl';
@@ -72,9 +72,20 @@ export type CoverageDiagnosis =
   | 'UNKNOWN_REMAINS_VALID_BLOCKER'
   | 'REPORT_ONLY_NO_POLICY_CHANGE';
 
+export interface RateLimitCooldownStatus {
+  active:           boolean;
+  expiresAt:        string | null;
+  minutesRemaining: number | null;
+  reason:           string | null;
+  lastContract:     string | null;
+}
+
 export interface CoverageDiagnosticResult {
   generatedAt:       string;
   latestCycleFile:   string | null;
+
+  // Cross-run BubbleMaps rate-limit cooldown marker (null when no marker file present).
+  rateLimitCooldown: RateLimitCooldownStatus | null;
 
   topCandidates:     CandidateCoverageRow[];
   approvedUnknownTotal: number;
@@ -110,8 +121,9 @@ export interface CoverageDiagnosticResult {
 }
 
 export interface CoverageDiagnosticOptions {
-  cyclesDir?:   string;
-  cachePath?:   string;
+  cyclesDir?:    string;
+  cachePath?:    string;
+  cooldownPath?: string;
   memoryPath?:  string;
   topN?:        number;
   lastCalls?:   number;
@@ -159,6 +171,28 @@ interface CycleRow {
 }
 interface MemRow { contract?: string; clusterRisk?: string; observedAt?: string | null; capturedAt?: string }
 
+function readCooldownStatus(cooldownPath: string, now: Date): RateLimitCooldownStatus | null {
+  if (!fs.existsSync(cooldownPath)) return null;
+  let parsed: {
+    expiresAt?: string; reason?: string; lastContract?: string;
+  };
+  try {
+    parsed = JSON.parse(fs.readFileSync(cooldownPath, 'utf-8')) as typeof parsed;
+  } catch {
+    return null; // malformed → treat as absent
+  }
+  const expiresMs = parsed.expiresAt ? new Date(parsed.expiresAt).getTime() : NaN;
+  const active = !Number.isNaN(expiresMs) && now.getTime() < expiresMs;
+  const minutesRemaining = active ? Math.max(0, Math.ceil((expiresMs - now.getTime()) / 60_000)) : null;
+  return {
+    active,
+    expiresAt:        parsed.expiresAt ?? null,
+    minutesRemaining,
+    reason:           parsed.reason ?? null,
+    lastContract:     parsed.lastContract ?? null,
+  };
+}
+
 function latestCycleFile(cyclesDir: string): string | null {
   if (!fs.existsSync(cyclesDir)) return null;
   const files = fs.readdirSync(cyclesDir).filter(f => /^cycle-\d{4}-\d{2}-\d{2}-\d{6}\.jsonl$/.test(f)).sort();
@@ -170,6 +204,7 @@ function latestCycleFile(cyclesDir: string): string | null {
 export function runCoverageDiagnostic(opts: CoverageDiagnosticOptions = {}): CoverageDiagnosticResult {
   const cyclesDir  = opts.cyclesDir  ?? DEFAULT_CYCLES_DIR;
   const cachePath  = opts.cachePath  ?? DEFAULT_CACHE_PATH;
+  const cooldownPath = opts.cooldownPath ?? deriveCooldownPath(cachePath);
   const memoryPath = opts.memoryPath ?? DEFAULT_MEMORY_PATH;
   const topN       = opts.topN       ?? DEFAULT_TOP_N;
   const lastCalls  = opts.lastCalls  ?? DEFAULT_LAST_CALLS;
@@ -179,6 +214,9 @@ export function runCoverageDiagnostic(opts: CoverageDiagnosticOptions = {}): Cov
   // approved-first targeting). Callers that have wired the resolver/targeting pass true/false.
   const liveRunnerReadsRawRows  = opts.liveRunnerReadsRawRows ?? true;
   const approvedFirstImplemented = opts.approvedFirstImplemented ?? false;
+
+  // ── Rate-limit cooldown marker (read-only) ────────────────────────────────────
+  const rateLimitCooldown = readCooldownStatus(cooldownPath, now);
 
   // ── Cache index ───────────────────────────────────────────────────────────────
   const cacheRows = readJsonl<CacheEntry>(cachePath);
@@ -404,6 +442,7 @@ export function runCoverageDiagnostic(opts: CoverageDiagnosticOptions = {}): Cov
   return {
     generatedAt,
     latestCycleFile: cycleFile,
+    rateLimitCooldown,
     topCandidates,
     approvedUnknownTotal,
     approvedTotal,
@@ -443,6 +482,14 @@ export function renderCoverageDiagnostic(r: CoverageDiagnosticResult): string {
   L.push(`  Cache entries       : ${r.cacheEntryCount}  (fresh-known: ${r.cacheFreshKnownCount}, stale: ${r.cacheStaleCount})`);
   L.push(`  Live runner reads   : ${r.liveRunnerReadsRawRows ? 'RAW cycle rows (unenriched)' : 'ENRICHED via resolver'}`);
   L.push(`  Approved-first       : ${r.approvedFirstImplemented ? 'IMPLEMENTED in call lane' : 'NOT implemented (simulation only)'}`);
+  const cd = r.rateLimitCooldown;
+  if (cd == null) {
+    L.push('  Rate-limit cooldown : inactive (no marker file)');
+  } else if (cd.active) {
+    L.push(`  Rate-limit cooldown : ACTIVE — expires ${cd.expiresAt} (${cd.minutesRemaining} min remaining)`);
+  } else {
+    L.push(`  Rate-limit cooldown : inactive (expired marker; expiresAt ${cd.expiresAt})`);
+  }
   L.push('');
 
   L.push(`  ${SEP2}`);
