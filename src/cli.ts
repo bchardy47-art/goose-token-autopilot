@@ -244,6 +244,7 @@ import { runPaperIntentCloseout, renderPaperIntentCloseout } from './token-grab/
 import { runEntryMomentumAudit, renderEntryMomentumAudit } from './token-grab/ripperEntryMomentumAudit';
 import { runBrainDoctrineReport, renderBrainDoctrineReport } from './token-grab/ripperBrainDoctrineReport';
 import { runPaperTradeSimulationReport, renderPaperTradeSimulationReport } from './token-grab/ripperPaperTradeSimulationReport';
+import { runSubgroupConvictionReport, renderSubgroupConvictionReport } from './token-grab/ripperSubgroupConvictionReport';
 import { runLearningLoopAudit, renderLearningLoopAudit } from './token-grab/ripperLearningLoopPropagationAudit';
 import {
   runRipperLearningLoop,
@@ -3808,6 +3809,16 @@ async function main(): Promise<void> {
           cyclesDir:   getArgValue('--cycles-dir')   ?? 'data/token-grab/ripper/cycles',
         });
         console.log(renderPaperTradeSimulationReport(ptsResult));
+        break;
+      }
+
+      case 'token:ripper-subgroup-conviction-report': {
+        const scrResult = runSubgroupConvictionReport({
+          intentsPath: getArgValue('--intents-path') ?? 'data/token-grab/ripper/paper-intents.jsonl',
+          memoryPath:  getArgValue('--memory-path')  ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          cyclesDir:   getArgValue('--cycles-dir')   ?? 'data/token-grab/ripper/cycles',
+        });
+        console.log(renderSubgroupConvictionReport(scrResult));
         break;
       }
 
