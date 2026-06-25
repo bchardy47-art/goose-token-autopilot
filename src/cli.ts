@@ -247,6 +247,11 @@ import { runPaperTradeSimulationReport, renderPaperTradeSimulationReport } from 
 import { runSubgroupConvictionReport, renderSubgroupConvictionReport } from './token-grab/ripperSubgroupConvictionReport';
 import { runSubgroupWatchReport, renderSubgroupWatchReport } from './token-grab/ripperSubgroupWatch';
 import { runWatchHitOutcomeReport, renderWatchHitOutcomeReport } from './token-grab/ripperWatchHitOutcomeReport';
+import {
+  enrollWatchCohort, renderWatchCohortEnroll,
+  runWatchCohortReport, renderWatchCohortReport,
+  DEFAULT_COHORT_PATH,
+} from './token-grab/ripperWatchCohort';
 import { runLearningLoopAudit, renderLearningLoopAudit } from './token-grab/ripperLearningLoopPropagationAudit';
 import {
   runRipperLearningLoop,
@@ -3844,6 +3849,36 @@ async function main(): Promise<void> {
         break;
       }
 
+      case 'token:ripper-watch-cohort-enroll': {
+        const enrollResult = enrollWatchCohort({
+          cyclesDir:  getArgValue('--cycles-dir')  ?? 'data/token-grab/ripper/cycles',
+          cycleFile:  getArgValue('--cycle-file')  ?? undefined,
+          cohortPath: getArgValue('--cohort-path') ?? DEFAULT_COHORT_PATH,
+          dryRun:     process.argv.includes('--dry-run'),
+        });
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(enrollResult, null, 2));
+        } else {
+          console.log(renderWatchCohortEnroll(enrollResult));
+        }
+        break;
+      }
+
+      case 'token:ripper-watch-cohort-report': {
+        const cohortReport = runWatchCohortReport({
+          cohortPath:  getArgValue('--cohort-path') ?? DEFAULT_COHORT_PATH,
+          intentsPath: getArgValue('--intents-path') ?? 'data/token-grab/ripper/paper-intents.jsonl',
+          memoryPath:  getArgValue('--memory-path')  ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          cyclesDir:   getArgValue('--cycles-dir')   ?? 'data/token-grab/ripper/cycles',
+        });
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(cohortReport, null, 2));
+        } else {
+          console.log(renderWatchCohortReport(cohortReport));
+        }
+        break;
+      }
+
       case 'token:ripper-learning-loop-propagation-audit': {
         const llaResult = runLearningLoopAudit({
           dexWatchRunsDir: getArgValue('--dex-watch-runs-dir') ?? 'data/token-grab/dex-watch-runs',
@@ -4961,6 +4996,17 @@ async function main(): Promise<void> {
             });
             console.log(renderSubgroupWatchReport(w));
             return { hitCount: w.hitCount };
+          },
+
+          runWatchCohortEnroll: () => {
+            // Forward-only, append-only enrollment of the latest cycle's watch hits.
+            // NOT a buy approval — appends new rows only, never changes gates or trades.
+            const e = enrollWatchCohort({
+              cyclesDir:  rllCyclesDir,
+              cohortPath: DEFAULT_COHORT_PATH,
+            });
+            console.log(renderWatchCohortEnroll(e));
+            return { rowsAppended: e.rowsAppended, duplicatesSkipped: e.duplicatesSkipped };
           },
 
           runAutopilotStatus: () => {

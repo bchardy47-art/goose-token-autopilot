@@ -40,6 +40,12 @@ export interface SubgroupWatchStepResult {
   hitCount: number;
 }
 
+// Forward-only watch cohort enrollment (append-only). Enrollment is NOT buy approval.
+export interface WatchCohortEnrollStepResult {
+  rowsAppended:      number;
+  duplicatesSkipped: number;
+}
+
 export interface AutopilotStepResult {
   mode:              string;
   realTradingLocked: boolean;
@@ -60,6 +66,8 @@ export interface RipperLearningLoopSummary {
   simTrades:        number | null;
   simWinRate:       number | null;
   subgroupWatchHits: number | null;  // paper-only watch hits this loop (NOT buys)
+  watchCohortRowsAppended:      number | null;  // forward cohort appends (NOT buys)
+  watchCohortDuplicatesSkipped: number | null;
   failedStep:       string | null;
   failureReason:    string | null;
 }
@@ -92,6 +100,7 @@ export interface RipperLearningLoopOptions {
   runDiagnostic?:      () => DiagnosticStepResult;
   runSimulation?:      () => SimulationStepResult;
   runSubgroupWatch?:   () => SubgroupWatchStepResult;
+  runWatchCohortEnroll?: () => WatchCohortEnrollStepResult;
   runAutopilotStatus?: () => AutopilotStepResult;
   // test / timing overrides
   _sleep?:             (ms: number) => Promise<void>;
@@ -159,6 +168,8 @@ export async function runRipperLearningLoop(
     let simTrades:        number | null  = null;
     let simWinRate:       number | null  = null;
     let subgroupWatchHits: number | null = null;
+    let watchCohortRowsAppended:      number | null = null;
+    let watchCohortDuplicatesSkipped: number | null = null;
     let loopFailedStep:   string | null  = null;
     let loopFailureReason: string | null = null;
 
@@ -213,6 +224,19 @@ export async function runRipperLearningLoop(
       }
     }
 
+    // Step 3.6 — forward watch cohort enrollment (append-only, paper-only). Enrollment is NOT
+    // buy approval; it appends new forward hits and never changes gate decisions or trades.
+    if (opts.runWatchCohortEnroll && !loopFailedStep) {
+      try {
+        const e = opts.runWatchCohortEnroll();
+        watchCohortRowsAppended      = e.rowsAppended;
+        watchCohortDuplicatesSkipped = e.duplicatesSkipped;
+      } catch (err) {
+        loopFailedStep    = 'watch-cohort-enroll';
+        loopFailureReason = err instanceof Error ? err.message : String(err);
+      }
+    }
+
     // Step 4 — autopilot status (report-only, safety check)
     if (opts.runAutopilotStatus && !loopFailedStep) {
       try {
@@ -237,6 +261,8 @@ export async function runRipperLearningLoop(
       simTrades,
       simWinRate,
       subgroupWatchHits,
+      watchCohortRowsAppended,
+      watchCohortDuplicatesSkipped,
       failedStep:        loopFailedStep,
       failureReason:     loopFailureReason,
     };
@@ -306,6 +332,9 @@ export function renderRipperLearningLoopSummary(summary: RipperLearningLoopSumma
       lines.push(`  Sim win rate   : ${(summary.simWinRate * 100).toFixed(1)}% (n=${summary.simTrades ?? 0})`);
     if (summary.subgroupWatchHits != null)
       lines.push(`  Subgroup watch : ${summary.subgroupWatchHits} hit(s)  [PAPER_ONLY_WATCH_NOT_BUY]`);
+    if (summary.watchCohortRowsAppended != null)
+      lines.push(`  Watch cohort   : +${summary.watchCohortRowsAppended} enrolled, ` +
+        `${summary.watchCohortDuplicatesSkipped ?? 0} dup skipped  [PAPER_ONLY_WATCH_NOT_BUY]`);
   }
 
   lines.push(`  Mode=PAPER_ONLY  realTradingLocked=true  tradingExecuted=0  DO_NOT_ENABLE_REAL_TRADING`);
