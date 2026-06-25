@@ -246,6 +246,7 @@ import { runBrainDoctrineReport, renderBrainDoctrineReport } from './token-grab/
 import { runPaperTradeSimulationReport, renderPaperTradeSimulationReport } from './token-grab/ripperPaperTradeSimulationReport';
 import { runSubgroupConvictionReport, renderSubgroupConvictionReport } from './token-grab/ripperSubgroupConvictionReport';
 import { runSubgroupWatchReport, renderSubgroupWatchReport } from './token-grab/ripperSubgroupWatch';
+import { runWatchHitOutcomeReport, renderWatchHitOutcomeReport } from './token-grab/ripperWatchHitOutcomeReport';
 import { runLearningLoopAudit, renderLearningLoopAudit } from './token-grab/ripperLearningLoopPropagationAudit';
 import {
   runRipperLearningLoop,
@@ -3830,6 +3831,16 @@ async function main(): Promise<void> {
           cyclesDir:   getArgValue('--cycles-dir')   ?? 'data/token-grab/ripper/cycles',
         });
         console.log(renderSubgroupWatchReport(swrResult));
+        break;
+      }
+
+      case 'token:ripper-watch-hit-outcome-report': {
+        const whoResult = runWatchHitOutcomeReport({
+          intentsPath: getArgValue('--intents-path') ?? 'data/token-grab/ripper/paper-intents.jsonl',
+          memoryPath:  getArgValue('--memory-path')  ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          cyclesDir:   getArgValue('--cycles-dir')   ?? 'data/token-grab/ripper/cycles',
+        });
+        console.log(renderWatchHitOutcomeReport(whoResult));
         break;
       }
 
