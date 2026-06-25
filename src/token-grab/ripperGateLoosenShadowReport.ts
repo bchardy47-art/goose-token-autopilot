@@ -427,7 +427,7 @@ export function runRipperGateLoosenShadowReport(
     aggressive55,
     extraObservationTracker: {
       totalMissingExtrasShown: trackerRows.length,
-      totalMissingExtrasLoose60: loose60.extraObservationCoverage.extrasWithoutLaterObs,
+      totalMissingExtrasLoose60: aggressive55.extraObservationCoverage.extrasWithoutLaterObs,
       totalMissingExtrasAggressive55: aggressive55.extraObservationCoverage.extrasWithoutLaterObs,
       displayLimit: EXTRA_TRACKER_DISPLAY_LIMIT,
       rows: trackerRows,
