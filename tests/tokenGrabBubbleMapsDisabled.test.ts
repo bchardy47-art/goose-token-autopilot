@@ -296,7 +296,9 @@ describe('API errors do not break learning loop', () => {
     expect(result.clusterFetchError).toContain('subscription canceled');
   });
 
-  it('error result not written to disk', async () => {
+  it('provider error result is written to disk with UNKNOWN and clusterFetchError', async () => {
+    // commit 24c7435: real live-call errors ARE persisted so diagnostics can show unknownReason.
+    // Only synthetic skips (DISABLED, CAP_REACHED, rate-limit-after-first-429) are not written.
     const cachePath = makeCachePath();
     const throwingProvider: ClusterRiskProvider = {
       name: 'throwing-provider',
@@ -306,6 +308,28 @@ describe('API errors do not break learning loop', () => {
       throwingProvider, cachePath, 20, BUBBLEMAPS_CACHE_TTL_MS,
     );
     await cache.fetchClusterRisk('mint1');
+    expect(fs.existsSync(cachePath)).toBe(true);
+    const lines = fs.readFileSync(cachePath, 'utf-8').split('\n').filter(Boolean);
+    expect(lines).toHaveLength(1);
+    const entry = JSON.parse(lines[0]) as {
+      contract: string;
+      result: { clusterRisk: string; clusterFetchError?: string; unknownReason?: string };
+    };
+    expect(entry.contract).toBe('mint1');
+    expect(entry.result.clusterRisk).toBe('UNKNOWN');
+    expect(entry.result.clusterFetchError).toContain('auth failed');
+    expect(entry.result.unknownReason).toBe('PROVIDER_ERROR');
+  });
+
+  it('CAP_REACHED skip result is not written to disk', async () => {
+    const cachePath = makeCachePath();
+    const provider = makeProvider();
+    // cap=0 forces immediate CAP_REACHED on every call
+    const cache = new BubbleMapsCache(
+      provider, cachePath, 0, BUBBLEMAPS_CACHE_TTL_MS,
+    );
+    await cache.fetchClusterRisk('mint1');
     expect(fs.existsSync(cachePath)).toBe(false);
+    expect(provider.calls).toBe(0);
   });
 });
