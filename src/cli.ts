@@ -245,6 +245,7 @@ import { runEntryMomentumAudit, renderEntryMomentumAudit } from './token-grab/ri
 import { runBrainDoctrineReport, renderBrainDoctrineReport } from './token-grab/ripperBrainDoctrineReport';
 import { runPaperTradeSimulationReport, renderPaperTradeSimulationReport } from './token-grab/ripperPaperTradeSimulationReport';
 import { runSubgroupConvictionReport, renderSubgroupConvictionReport } from './token-grab/ripperSubgroupConvictionReport';
+import { runSubgroupWatchReport, renderSubgroupWatchReport } from './token-grab/ripperSubgroupWatch';
 import { runLearningLoopAudit, renderLearningLoopAudit } from './token-grab/ripperLearningLoopPropagationAudit';
 import {
   runRipperLearningLoop,
@@ -3822,6 +3823,16 @@ async function main(): Promise<void> {
         break;
       }
 
+      case 'token:ripper-subgroup-watch-report': {
+        const swrResult = runSubgroupWatchReport({
+          intentsPath: getArgValue('--intents-path') ?? 'data/token-grab/ripper/paper-intents.jsonl',
+          memoryPath:  getArgValue('--memory-path')  ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          cyclesDir:   getArgValue('--cycles-dir')   ?? 'data/token-grab/ripper/cycles',
+        });
+        console.log(renderSubgroupWatchReport(swrResult));
+        break;
+      }
+
       case 'token:ripper-learning-loop-propagation-audit': {
         const llaResult = runLearningLoopAudit({
           dexWatchRunsDir: getArgValue('--dex-watch-runs-dir') ?? 'data/token-grab/dex-watch-runs',
@@ -4927,6 +4938,18 @@ async function main(): Promise<void> {
               winRate:         s.winRate,
               simulatedTrades: s.totalSimulated,
             };
+          },
+
+          runSubgroupWatch: () => {
+            // Paper-only watch: flag candidates matching the high-conviction subgroup.
+            // NOT a buy signal — changes no gate decisions and writes nothing.
+            const w = runSubgroupWatchReport({
+              intentsPath: rllIntentsPath,
+              memoryPath:  rllMemoryPath,
+              cyclesDir:   rllCyclesDir,
+            });
+            console.log(renderSubgroupWatchReport(w));
+            return { hitCount: w.hitCount };
           },
 
           runAutopilotStatus: () => {

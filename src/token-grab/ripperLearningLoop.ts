@@ -35,6 +35,11 @@ export interface SimulationStepResult {
   simulatedTrades: number;
 }
 
+// Paper-only subgroup watch (report-only). A hit is NOT a buy signal and changes nothing.
+export interface SubgroupWatchStepResult {
+  hitCount: number;
+}
+
 export interface AutopilotStepResult {
   mode:              string;
   realTradingLocked: boolean;
@@ -54,6 +59,7 @@ export interface RipperLearningLoopSummary {
   simRecommendation: string | null;
   simTrades:        number | null;
   simWinRate:       number | null;
+  subgroupWatchHits: number | null;  // paper-only watch hits this loop (NOT buys)
   failedStep:       string | null;
   failureReason:    string | null;
 }
@@ -85,6 +91,7 @@ export interface RipperLearningLoopOptions {
   runPaperCycle?:      () => Promise<PaperCycleStepResult>;
   runDiagnostic?:      () => DiagnosticStepResult;
   runSimulation?:      () => SimulationStepResult;
+  runSubgroupWatch?:   () => SubgroupWatchStepResult;
   runAutopilotStatus?: () => AutopilotStepResult;
   // test / timing overrides
   _sleep?:             (ms: number) => Promise<void>;
@@ -151,6 +158,7 @@ export async function runRipperLearningLoop(
     let simRecommendation: string | null = null;
     let simTrades:        number | null  = null;
     let simWinRate:       number | null  = null;
+    let subgroupWatchHits: number | null = null;
     let loopFailedStep:   string | null  = null;
     let loopFailureReason: string | null = null;
 
@@ -193,6 +201,18 @@ export async function runRipperLearningLoop(
       }
     }
 
+    // Step 3.5 — subgroup watch (report-only, paper-only). A hit is NOT a buy signal;
+    // it does not affect gate decisions, write trades, or enable real trading.
+    if (opts.runSubgroupWatch && !loopFailedStep) {
+      try {
+        const w = opts.runSubgroupWatch();
+        subgroupWatchHits = w.hitCount;
+      } catch (err) {
+        loopFailedStep    = 'subgroup-watch';
+        loopFailureReason = err instanceof Error ? err.message : String(err);
+      }
+    }
+
     // Step 4 — autopilot status (report-only, safety check)
     if (opts.runAutopilotStatus && !loopFailedStep) {
       try {
@@ -216,6 +236,7 @@ export async function runRipperLearningLoop(
       simRecommendation,
       simTrades,
       simWinRate,
+      subgroupWatchHits,
       failedStep:        loopFailedStep,
       failureReason:     loopFailureReason,
     };
@@ -283,6 +304,8 @@ export function renderRipperLearningLoopSummary(summary: RipperLearningLoopSumma
       lines.push(`  Sim recommend  : ${summary.simRecommendation}`);
     if (summary.simWinRate != null)
       lines.push(`  Sim win rate   : ${(summary.simWinRate * 100).toFixed(1)}% (n=${summary.simTrades ?? 0})`);
+    if (summary.subgroupWatchHits != null)
+      lines.push(`  Subgroup watch : ${summary.subgroupWatchHits} hit(s)  [PAPER_ONLY_WATCH_NOT_BUY]`);
   }
 
   lines.push(`  Mode=PAPER_ONLY  realTradingLocked=true  tradingExecuted=0  DO_NOT_ENABLE_REAL_TRADING`);
