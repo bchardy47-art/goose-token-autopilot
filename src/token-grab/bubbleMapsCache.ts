@@ -34,9 +34,10 @@ export class BubbleMapsCache implements ClusterRiskProvider {
   readonly name = 'bubblemaps-cached';
 
   private readonly memCache = new Map<string, BubbleMapsCacheEntry>();
-  private liveCallsThisRun  = 0;
-  private cacheHitsThisRun  = 0;
-  private skippedThisRun    = 0;
+  private liveCallsThisRun   = 0;
+  private cacheHitsThisRun   = 0;
+  private skippedThisRun     = 0;
+  private rateLimitedThisRun = false;
 
   constructor(
     private readonly provider:        ClusterRiskProvider,
@@ -89,6 +90,24 @@ export class BubbleMapsCache implements ClusterRiskProvider {
       };
     }
 
+    // 3.5. Rate-limit guard: if a previous live call this run returned RATE_LIMITED,
+    // skip further calls to avoid wasting cap slots against an already-exhausted quota.
+    // The first RATE_LIMITED result is cached (step 5 below); these subsequent skips are not.
+    if (this.rateLimitedThisRun) {
+      this.skippedThisRun++;
+      return {
+        clusterRisk:       'UNKNOWN',
+        clusterProvider:   'bubblemaps-cached',
+        clusterCheckedAt:  new Date(this.nowMs()).toISOString(),
+        clusterConfidence: 'UNKNOWN',
+        clusterNotes: [
+          'BubbleMaps call skipped: rate limit hit earlier this run',
+          'The API returned 429 on a previous call — further calls skipped until next run',
+        ],
+        unknownReason: 'CAP_REACHED',
+      };
+    }
+
     // 4. Live API call through wrapped provider
     this.liveCallsThisRun++;
     let result: ClusterRiskResult;
@@ -105,6 +124,11 @@ export class BubbleMapsCache implements ClusterRiskProvider {
         clusterFetchError: err instanceof Error ? err.message : 'unexpected provider error',
         unknownReason:     'PROVIDER_ERROR',
       };
+    }
+
+    // If this call was rate-limited, set flag to skip all further live calls this run.
+    if (result.unknownReason === 'RATE_LIMITED') {
+      this.rateLimitedThisRun = true;
     }
 
     // 5. Persist all live-call results, including UNKNOWN with clusterFetchError.

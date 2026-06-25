@@ -486,6 +486,50 @@ describe('UNKNOWN is never promoted to CLEAN regardless of reason', () => {
   });
 });
 
+// ── BubbleMapsCache rate-limit guard → CAP_REACHED skip ──────────────────────
+
+describe('BubbleMapsCache rate-limit guard — skip not written, always UNKNOWN', () => {
+  let tmpDir2: string;
+  beforeEach(() => { tmpDir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'bm-rl-test-')); });
+  afterEach(() => { fs.rmSync(tmpDir2, { recursive: true, force: true }); });
+
+  function makeRateLimitedProvider(): ClusterRiskProvider {
+    return {
+      name: 'mock-429',
+      fetchClusterRisk: async () => ({
+        clusterRisk:       'UNKNOWN' as const,
+        clusterProvider:   'bubblemaps',
+        clusterCheckedAt:  new Date().toISOString(),
+        clusterConfidence: 'UNKNOWN' as const,
+        clusterNotes:      ['http 429 (rate limited)'],
+        clusterFetchError: 'http 429 (rate limited)',
+        unknownReason:     'RATE_LIMITED' as const,
+      }),
+    };
+  }
+
+  it('rate-limit skip result is NOT written to cache file', async () => {
+    const cachePath = path.join(tmpDir2, 'cache.jsonl');
+    const cache = new BubbleMapsCache(makeRateLimitedProvider(), cachePath, 20, 24 * 60 * 60 * 1000);
+    await cache.fetchClusterRisk('contractA');  // first — RATE_LIMITED, written to disk
+    await cache.fetchClusterRisk('contractB');  // skipped — must NOT be written
+    const lines = fs.readFileSync(cachePath, 'utf-8').split('\n').filter(Boolean);
+    // Only one entry: the first RATE_LIMITED result. The skip has no cache entry.
+    expect(lines.length).toBe(1);
+    const stored = JSON.parse(lines[0]!) as { contract: string };
+    expect(stored.contract).toBe('contractA');
+  });
+
+  it('rate-limit skip result clusterRisk is never promoted to CLEAN', async () => {
+    const cachePath = path.join(tmpDir2, 'cache.jsonl');
+    const cache = new BubbleMapsCache(makeRateLimitedProvider(), cachePath, 20, 24 * 60 * 60 * 1000);
+    await cache.fetchClusterRisk('contractA');
+    const skipped = await cache.fetchClusterRisk('contractB');
+    expect(skipped.clusterRisk).toBe('UNKNOWN');
+    expect(skipped.clusterRisk).not.toBe('CLEAN');
+  });
+});
+
 // ── No real trading / no mutation ─────────────────────────────────────────────
 
 describe('safety: no real trading, no mutation', () => {

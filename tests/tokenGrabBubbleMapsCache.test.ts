@@ -513,6 +513,99 @@ describe('provider error handling', () => {
   });
 });
 
+// ── Rate-limit guard (stop-on-first-429) ──────────────────────────────────────
+
+describe('rate-limit guard stops live calls after first RATE_LIMITED result', () => {
+  function makeRateLimitedResult(): ClusterRiskResult {
+    return {
+      clusterRisk:       'UNKNOWN',
+      clusterProvider:   'bubblemaps',
+      clusterCheckedAt:  new Date().toISOString(),
+      clusterConfidence: 'UNKNOWN',
+      clusterNotes:      ['http 429 (rate limited)'],
+      clusterFetchError: 'http 429 (rate limited)',
+      unknownReason:     'RATE_LIMITED',
+    };
+  }
+
+  it('first RATE_LIMITED result is returned and written to disk', async () => {
+    const cachePath = makeCachePath();
+    const { provider, callCount } = makeMockProvider(makeRateLimitedResult());
+    const cache = new BubbleMapsCache(provider, cachePath, 20, BUBBLEMAPS_CACHE_TTL_MS);
+
+    const result = await cache.fetchClusterRisk('contractA');
+
+    expect(callCount()).toBe(1);
+    expect(result.clusterRisk).toBe('UNKNOWN');
+    expect(result.unknownReason).toBe('RATE_LIMITED');
+    expect(fs.existsSync(cachePath)).toBe(true);
+    const lines = fs.readFileSync(cachePath, 'utf-8').split('\n').filter(Boolean);
+    expect(lines.length).toBe(1);
+    const stored = JSON.parse(lines[0]!) as BubbleMapsCacheEntry;
+    expect(stored.result.unknownReason).toBe('RATE_LIMITED');
+  });
+
+  it('second call after RATE_LIMITED skips live call and is NOT written to disk', async () => {
+    const cachePath = makeCachePath();
+    const { provider, callCount } = makeMockProvider(makeRateLimitedResult());
+    const cache = new BubbleMapsCache(provider, cachePath, 20, BUBBLEMAPS_CACHE_TTL_MS);
+
+    await cache.fetchClusterRisk('contractA');  // first: live, RATE_LIMITED, cached
+    const second = await cache.fetchClusterRisk('contractB');  // second: skipped
+
+    expect(callCount()).toBe(1);  // provider called only once
+    expect(second.clusterRisk).toBe('UNKNOWN');
+    expect(second.unknownReason).toBe('CAP_REACHED');
+    expect(second.clusterNotes.some(n => n.includes('rate limit hit earlier this run'))).toBe(true);
+    // Only the first RATE_LIMITED result should be in the cache file
+    const lines = fs.readFileSync(cachePath, 'utf-8').split('\n').filter(Boolean);
+    expect(lines.length).toBe(1);
+    const stored = JSON.parse(lines[0]!) as BubbleMapsCacheEntry;
+    expect(stored.contract).toBe('contractA');
+  });
+
+  it('multiple calls after RATE_LIMITED all skip — provider never called again', async () => {
+    const cachePath = makeCachePath();
+    const { provider, callCount } = makeMockProvider(makeRateLimitedResult());
+    const cache = new BubbleMapsCache(provider, cachePath, 20, BUBBLEMAPS_CACHE_TTL_MS);
+
+    await cache.fetchClusterRisk('contractA');  // first 429
+    await cache.fetchClusterRisk('contractB');  // skipped
+    await cache.fetchClusterRisk('contractC');  // skipped
+    await cache.fetchClusterRisk('contractD');  // skipped
+
+    expect(callCount()).toBe(1);
+    expect(cache.getStats().liveCallsThisRun).toBe(1);
+    expect(cache.getStats().skippedDueToCap).toBe(3);
+  });
+
+  it('rate-limit skip returns UNKNOWN not CLEAN — gate remains blocked', async () => {
+    const cachePath = makeCachePath();
+    const { provider } = makeMockProvider(makeRateLimitedResult());
+    const cache = new BubbleMapsCache(provider, cachePath, 20, BUBBLEMAPS_CACHE_TTL_MS);
+
+    await cache.fetchClusterRisk('contractA');
+    const skipped = await cache.fetchClusterRisk('contractB');
+
+    expect(skipped.clusterRisk).toBe('UNKNOWN');
+    expect(skipped.clusterRisk).not.toBe('CLEAN');
+  });
+
+  it('normal run with no 429s still calls provider up to cap', async () => {
+    const cachePath = makeCachePath();
+    const { provider, callCount } = makeMockProvider((mint: string) => makeCleanResult(mint));
+    const cache = new BubbleMapsCache(provider, cachePath, 3, BUBBLEMAPS_CACHE_TTL_MS);
+
+    await cache.fetchClusterRisk('contractA');
+    await cache.fetchClusterRisk('contractB');
+    await cache.fetchClusterRisk('contractC');
+
+    expect(callCount()).toBe(3);
+    expect(cache.getStats().liveCallsThisRun).toBe(3);
+    expect(cache.getStats().skippedDueToCap).toBe(0);
+  });
+});
+
 // ── package.json / CLI registration ──────────────────────────────────────────
 
 describe('CLI registration', () => {
