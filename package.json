@@ -170,6 +170,7 @@
     "token:ripper-entry-momentum-audit": "tsx src/cli.ts token:ripper-entry-momentum-audit",
     "token:ripper-brain-doctrine-report": "tsx src/cli.ts token:ripper-brain-doctrine-report",
     "token:ripper-paper-trade-simulation-report": "tsx src/cli.ts token:ripper-paper-trade-simulation-report",
+    "token:ripper-learning-loop": "tsx src/cli.ts token:ripper-learning-loop",
     "token:ripper-learning-loop-propagation-audit": "tsx src/cli.ts token:ripper-learning-loop-propagation-audit",
     "token:ripper-m5-evidence-dashboard": "tsx src/cli.ts token:ripper-m5-evidence-dashboard",
     "token:ripper-m5-usable-sample-deep-dive": "tsx src/cli.ts token:ripper-m5-usable-sample-deep-dive",

@@ -245,6 +245,14 @@ import { runEntryMomentumAudit, renderEntryMomentumAudit } from './token-grab/ri
 import { runBrainDoctrineReport, renderBrainDoctrineReport } from './token-grab/ripperBrainDoctrineReport';
 import { runPaperTradeSimulationReport, renderPaperTradeSimulationReport } from './token-grab/ripperPaperTradeSimulationReport';
 import { runLearningLoopAudit, renderLearningLoopAudit } from './token-grab/ripperLearningLoopPropagationAudit';
+import {
+  runRipperLearningLoop,
+  renderRipperLearningLoopResult,
+  renderRipperLearningLoopSummary,
+  renderRipperLearningLoopUsage,
+  DEFAULT_INTERVAL_MINUTES as LEARNING_LOOP_DEFAULT_INTERVAL,
+  DEFAULT_MAX_LOOPS as LEARNING_LOOP_DEFAULT_MAX,
+} from './token-grab/ripperLearningLoop';
 import { runM5EvidenceDashboard, renderM5EvidenceDashboard } from './token-grab/ripperM5EvidenceDashboard';
 import { runM5UsableSampleDeepDive, renderM5UsableSampleDeepDive } from './token-grab/ripperM5UsableSampleDeepDive';
 import { runClusterCoverageAudit, renderClusterCoverageAudit } from './token-grab/ripperClusterCoverageAudit';
@@ -4835,6 +4843,102 @@ async function main(): Promise<void> {
           outPath:          rleofOutPath,
         });
         console.log(renderRipperLooseExtraObservationFollowup(rleofResult));
+        break;
+      }
+
+      case 'token:ripper-learning-loop': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderRipperLearningLoopUsage());
+          break;
+        }
+        const rllMaxLoops       = parseNumberArg('--max-loops',         LEARNING_LOOP_DEFAULT_MAX,      { min: 1 });
+        const rllIntervalMins   = parseNumberArg('--interval-minutes',  LEARNING_LOOP_DEFAULT_INTERVAL, { min: 1 });
+        const rllRunsDir        = getArgValue('--runs-dir')   ?? 'data/token-grab/dex-watch-runs';
+        const rllCyclesDir      = getArgValue('--cycles-dir') ?? 'data/token-grab/ripper/cycles';
+        const rllMemoryPath     = getArgValue('--memory-path') ?? 'data/token-grab/ripper/learning-memory.jsonl';
+        const rllIntentsPath    = getArgValue('--intents-path') ?? 'data/token-grab/ripper/paper-intents.jsonl';
+
+        const { provider: rllRawProvider, configNote: rllNote } = createClusterRiskProvider();
+        if (rllNote) console.warn(`[cluster-risk] ${rllNote}`);
+        const rllClusterProvider = createBubbleMapsCachedProvider(rllRawProvider);
+
+        console.log('');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('  TOKEN GRAB — RIPPER LEARNING LOOP');
+        console.log('  [REAL TRADING LOCKED — PAPER ONLY — READ ONLY]');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log(`  max loops      : ${rllMaxLoops}`);
+        console.log(`  interval       : ${rllIntervalMins} min`);
+        console.log(`  cycles dir     : ${rllCyclesDir}`);
+        console.log('  realTradingLocked=true  tradingExecuted=0  DO_NOT_ENABLE_REAL_TRADING');
+        console.log('');
+
+        const rllResult = await runRipperLearningLoop({
+          maxLoops:       rllMaxLoops,
+          intervalMinutes: rllIntervalMins,
+
+          runPaperCycle: async () => {
+            const r = await runRipperPaperCycle({
+              runsDir:             rllRunsDir,
+              cyclesDir:           rllCyclesDir,
+              clusterRiskProvider: rllClusterProvider,
+            });
+            console.log(renderRipperPaperCycleResult(r));
+            return {
+              approved:    r.buyApprovedPaper,
+              rejected:    r.buyRejected,
+              bmLiveCalls: r.bubbleMapsStats?.liveCallsThisRun ?? null,
+              bmCacheHits: r.bubbleMapsStats?.cacheHitsThisRun ?? null,
+              bmSkipped:   r.bubbleMapsStats?.skippedDueToCap  ?? null,
+            };
+          },
+
+          runDiagnostic: () => {
+            const d = runCoverageDiagnostic({
+              cyclesDir:                rllCyclesDir,
+              memoryPath:               rllMemoryPath,
+              liveRunnerReadsRawRows:   false,
+              approvedFirstImplemented: true,
+            });
+            console.log(renderCoverageDiagnostic(d));
+            return { cooldownActive: d.rateLimitCooldown?.active ?? null };
+          },
+
+          runSimulation: () => {
+            const s = runPaperTradeSimulationReport({
+              intentsPath: rllIntentsPath,
+              memoryPath:  rllMemoryPath,
+              cyclesDir:   rllCyclesDir,
+            });
+            console.log(renderPaperTradeSimulationReport(s));
+            return {
+              recommendation:  s.recommendation,
+              winRate:         s.winRate,
+              simulatedTrades: s.totalSimulated,
+            };
+          },
+
+          runAutopilotStatus: () => {
+            const a = runRipperAutopilotStatus({ cyclesDir: rllCyclesDir });
+            console.log(renderRipperAutopilotStatus(a));
+            return {
+              mode:              a.mode,
+              realTradingLocked: a.realTradingLocked,
+              tradingExecuted:   a.tradingExecuted,
+            };
+          },
+
+          onLoopStart: (loopNumber, maxLoops) => {
+            console.log('');
+            console.log(`  ── Loop ${loopNumber} / ${maxLoops} ──`);
+          },
+
+          onLoopComplete: (summary) => {
+            console.log(renderRipperLearningLoopSummary(summary));
+          },
+        });
+
+        console.log(renderRipperLearningLoopResult(rllResult));
         break;
       }
 
