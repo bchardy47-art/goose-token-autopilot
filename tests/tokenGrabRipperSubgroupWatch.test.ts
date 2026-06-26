@@ -1,9 +1,14 @@
 // DO_NOT_ENABLE_REAL_TRADING  reportOnly=true  readOnly=true  paperOnly=true  tradingExecuted=0
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import * as fs   from 'fs';
+import * as os   from 'os';
+import * as path from 'path';
 import {
   classifySubgroupWatch,
   runSubgroupWatch,
+  runSubgroupWatchReport,
+  renderSubgroupWatchReport,
   renderSubgroupWatchSummary,
   m5BandLabel,
   TARGET_ENTRY_TIMING,
@@ -240,5 +245,238 @@ describe('learning loop can include subgroupWatchHits without enabling trading',
     expect(result.summaries[0]!.failedStep).toBe('subgroup-watch');
     expect(result.tradingExecuted).toBe(0);
     expect(result.realTradingLocked).toBe(true);
+  });
+});
+
+// ── runSubgroupWatchReport: latest cycle from RAW cycle files (aligns with enrollment) ─────
+// The watch report must define "latest cycle" from the newest RAW cycle file in cyclesDir — the
+// same definition forward cohort enrollment uses — so the two never diverge when a brand-new
+// cycle file exists whose paper intents have not been observed yet. All-time hits stay
+// observation-based; only the latest-cycle view tracks the raw cycle.
+
+describe('runSubgroupWatchReport latest cycle alignment', () => {
+  let dir: string, intentsPath: string, memoryPath: string, cyclesDir: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swr-'));
+    intentsPath = path.join(dir, 'paper-intents.jsonl');
+    memoryPath  = path.join(dir, 'learning-memory.jsonl');
+    cyclesDir   = path.join(dir, 'cycles');
+    fs.mkdirSync(cyclesDir);
+  });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  function writeJsonl(p: string, rows: unknown[]): void {
+    fs.writeFileSync(p, rows.map(r => JSON.stringify(r)).join('\n') + '\n', 'utf-8');
+  }
+  /** Write a raw cycle file `cycle-<id-tail>.jsonl`. Content is incidental to latest-cycle id. */
+  function writeCycleFile(id: string, rows: unknown[] = [{ note: 'raw cycle' }]): void {
+    writeJsonl(path.join(cyclesDir, `${id}.jsonl`), rows);
+  }
+  function watchHitIntent(over: Record<string, unknown>): Record<string, unknown> {
+    return {
+      intentId: 'i', contract: 'C', symbol: 'C', status: 'OBSERVED',
+      paperEntryTiming: 'ENTER_NOW', entryDecision: 'READY_TO_SNIPE_PAPER',
+      clusterRisk: 'UNKNOWN', ripperScore: 99, entryMomentumPct: -10,
+      observedAt: '2026-06-26T10:10:00.000Z', priceChangePct: 4, ...over,
+    };
+  }
+
+  it('latest raw cycle has no observed trades yet → latestCycle is newest raw id, count 0', () => {
+    const OLD = 'cycle-2026-06-26-100000';
+    const NEW = 'cycle-2026-06-26-300000';   // brand-new cycle file, no observations yet
+    writeJsonl(intentsPath, [
+      watchHitIntent({ intentId: 'i-old', contract: 'WCAT', symbol: 'wCAT', sourceCycle: OLD }),
+    ]);
+    writeJsonl(memoryPath, [{ contract: 'WCAT', liquidityBucket: 'LIQ_10K_30K', vlrBucket: 'VLR_0_5_TO_2' }]);
+    writeCycleFile(OLD);
+    writeCycleFile(NEW);                       // newest raw cycle — not referenced by any intent
+
+    const r = runSubgroupWatchReport({ intentsPath, memoryPath, cyclesDir });
+    expect(r.latestCycle).toBe(NEW);           // tracks the newest RAW cycle file
+    expect(r.latestCycleHitCount).toBe(0);     // its intents are not observed yet
+    expect(r.hitCount).toBe(1);                // historical/all-time hits unchanged
+  });
+
+  it('latest raw cycle has an observed matching trade → counts it', () => {
+    const NEW = 'cycle-2026-06-26-300000';
+    writeJsonl(intentsPath, [
+      watchHitIntent({ intentId: 'i1', contract: 'HIT', symbol: 'HIT', sourceCycle: NEW }),
+    ]);
+    writeJsonl(memoryPath, [{ contract: 'HIT', liquidityBucket: 'LIQ_10K_30K', vlrBucket: 'VLR_0_5_TO_2' }]);
+    writeCycleFile(NEW);
+
+    const r = runSubgroupWatchReport({ intentsPath, memoryPath, cyclesDir });
+    expect(r.latestCycle).toBe(NEW);
+    expect(r.hitCount).toBe(1);
+    expect(r.latestCycleHitCount).toBe(1);
+  });
+
+  it('older watch-hit contract reappears in newest raw cycle (not qualifying) → count stays 0', () => {
+    const OLD = 'cycle-2026-06-26-100000';
+    const NEW = 'cycle-2026-06-26-300000';
+    // WCAT was a watch hit in OLD; it reappears in the NEW raw cycle but NEW has no observed
+    // intent (and the reappearance does not qualify). Count must remain 0, not pick up OLD's hit.
+    writeJsonl(intentsPath, [
+      watchHitIntent({ intentId: 'i-old', contract: 'WCAT', symbol: 'wCAT', sourceCycle: OLD }),
+    ]);
+    writeJsonl(memoryPath, [{ contract: 'WCAT', liquidityBucket: 'LIQ_10K_30K', vlrBucket: 'VLR_0_5_TO_2' }]);
+    writeCycleFile(OLD);
+    // Reappears in NEW raw cycle with non-qualifying momentum (+10 → +5 to +20).
+    writeCycleFile(NEW, [{ normalizedSignal: { contract: 'WCAT', symbol: 'wCAT' }, entryMomentumPct: 10, buyGateDecision: 'BUY_APPROVED_PAPER' }]);
+
+    const r = runSubgroupWatchReport({ intentsPath, memoryPath, cyclesDir });
+    expect(r.latestCycle).toBe(NEW);
+    expect(r.latestCycleHitCount).toBe(0);
+    expect(r.hitCount).toBe(1);
+  });
+
+  it('falls back to newest observed sourceCycle when no raw cycle files exist', () => {
+    const OBS = 'cycle-2026-06-26-200000';
+    writeJsonl(intentsPath, [
+      watchHitIntent({ intentId: 'i1', contract: 'HIT', symbol: 'HIT', sourceCycle: OBS }),
+    ]);
+    writeJsonl(memoryPath, [{ contract: 'HIT', liquidityBucket: 'LIQ_10K_30K', vlrBucket: 'VLR_0_5_TO_2' }]);
+    // No cycle-*.jsonl files written.
+
+    const r = runSubgroupWatchReport({ intentsPath, memoryPath, cyclesDir });
+    expect(r.latestCycle).toBe(OBS);           // fallback to observed sourceCycle
+    expect(r.latestCycleHitCount).toBe(1);
+  });
+
+  it('renders all safety strings', () => {
+    const NEW = 'cycle-2026-06-26-300000';
+    writeJsonl(intentsPath, [
+      watchHitIntent({ intentId: 'i1', contract: 'HIT', symbol: 'HIT', sourceCycle: NEW }),
+    ]);
+    writeJsonl(memoryPath, [{ contract: 'HIT', liquidityBucket: 'LIQ_10K_30K', vlrBucket: 'VLR_0_5_TO_2' }]);
+    writeCycleFile(NEW);
+
+    const txt = renderSubgroupWatchReport(runSubgroupWatchReport({ intentsPath, memoryPath, cyclesDir }));
+    expect(txt).toContain('PAPER_ONLY_WATCH_NOT_BUY');
+    expect(txt).toContain('DO_NOT_ENABLE_REAL_TRADING');
+    expect(txt).toContain('DO_NOT_PROMOTE_TO_REAL_TRADING');
+    expect(txt).toContain('DO_NOT_CHANGE_GATES_FROM_THIS_REPORT_ALONE');
+    expect(txt).toContain('UNKNOWN≠CLEAN');
+    expect(txt).not.toMatch(/(?<!DO_NOT_)ENABLE_REAL_TRADING/);
+  });
+});
+
+// ── latestRawEnrollableHitCount: observed vs raw distinction ──────────────────────────
+// Validates the key discrepancy case: an observed intent can have entryMomentumPct (from the
+// paper-intent join) while the raw cycle row has null → UNAVAILABLE. The two counts must
+// differ and be labeled separately in the renderer.
+
+describe('latestRawEnrollableHitCount vs latestCycleHitCount', () => {
+  let dir: string, intentsPath: string, memoryPath: string, cyclesDir: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swr-raw-'));
+    intentsPath = path.join(dir, 'paper-intents.jsonl');
+    memoryPath  = path.join(dir, 'learning-memory.jsonl');
+    cyclesDir   = path.join(dir, 'cycles');
+    fs.mkdirSync(cyclesDir);
+  });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  function writeJsonl(p: string, rows: unknown[]): void {
+    fs.writeFileSync(p, rows.map(r => JSON.stringify(r)).join('\n') + '\n', 'utf-8');
+  }
+  function writeCycleFile(id: string, rows: unknown[]): void {
+    writeJsonl(path.join(cyclesDir, `${id}.jsonl`), rows);
+  }
+  function watchHitIntent(over: Record<string, unknown>): Record<string, unknown> {
+    return {
+      intentId: 'i', contract: 'C', symbol: 'C', status: 'OBSERVED',
+      paperEntryTiming: 'ENTER_NOW', entryDecision: 'READY_TO_SNIPE_PAPER',
+      clusterRisk: 'UNKNOWN', ripperScore: 99, entryMomentumPct: -10,
+      observedAt: '2026-06-26T10:10:00.000Z', priceChangePct: 4, ...over,
+    };
+  }
+  function rawCycleRow(over: Record<string, unknown>): Record<string, unknown> {
+    return {
+      buyGateDecision: 'BUY_APPROVED_PAPER',
+      entryMomentumPct: -10,
+      launchAgeBucket: 'TOO_EARLY',
+      entryDecision: 'READY_TO_SNIPE_PAPER',
+      normalizedSignal: { contract: 'C', symbol: 'C', liquidityUsd: 20_000 },
+      ...over,
+    };
+  }
+
+  it('observed=1 raw=0 when raw M5 is null — the DATBIHGAH case', () => {
+    // The observed intent has entryMomentumPct=-10 (bands to -20 to -5).
+    // The raw cycle row has entryMomentumPct=null → UNAVAILABLE → no match.
+    const CYC = 'cycle-2026-06-26-100000';
+    writeJsonl(intentsPath, [
+      watchHitIntent({ intentId: 'i1', contract: 'DATBIHGAH', symbol: 'D', sourceCycle: CYC, entryMomentumPct: -10 }),
+    ]);
+    writeJsonl(memoryPath, [{ contract: 'DATBIHGAH', liquidityBucket: 'LIQ_10K_30K', vlrBucket: 'VLR_0_5_TO_2' }]);
+    writeCycleFile(CYC, [rawCycleRow({ entryMomentumPct: null, normalizedSignal: { contract: 'DATBIHGAH', symbol: 'D', liquidityUsd: 20_000 } })]);
+
+    const r = runSubgroupWatchReport({ intentsPath, memoryPath, cyclesDir });
+    expect(r.latestCycleHitCount).toBe(1);          // observed: intent has M5=-10
+    expect(r.latestRawEnrollableHitCount).toBe(0);  // raw: null M5 → UNAVAILABLE → no match
+  });
+
+  it('raw enrollable count matches a valid approved row with in-band M5 and LIQ_10K_30K', () => {
+    const CYC = 'cycle-2026-06-26-200000';
+    writeJsonl(intentsPath, []);
+    writeJsonl(memoryPath, []);
+    writeCycleFile(CYC, [
+      rawCycleRow({ entryMomentumPct: -10 }),               // match: M5=-10, liq=20k, ENTER_NOW
+      rawCycleRow({ entryMomentumPct: 5 }),                 // no match: M5 out of band
+      rawCycleRow({ buyGateDecision: 'BUY_REJECTED' }),     // no match: not approved
+      rawCycleRow({ normalizedSignal: { contract: 'C', liquidityUsd: 50_000 } }), // no match: liq bucket wrong
+    ]);
+
+    const r = runSubgroupWatchReport({ intentsPath, memoryPath, cyclesDir });
+    expect(r.latestRawEnrollableHitCount).toBe(1);
+  });
+
+  it('raw enrollable count is 0 for HQ subgroup (WAIT_10M, not ENTER_NOW)', () => {
+    // A row that qualifies for WAIT_10M is NOT counted as raw enrollable (target is ENTER_NOW).
+    const CYC = 'cycle-2026-06-26-300000';
+    writeJsonl(intentsPath, []);
+    writeJsonl(memoryPath, []);
+    writeCycleFile(CYC, [
+      rawCycleRow({
+        entryMomentumPct: -10,
+        launchAgeBucket: 'PRIME_WINDOW',
+        entryDecision: 'READY_TO_SNIPE_PAPER',
+        normalizedSignal: { contract: 'C', liquidityUsd: 20_000 },
+        ripperInput: { contract: 'C', clusterRisk: 'CLEAN' },
+        ripperScore: 100,
+      }),
+    ]);
+
+    const r = runSubgroupWatchReport({ intentsPath, memoryPath, cyclesDir });
+    // CLEAN + score=100 + PRIME_WINDOW + READY_TO_SNIPE_PAPER → WAIT_10M → not ENTER_NOW → no match
+    expect(r.latestRawEnrollableHitCount).toBe(0);
+  });
+
+  it('renderer labels observed and raw enrollable counts separately', () => {
+    const CYC = 'cycle-2026-06-26-100000';
+    writeJsonl(intentsPath, [
+      watchHitIntent({ intentId: 'i1', contract: 'OBS', symbol: 'OBS', sourceCycle: CYC }),
+    ]);
+    writeJsonl(memoryPath, [{ contract: 'OBS', liquidityBucket: 'LIQ_10K_30K', vlrBucket: 'VLR_0_5_TO_2' }]);
+    // Raw cycle has no enrollable row (null M5)
+    writeCycleFile(CYC, [rawCycleRow({ entryMomentumPct: null, normalizedSignal: { contract: 'OBS', symbol: 'OBS', liquidityUsd: 20_000 } })]);
+
+    const r = runSubgroupWatchReport({ intentsPath, memoryPath, cyclesDir });
+    const txt = renderSubgroupWatchReport(r);
+
+    expect(txt).toContain('Latest observed hits');
+    expect(txt).toContain('Latest raw enrollable hits');
+    // The two lines must show different counts (1 observed, 0 raw)
+    expect(txt).toMatch(/Latest observed hits\s*:\s*1/);
+    expect(txt).toMatch(/Latest raw enrollable hits\s*:\s*0/);
+    // Safety strings still present
+    expect(txt).toContain('PAPER_ONLY_WATCH_NOT_BUY');
+    expect(txt).toContain('DO_NOT_ENABLE_REAL_TRADING');
+    expect(txt).toContain('DO_NOT_PROMOTE_TO_REAL_TRADING');
+    expect(txt).toContain('DO_NOT_CHANGE_GATES_FROM_THIS_REPORT_ALONE');
+    expect(txt).toContain('UNKNOWN≠CLEAN');
   });
 });

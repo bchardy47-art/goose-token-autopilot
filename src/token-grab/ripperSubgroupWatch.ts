@@ -15,12 +15,15 @@
 // It is a pure classifier over candidate rows plus a tiny summary/renderer. Gate decisions
 // (BUY_APPROVED_PAPER / BUY_REJECTED) are computed elsewhere and are untouched here.
 
+import * as path from 'path';
+
 import { bucketLiquidity } from './ripperLearningMemory';
 import {
   runPaperTradeSimulationReport,
   type SimulatedTrade,
   type PaperTradeSimulationOptions,
 } from './ripperPaperTradeSimulationReport';
+import { findLatestRawCycleFile, countRawEnrollableHits } from './ripperWatchRawCycle';
 
 // ── Target subgroup (from the conviction report's top HIGH_CONVICTION_PAPER_ONLY group) ──
 
@@ -223,9 +226,10 @@ export function simulatedTradeToWatchRow(t: SimulatedTrade): SubgroupWatchRow {
 }
 
 export interface SubgroupWatchReportResult extends SubgroupWatchSummary {
-  generatedAt:         string;
-  latestCycle:         string | null;
-  latestCycleHitCount: number;             // hits whose sourceCycle is the latest one
+  generatedAt:                 string;
+  latestCycle:                 string | null;
+  latestCycleHitCount:         number;  // observed: sim rows whose sourceCycle === latestCycle and match
+  latestRawEnrollableHitCount: number;  // raw: rows in the latest raw cycle file that would enroll
 }
 
 export interface SubgroupWatchReportOptions extends PaperTradeSimulationOptions {
@@ -233,16 +237,19 @@ export interface SubgroupWatchReportOptions extends PaperTradeSimulationOptions 
   generatedAt?: string;
 }
 
+const DEFAULT_CYCLES_DIR = 'data/token-grab/ripper/cycles';
+
 /**
  * Standalone watch report. Reuses the paper-trade simulation pipeline (identical data source
  * to the conviction report), classifies every simulated OBSERVED trade, and surfaces watch
  * hits — highlighting the most recent cycle. Read-only; computes nothing that buys.
  */
 export function runSubgroupWatchReport(opts: SubgroupWatchReportOptions = {}): SubgroupWatchReportResult {
+  const cyclesDir = opts.cyclesDir ?? DEFAULT_CYCLES_DIR;
   const sim = runPaperTradeSimulationReport({
     intentsPath: opts.intentsPath,
     memoryPath:  opts.memoryPath,
-    cyclesDir:   opts.cyclesDir,
+    cyclesDir,
     nowMs:       opts.nowMs,
   });
 
@@ -250,23 +257,41 @@ export function runSubgroupWatchReport(opts: SubgroupWatchReportOptions = {}): S
   const rows   = trades.map(simulatedTradeToWatchRow);
   const summary = runSubgroupWatch(rows, { topN: opts.topN });
 
-  // Latest cycle = lexicographically greatest sourceCycle (cycle ids are timestamp-sortable).
-  let latestCycle: string | null = null;
-  for (const t of trades) {
-    if (t.sourceCycle && (latestCycle == null || t.sourceCycle > latestCycle)) latestCycle = t.sourceCycle;
+  // Latest cycle = newest RAW cycle file in cyclesDir — the SAME definition forward cohort
+  // enrollment uses (token:ripper-watch-cohort-enroll --dry-run scans this file). This keeps
+  // the two reports aligned even when a brand-new cycle file exists but its paper intents have
+  // not been observed yet. Fall back to the newest OBSERVED sourceCycle only when no raw cycle
+  // files are present (e.g. cyclesDir missing). Total/all-time hits stay observation-based.
+  const latestCycleFileName = findLatestRawCycleFile(cyclesDir);
+  let latestCycle: string | null = latestCycleFileName
+    ? path.basename(latestCycleFileName).replace(/\.jsonl$/, '')
+    : null;
+  if (latestCycle == null) {
+    for (const t of trades) {
+      if (t.sourceCycle && (latestCycle == null || t.sourceCycle > latestCycle)) latestCycle = t.sourceCycle;
+    }
   }
 
-  // Count hits belonging to that latest cycle (match by contract within the latest-cycle trades).
-  const latestContracts = new Set(
-    trades.filter(t => t.sourceCycle === latestCycle).map(t => t.contract),
-  );
-  const latestCycleHitCount = summary.hits.filter(h => h.contract != null && latestContracts.has(h.contract)).length;
+  // Observed hit count: simulation-derived trades whose sourceCycle === latestCycle and match.
+  // May include rows whose raw M5 was null (enriched from a join at observation time).
+  const latestCycleHitCount = trades.filter(
+    t => t.sourceCycle === latestCycle && classifySubgroupWatch(simulatedTradeToWatchRow(t)).matched,
+  ).length;
+
+  // Raw enrollable hit count: rows in the latest raw cycle file that would match forward cohort
+  // enrollment — same criteria as token:ripper-watch-cohort-enroll --dry-run "Watch hits found".
+  // Zero when the latest cycle has no raw file (fallback path) or when raw M5 is null/UNAVAILABLE.
+  let latestRawEnrollableHitCount = 0;
+  if (latestCycleFileName) {
+    latestRawEnrollableHitCount = countRawEnrollableHits(path.join(cyclesDir, latestCycleFileName));
+  }
 
   return {
     ...summary,
     generatedAt: opts.generatedAt ?? new Date(opts.nowMs ?? Date.now()).toISOString(),
     latestCycle,
     latestCycleHitCount,
+    latestRawEnrollableHitCount,
   };
 }
 
@@ -277,9 +302,11 @@ export function renderSubgroupWatchReport(r: SubgroupWatchReportResult): string 
   L.push('  TOKEN GRAB — SUBGROUP WATCH REPORT (PAPER ONLY — NOT A BUY SIGNAL)');
   L.push('  [REPORT ONLY — READ ONLY — PAPER ONLY — UNKNOWN ≠ CLEAN]');
   L.push(SEP, '');
-  L.push(`  Generated at  : ${r.generatedAt}`);
-  L.push(`  Latest cycle  : ${r.latestCycle ?? '(none)'}`);
-  L.push(`  Latest-cycle hits : ${r.latestCycleHitCount}`);
+  L.push(`  Generated at               : ${r.generatedAt}`);
+  L.push(`  Latest cycle               : ${r.latestCycle ?? '(none)'}`);
+  L.push(`  Latest observed hits       : ${r.latestCycleHitCount}`);
+  L.push(`  Latest raw enrollable hits : ${r.latestRawEnrollableHitCount}`);
+  L.push(`  (observed = simulation-derived; raw enrollable = forward cohort eligible, matches cohort enroll --dry-run)`);
   L.push('');
   L.push(renderSubgroupWatchSummary(r));
   L.push('');
