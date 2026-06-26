@@ -252,6 +252,10 @@ import {
   runWatchCohortReport, renderWatchCohortReport,
   DEFAULT_COHORT_PATH,
 } from './token-grab/ripperWatchCohort';
+import {
+  enrollCohortFamily, renderFamilyEnroll,
+  runFamilyReport, renderFamilyReport,
+} from './token-grab/ripperWatchCohortFamily';
 import { runLearningLoopAudit, renderLearningLoopAudit } from './token-grab/ripperLearningLoopPropagationAudit';
 import {
   runRipperLearningLoop,
@@ -3875,6 +3879,36 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(cohortReport, null, 2));
         } else {
           console.log(renderWatchCohortReport(cohortReport));
+        }
+        break;
+      }
+
+      case 'token:ripper-cohort-family-enroll': {
+        const famEnroll = enrollCohortFamily({
+          cyclesDir: getArgValue('--cycles-dir') ?? 'data/token-grab/ripper/cycles',
+          cycleFile: getArgValue('--cycle-file') ?? undefined,
+          dataDir:   getArgValue('--data-dir')   ?? 'data/token-grab/ripper',
+          dryRun:    process.argv.includes('--dry-run'),
+        });
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(famEnroll, null, 2));
+        } else {
+          console.log(renderFamilyEnroll(famEnroll));
+        }
+        break;
+      }
+
+      case 'token:ripper-cohort-family-report': {
+        const famReport = runFamilyReport({
+          dataDir:     getArgValue('--data-dir')    ?? 'data/token-grab/ripper',
+          intentsPath: getArgValue('--intents-path') ?? 'data/token-grab/ripper/paper-intents.jsonl',
+          memoryPath:  getArgValue('--memory-path')  ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          cyclesDir:   getArgValue('--cycles-dir')   ?? 'data/token-grab/ripper/cycles',
+        });
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(famReport, null, 2));
+        } else {
+          console.log(renderFamilyReport(famReport));
         }
         break;
       }
