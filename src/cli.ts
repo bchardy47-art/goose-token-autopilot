@@ -256,6 +256,10 @@ import {
   enrollCohortFamily, renderFamilyEnroll,
   runFamilyReport, renderFamilyReport,
 } from './token-grab/ripperWatchCohortFamily';
+import {
+  runFastTest, renderFastTestSummary, FAST_TEST_SUBCOMMANDS,
+} from './token-grab/ripperFastTest';
+import { findLatestRawCycleFile } from './token-grab/ripperWatchRawCycle';
 import { runLearningLoopAudit, renderLearningLoopAudit } from './token-grab/ripperLearningLoopPropagationAudit';
 import {
   runRipperLearningLoop,
@@ -3879,6 +3883,70 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(cohortReport, null, 2));
         } else {
           console.log(renderWatchCohortReport(cohortReport));
+        }
+        break;
+      }
+
+      case 'token:ripper-fast-test': {
+        const { spawnSync } = await import('node:child_process');
+        const ftCyclesDir   = getArgValue('--cycles-dir')   ?? 'data/token-grab/ripper/cycles';
+        const ftDataDir     = getArgValue('--data-dir')     ?? 'data/token-grab/ripper';
+        const ftIntentsPath = getArgValue('--intents-path') ?? 'data/token-grab/ripper/paper-intents.jsonl';
+        const ftMemoryPath  = getArgValue('--memory-path')  ?? 'data/token-grab/ripper/learning-memory.jsonl';
+        const ftLoopsArg    = getArgValue('--loops');
+        const ftIntervalArg = getArgValue('--interval-minutes');
+
+        // Parse a cycle filename (cycle-YYYY-MM-DD-HHMMSS.jsonl) to a display ISO timestamp.
+        const cycleIdToIso = (id: string | null): string | null => {
+          if (!id) return null;
+          const m = id.match(/cycle-(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})/);
+          return m ? `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z` : null;
+        };
+
+        const summary = runFastTest(
+          {
+            loops:          ftLoopsArg    != null ? Number(ftLoopsArg)    : undefined,
+            intervalMinutes: ftIntervalArg != null ? Number(ftIntervalArg) : undefined,
+            skipDayWatch:   process.argv.includes('--skip-day-watch'),
+            dryRunEnroll:   process.argv.includes('--dry-run-enroll'),
+          },
+          {
+            // dex-day-watch: a single bounded capture to refresh the feed (no long sleeps).
+            refreshFeed: () => {
+              spawnSync('npm', ['run', FAST_TEST_SUBCOMMANDS.dayWatch, '--',
+                '--cycles', '1', '--minutes', '0', '--interval-seconds', '1',
+                '--sleep-between-cycles-minutes', '0'], { stdio: 'inherit' });
+            },
+            runLearningLoop: (loops, intervalMinutes) => {
+              spawnSync('npm', ['run', FAST_TEST_SUBCOMMANDS.learningLoop, '--',
+                '--max-loops', String(loops), '--interval-minutes', String(intervalMinutes)],
+                { stdio: 'inherit' });
+            },
+            latestCycle: () => {
+              const f = findLatestRawCycleFile(ftCyclesDir);
+              const id = f ? f.replace(/\.jsonl$/, '') : null;
+              return { id, time: cycleIdToIso(id) };
+            },
+            enrollFamily: (dryRun) => enrollCohortFamily({ cyclesDir: ftCyclesDir, dataDir: ftDataDir, dryRun }),
+            familyReport: () => runFamilyReport({
+              dataDir: ftDataDir, intentsPath: ftIntentsPath, memoryPath: ftMemoryPath, cyclesDir: ftCyclesDir,
+            }),
+            autopilotStatus: () => {
+              const a = runRipperAutopilotStatus({ cyclesDir: ftCyclesDir, intentsPath: ftIntentsPath });
+              return {
+                realTradingLocked: a.realTradingLocked,
+                tradingExecuted:   a.tradingExecuted,
+                approvedCount:     a.approvedCount,
+                rejectedCount:     a.rejectedCount,
+              };
+            },
+          },
+        );
+
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(summary, null, 2));
+        } else {
+          console.log(renderFastTestSummary(summary));
         }
         break;
       }

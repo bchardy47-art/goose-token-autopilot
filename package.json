@@ -177,6 +177,7 @@
     "token:ripper-watch-cohort-report": "tsx src/cli.ts token:ripper-watch-cohort-report",
     "token:ripper-cohort-family-enroll": "tsx src/cli.ts token:ripper-cohort-family-enroll",
     "token:ripper-cohort-family-report": "tsx src/cli.ts token:ripper-cohort-family-report",
+    "token:ripper-fast-test": "tsx src/cli.ts token:ripper-fast-test",
     "token:ripper-learning-loop": "tsx src/cli.ts token:ripper-learning-loop",
     "token:ripper-learning-loop-propagation-audit": "tsx src/cli.ts token:ripper-learning-loop-propagation-audit",
     "token:ripper-m5-evidence-dashboard": "tsx src/cli.ts token:ripper-m5-evidence-dashboard",
