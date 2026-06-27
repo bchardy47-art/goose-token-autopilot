@@ -260,6 +260,11 @@ import {
   runFastTest, renderFastTestSummary, FAST_TEST_SUBCOMMANDS,
 } from './token-grab/ripperFastTest';
 import { findLatestRawCycleFile } from './token-grab/ripperWatchRawCycle';
+import {
+  buildProofStatus, renderProofStatus, appendProofSnapshot, readProofLog,
+  readGitInfo, runProofSummary, renderProofSummary, cycleIdToIso, cycleFreshnessFromTime,
+  DEFAULT_PROOF_LOG_PATH, type ProofCycleInfo,
+} from './token-grab/ripperProof';
 import { runLearningLoopAudit, renderLearningLoopAudit } from './token-grab/ripperLearningLoopPropagationAudit';
 import {
   runRipperLearningLoop,
@@ -3887,6 +3892,59 @@ async function main(): Promise<void> {
         break;
       }
 
+      case 'token:ripper-proof-status':
+      case 'token:ripper-proof-log': {
+        const pfCyclesDir   = getArgValue('--cycles-dir')    ?? 'data/token-grab/ripper/cycles';
+        const pfDataDir     = getArgValue('--data-dir')      ?? 'data/token-grab/ripper';
+        const pfIntentsPath = getArgValue('--intents-path')  ?? 'data/token-grab/ripper/paper-intents.jsonl';
+        const pfMemoryPath  = getArgValue('--memory-path')   ?? 'data/token-grab/ripper/learning-memory.jsonl';
+        const pfProofLog    = getArgValue('--proof-log-path') ?? DEFAULT_PROOF_LOG_PATH;
+
+        const pfReport = runFamilyReport({
+          dataDir: pfDataDir, intentsPath: pfIntentsPath, memoryPath: pfMemoryPath, cyclesDir: pfCyclesDir,
+        });
+        const pfCycleFile = findLatestRawCycleFile(pfCyclesDir);
+        const pfCycleId   = pfCycleFile ? pfCycleFile.replace(/\.jsonl$/, '') : null;
+        const pfCycle     = cycleFreshnessFromTime(pfCycleId, cycleIdToIso(pfCycleId), Date.now());
+        const pfRunsSeen  = fs.existsSync(pfProofLog) ? readProofLog(pfProofLog).length : null;
+
+        const pfGeneratedAt = new Date().toISOString();
+        const pfStatus = buildProofStatus({
+          generatedAt: pfGeneratedAt,
+          report: pfReport,
+          cycle: pfCycle,
+          fastTestRunsObserved: pfRunsSeen,
+        });
+
+        if (command === 'token:ripper-proof-log') {
+          appendProofSnapshot({
+            report: pfReport, cycle: pfCycle, generatedAt: pfGeneratedAt,
+            proofLogPath: pfProofLog, git: readGitInfo(), fastTestRunsObserved: pfRunsSeen,
+          });
+        }
+
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(pfStatus, null, 2));
+        } else {
+          console.log(renderProofStatus(pfStatus));
+          if (command === 'token:ripper-proof-log') {
+            console.log(`  [proof-log] appended 1 snapshot → ${pfProofLog}  [PAPER_ONLY  DO_NOT_TRADE]`);
+          }
+        }
+        break;
+      }
+
+      case 'token:ripper-proof-summary': {
+        const psProofLog = getArgValue('--proof-log-path') ?? DEFAULT_PROOF_LOG_PATH;
+        const psSummary  = runProofSummary({ proofLogPath: psProofLog });
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(psSummary, null, 2));
+        } else {
+          console.log(renderProofSummary(psSummary));
+        }
+        break;
+      }
+
       case 'token:ripper-fast-test': {
         const { spawnSync } = await import('node:child_process');
         const ftCyclesDir   = getArgValue('--cycles-dir')   ?? 'data/token-grab/ripper/cycles';
@@ -3947,6 +4005,26 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(summary, null, 2));
         } else {
           console.log(renderFastTestSummary(summary));
+        }
+
+        // Optional append-only proof-log snapshot (default OFF; only with --append-proof-log).
+        if (process.argv.includes('--append-proof-log')) {
+          const ftProofLogPath = getArgValue('--proof-log-path') ?? DEFAULT_PROOF_LOG_PATH;
+          const ftReport = runFamilyReport({
+            dataDir: ftDataDir, intentsPath: ftIntentsPath, memoryPath: ftMemoryPath, cyclesDir: ftCyclesDir,
+          });
+          const ftProofCycle: ProofCycleInfo = {
+            id: summary.cycle.id, time: summary.cycle.time, fresh: summary.cycle.fresh, status: summary.cycle.status,
+          };
+          appendProofSnapshot({
+            report: ftReport,
+            cycle: ftProofCycle,
+            generatedAt: summary.generatedAt,
+            proofLogPath: ftProofLogPath,
+            git: readGitInfo(),
+            fastTestRunsObserved: readProofLog(ftProofLogPath).length,
+          });
+          console.log(`  [proof-log] appended 1 snapshot → ${ftProofLogPath}  [PAPER_ONLY  DO_NOT_TRADE]`);
         }
         break;
       }
