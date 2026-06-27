@@ -181,6 +181,7 @@
     "token:ripper-proof-status": "tsx src/cli.ts token:ripper-proof-status",
     "token:ripper-proof-log": "tsx src/cli.ts token:ripper-proof-log",
     "token:ripper-proof-summary": "tsx src/cli.ts token:ripper-proof-summary",
+    "token:ripper-operator": "tsx src/cli.ts token:ripper-operator",
     "token:ripper-learning-loop": "tsx src/cli.ts token:ripper-learning-loop",
     "token:ripper-learning-loop-propagation-audit": "tsx src/cli.ts token:ripper-learning-loop-propagation-audit",
     "token:ripper-m5-evidence-dashboard": "tsx src/cli.ts token:ripper-m5-evidence-dashboard",

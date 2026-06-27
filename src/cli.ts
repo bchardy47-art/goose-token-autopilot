@@ -263,8 +263,12 @@ import { findLatestRawCycleFile } from './token-grab/ripperWatchRawCycle';
 import {
   buildProofStatus, renderProofStatus, appendProofSnapshot, readProofLog,
   readGitInfo, runProofSummary, renderProofSummary, cycleIdToIso, cycleFreshnessFromTime,
-  DEFAULT_PROOF_LOG_PATH, type ProofCycleInfo,
+  DEFAULT_PROOF_LOG_PATH, type ProofCycleInfo, type ProofStatus,
 } from './token-grab/ripperProof';
+import {
+  runOperator, renderOperatorDecision, readOperatorCooldown, type OperatorProofState,
+} from './token-grab/ripperOperator';
+import { DEFAULT_COOLDOWN_PATH } from './token-grab/bubbleMapsCache';
 import { runLearningLoopAudit, renderLearningLoopAudit } from './token-grab/ripperLearningLoopPropagationAudit';
 import {
   runRipperLearningLoop,
@@ -3941,6 +3945,79 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(psSummary, null, 2));
         } else {
           console.log(renderProofSummary(psSummary));
+        }
+        break;
+      }
+
+      case 'token:ripper-operator': {
+        const { spawnSync } = await import('node:child_process');
+        const opCyclesDir   = getArgValue('--cycles-dir')    ?? 'data/token-grab/ripper/cycles';
+        const opDataDir     = getArgValue('--data-dir')      ?? 'data/token-grab/ripper';
+        const opIntentsPath = getArgValue('--intents-path')  ?? 'data/token-grab/ripper/paper-intents.jsonl';
+        const opMemoryPath  = getArgValue('--memory-path')   ?? 'data/token-grab/ripper/learning-memory.jsonl';
+        const opProofLog    = getArgValue('--proof-log-path') ?? DEFAULT_PROOF_LOG_PATH;
+        const opCooldown    = getArgValue('--cooldown-path')  ?? DEFAULT_COOLDOWN_PATH;
+        const opDryRunEnroll = process.argv.includes('--dry-run-enroll');
+        const opSkipDayWatch = process.argv.includes('--skip-day-watch');
+
+        const opReadProofState = (): OperatorProofState => {
+          const report = runFamilyReport({
+            dataDir: opDataDir, intentsPath: opIntentsPath, memoryPath: opMemoryPath, cyclesDir: opCyclesDir,
+          });
+          const cf = findLatestRawCycleFile(opCyclesDir);
+          const id = cf ? cf.replace(/\.jsonl$/, '') : null;
+          const cycle = cycleFreshnessFromTime(id, cycleIdToIso(id), Date.now());
+          const runsObserved = fs.existsSync(opProofLog) ? readProofLog(opProofLog).length : null;
+          return { report, cycle, runsObserved };
+        };
+
+        const opDecision = runOperator(
+          {
+            force:                 process.argv.includes('--force'),
+            dryRunEnroll:          opDryRunEnroll,
+            skipDayWatch:          opSkipDayWatch,
+            appendSkippedProofLog: process.argv.includes('--append-skipped-proof-log'),
+          },
+          {
+            readProofState: opReadProofState,
+            readCooldown:   () => readOperatorCooldown(opCooldown, Date.now()),
+            autopilot: () => {
+              const a = runRipperAutopilotStatus({ cyclesDir: opCyclesDir, intentsPath: opIntentsPath });
+              return {
+                approvedCount:     a.approvedCount,
+                rejectedCount:     a.rejectedCount,
+                realTradingLocked: a.realTradingLocked,
+                tradingExecuted:   a.tradingExecuted,
+              };
+            },
+            runCollection: ({ dryRunEnroll, skipDayWatch }) => {
+              const args = ['run', 'token:ripper-fast-test', '--', '--loops', '1', '--append-proof-log'];
+              if (dryRunEnroll) args.push('--dry-run-enroll');
+              if (skipDayWatch) args.push('--skip-day-watch');
+              // In --json mode keep stdout clean (only the operator JSON); drop child stdout,
+              // keep stderr for real errors. Otherwise stream the collection output through.
+              const collectStdio: ['ignore', 'ignore' | 'inherit', 'inherit'] | 'inherit' =
+                process.argv.includes('--json') ? ['ignore', 'ignore', 'inherit'] : 'inherit';
+              spawnSync('npm', args, { stdio: collectStdio });
+            },
+            appendSkippedProof: (status: ProofStatus, cycle: ProofCycleInfo) => {
+              appendProofSnapshot({
+                report: opReadProofState().report,
+                cycle,
+                generatedAt: status.generatedAt,
+                proofLogPath: opProofLog,
+                git: readGitInfo(),
+                fastTestRunsObserved: fs.existsSync(opProofLog) ? readProofLog(opProofLog).length : null,
+              });
+            },
+            now: () => Date.now(),
+          },
+        );
+
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(opDecision, null, 2));
+        } else {
+          console.log(renderOperatorDecision(opDecision));
         }
         break;
       }
