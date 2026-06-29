@@ -4030,6 +4030,7 @@ async function main(): Promise<void> {
         const ftMemoryPath  = getArgValue('--memory-path')  ?? 'data/token-grab/ripper/learning-memory.jsonl';
         const ftLoopsArg    = getArgValue('--loops');
         const ftIntervalArg = getArgValue('--interval-minutes');
+        const ftDryRunEnroll = process.argv.includes('--dry-run-enroll');
 
         // Parse a cycle filename (cycle-YYYY-MM-DD-HHMMSS.jsonl) to a display ISO timestamp.
         const cycleIdToIso = (id: string | null): string | null => {
@@ -4043,7 +4044,7 @@ async function main(): Promise<void> {
             loops:          ftLoopsArg    != null ? Number(ftLoopsArg)    : undefined,
             intervalMinutes: ftIntervalArg != null ? Number(ftIntervalArg) : undefined,
             skipDayWatch:   process.argv.includes('--skip-day-watch'),
-            dryRunEnroll:   process.argv.includes('--dry-run-enroll'),
+            dryRunEnroll:   ftDryRunEnroll,
           },
           {
             // dex-day-watch: a single bounded capture to refresh the feed (no long sleeps).
@@ -4053,9 +4054,12 @@ async function main(): Promise<void> {
                 '--sleep-between-cycles-minutes', '0'], { stdio: 'inherit' });
             },
             runLearningLoop: (loops, intervalMinutes) => {
-              spawnSync('npm', ['run', FAST_TEST_SUBCOMMANDS.learningLoop, '--',
-                '--max-loops', String(loops), '--interval-minutes', String(intervalMinutes)],
-                { stdio: 'inherit' });
+              // Forward --dry-run-enroll so the inner learning-loop's watch-cohort enroll also
+              // honors dry-run: NO cohort files mutate anywhere when --dry-run-enroll is passed.
+              const llArgs = ['run', FAST_TEST_SUBCOMMANDS.learningLoop, '--',
+                '--max-loops', String(loops), '--interval-minutes', String(intervalMinutes)];
+              if (ftDryRunEnroll) llArgs.push('--dry-run-enroll');
+              spawnSync('npm', llArgs, { stdio: 'inherit' });
             },
             latestCycle: () => {
               const f = findLatestRawCycleFile(ftCyclesDir);
@@ -5182,6 +5186,8 @@ async function main(): Promise<void> {
         const rllCyclesDir      = getArgValue('--cycles-dir') ?? 'data/token-grab/ripper/cycles';
         const rllMemoryPath     = getArgValue('--memory-path') ?? 'data/token-grab/ripper/learning-memory.jsonl';
         const rllIntentsPath    = getArgValue('--intents-path') ?? 'data/token-grab/ripper/paper-intents.jsonl';
+        // When set, the watch-cohort enroll step is dry-run (no cohort writes). Propagated by fast-test.
+        const rllDryRunEnroll   = process.argv.includes('--dry-run-enroll');
 
         const { provider: rllRawProvider, configNote: rllNote } = createClusterRiskProvider();
         if (rllNote) console.warn(`[cluster-risk] ${rllNote}`);
@@ -5258,9 +5264,11 @@ async function main(): Promise<void> {
           runWatchCohortEnroll: () => {
             // Forward-only, append-only enrollment of the latest cycle's watch hits.
             // NOT a buy approval — appends new rows only, never changes gates or trades.
+            // Honors --dry-run-enroll so no cohort file is written under dry-run (e.g. fast-test).
             const e = enrollWatchCohort({
               cyclesDir:  rllCyclesDir,
               cohortPath: DEFAULT_COHORT_PATH,
+              dryRun:     rllDryRunEnroll,
             });
             console.log(renderWatchCohortEnroll(e));
             return { rowsAppended: e.rowsAppended, duplicatesSkipped: e.duplicatesSkipped };

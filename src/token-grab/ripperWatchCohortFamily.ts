@@ -40,6 +40,22 @@ export const OUTLIER_MAX           = 0.25;
 const LIQ_NEAR  = new Set(['LIQ_10K_30K', 'LIQ_30K_100K']);
 const M5_FAMILY = new Set(['-20 to -5', '-5 to +5']);
 
+// ── NO_BM_RESEARCH shadow lane ──────────────────────────────────────────────────────
+// A SEPARATE paper-only research lane that keeps learning when BubbleMaps is rate-limited.
+// It enrolls on INTERNAL observable signals only (timing/m5/liquidity/vlr/age/ripperScore)
+// and ignores BubbleMaps cluster risk FOR ENROLLMENT ONLY. It NEVER touches the strict-BM
+// approval lanes above, NEVER loosens gates, and NEVER treats UNKNOWN as CLEAN — clusterRisk
+// is recorded verbatim and is never used as a membership signal.
+export const NO_BM_RESEARCH_LANE_KEY  = 'NO_BM_RESEARCH';
+export const NO_BM_RESEARCH_COHORT    = 'NO_BM_INTERNAL_RISK_RESEARCH';
+export const NO_BM_RESEARCH_FILENAME  = 'watch-cohort-no-bm-research.jsonl';
+export const NO_BM_RESEARCH_MIN_SCORE = 60;   // internal model-score floor for the research lane
+export const NO_BM_RESEARCH_DESCRIBE  =
+  'BM-IGNORED research: m5Band in {-20 to -5, -5 to +5}, liquidity in {LIQ_10K_30K, LIQ_30K_100K}, ' +
+  `ripperScore >= ${NO_BM_RESEARCH_MIN_SCORE} (cluster ignored for enrollment only; UNKNOWN never CLEAN)`;
+export const NO_BM_RESEARCH_REASON =
+  'Matches NO_BM_RESEARCH shadow lane — internal-signal only, BubbleMaps ignored for enrollment (paper-only research)';
+
 const SEP  = '━'.repeat(64);
 const SEP2 = '─'.repeat(64);
 
@@ -273,7 +289,149 @@ function candidateToCohortRow(
   };
 }
 
+// ── NO_BM_RESEARCH candidate + row (BubbleMaps ignored for enrollment) ──────────────────
+
+/** Internal-signal-only candidate. clusterRisk is recorded but NEVER used for membership. */
+export interface ResearchCandidate {
+  contract:         string;
+  symbol:           string | null;
+  capturedAt:       string | null;
+  buyGateDecision:  string | null;   // recorded (APPROVED or REJECTED) — not a membership signal
+  entryTiming:      string;          // BM-free: always ENTER_NOW (cluster ignored → never WAIT_10M)
+  entryMomentumPct: number | null;
+  m5Band:           string;
+  liquidityBucket:  string;
+  vlrBucket:        string;
+  launchAgeBucket:  string | null;
+  ripperScore:      number | null;
+  clusterRisk:      string | null;   // verbatim — UNKNOWN stays UNKNOWN, never CLEAN
+}
+
+export interface ResearchCohortRow {
+  schemaVersion:    number;
+  lane:             'NO_BM_RESEARCH';
+  cohortName:       string;
+  label:            string;
+  enrolledAt:       string;
+  cycleId:          string;
+  cycleFile:        string;
+  capturedAt:       string | null;
+  dedupeKey:        string;
+  contract:         string;
+  symbol:           string | null;
+  buyGateDecision:  string | null;
+  entryTiming:      string;
+  entryMomentumPct: number | null;
+  m5Band:           string;
+  liquidityBucket:  string;
+  vlrBucket:        string;
+  launchAgeBucket:  string | null;
+  ripperScore:      number | null;
+  clusterRisk:      string | null;   // UNKNOWN stays UNKNOWN
+  reason:           string;
+  safety:           string;
+  // Required research labels.
+  bmIgnoredForResearch: true;
+  paperOnly:            true;
+  notBuySignal:         true;
+  unknownNotClean:      true;
+  DO_NOT_ENABLE_REAL_TRADING:                 true;
+  DO_NOT_PROMOTE_TO_REAL_TRADING:             true;
+  DO_NOT_CHANGE_GATES_FROM_THIS_REPORT_ALONE: true;
+}
+
+export function researchLaneFilePath(dataDir: string): string {
+  return path.join(dataDir, NO_BM_RESEARCH_FILENAME);
+}
+
+/**
+ * Derive a research candidate from a raw cycle row using ONLY internal observable fields.
+ * Considers every row (approved OR rejected) — that is the whole point: when BubbleMaps is
+ * rate-limited and rows get rejected as UNKNOWN, the research lane can still learn. entryTiming
+ * is BM-free (ENTER_NOW) and clusterRisk is recorded verbatim but never used for membership.
+ */
+export function deriveResearchCandidate(row: CycleRow): ResearchCandidate | null {
+  const contract = row.normalizedSignal?.contract ?? row.ripperInput?.contract ?? row.raw?.contract;
+  if (!contract) return null;
+
+  const entryMomentumPct =
+    typeof row.entryMomentumPct === 'number' && Number.isFinite(row.entryMomentumPct)
+      ? row.entryMomentumPct : null;
+
+  return {
+    contract,
+    symbol:           row.normalizedSignal?.symbol ?? null,
+    capturedAt:       typeof row.capturedAt === 'string' ? row.capturedAt : null,
+    buyGateDecision:  row.buyGateDecision ?? null,
+    entryTiming:      'ENTER_NOW',   // BM ignored → never the CLEAN-only WAIT_10M subgroup
+    entryMomentumPct,
+    m5Band:           m5BandLabel(entryMomentumPct),
+    liquidityBucket:  bucketLiquidity(row.normalizedSignal?.liquidityUsd ?? null),
+    vlrBucket:        bucketVlr(row.normalizedSignal?.volumeLiquidityRatio ?? null),
+    launchAgeBucket:  row.launchAgeBucket ?? null,
+    ripperScore:      typeof row.ripperScore === 'number' ? row.ripperScore : null,
+    clusterRisk:      row.ripperInput?.clusterRisk ?? row.raw?.clusterRisk ?? null,
+  };
+}
+
+/** Entry-time-only membership for the research lane. NEVER reads clusterRisk or outcomes. */
+export function researchLaneMatches(c: ResearchCandidate): boolean {
+  return (
+    M5_FAMILY.has(c.m5Band) &&
+    LIQ_NEAR.has(c.liquidityBucket) &&
+    typeof c.ripperScore === 'number' && c.ripperScore >= NO_BM_RESEARCH_MIN_SCORE
+  );
+}
+
+function researchCandidateToRow(
+  c: ResearchCandidate, cycleId: string, cycleFile: string, enrolledAt: string,
+): ResearchCohortRow {
+  return {
+    schemaVersion:    FAMILY_SCHEMA_VERSION,
+    lane:             'NO_BM_RESEARCH',
+    cohortName:       NO_BM_RESEARCH_COHORT,
+    label:            WATCH_LABEL,
+    enrolledAt,
+    cycleId,
+    cycleFile,
+    capturedAt:       c.capturedAt,
+    dedupeKey:        buildDedupeKey(cycleId, c.contract, c.capturedAt, cycleFile),
+    contract:         c.contract,
+    symbol:           c.symbol,
+    buyGateDecision:  c.buyGateDecision,
+    entryTiming:      c.entryTiming,
+    entryMomentumPct: c.entryMomentumPct,
+    m5Band:           c.m5Band,
+    liquidityBucket:  c.liquidityBucket,
+    vlrBucket:        c.vlrBucket,
+    launchAgeBucket:  c.launchAgeBucket,
+    ripperScore:      c.ripperScore,
+    clusterRisk:      c.clusterRisk,   // verbatim — UNKNOWN stays UNKNOWN
+    reason:           NO_BM_RESEARCH_REASON,
+    safety:           WATCH_SAFETY_LABEL,
+    bmIgnoredForResearch: true,
+    paperOnly:            true,
+    notBuySignal:         true,
+    unknownNotClean:      true,
+    DO_NOT_ENABLE_REAL_TRADING:                 true,
+    DO_NOT_PROMOTE_TO_REAL_TRADING:             true,
+    DO_NOT_CHANGE_GATES_FROM_THIS_REPORT_ALONE: true,
+  };
+}
+
 // ── Enrollment ────────────────────────────────────────────────────────────────────────
+
+export interface ResearchLaneEnrollResult {
+  lane:              'NO_BM_RESEARCH';
+  cohortName:        string;
+  cohortPath:        string;
+  rowsScanned:       number;
+  hitsFound:         number;
+  rowsAppended:      number;
+  duplicatesSkipped: number;
+  appendedRows:      ResearchCohortRow[];
+  topEnrolled:       ResearchCohortRow[];
+}
 
 export interface LaneEnrollResult {
   lane:              LaneKey;
@@ -296,6 +454,7 @@ export interface FamilyEnrollResult {
   rowsScanned:       number;
   dryRun:            boolean;
   lanes:             LaneEnrollResult[];
+  researchLane?:     ResearchLaneEnrollResult;  // NO_BM_RESEARCH shadow lane (separate file)
   safetyLabel:       string;
 
   reportOnly:        boolean;
@@ -397,11 +556,39 @@ export function enrollCohortFamily(opts: FamilyEnrollOptions = {}): FamilyEnroll
     };
   });
 
+  // ── NO_BM_RESEARCH shadow lane — separate file, independent dedupe, additive ──────────
+  // Scans ALL rows (approved or rejected) on internal signals only; BubbleMaps ignored for
+  // enrollment. Strict lanes above are untouched.
+  const researchPath = researchLaneFilePath(dataDir);
+  const researchExisting = new Set(readJsonl<ResearchCohortRow>(researchPath).map(r => r.dedupeKey).filter(Boolean));
+  const researchSeen = new Set<string>();
+  const researchToAppend: ResearchCohortRow[] = [];
+  let researchHits = 0, researchDupes = 0;
+  for (const row of rows) {
+    const rc = deriveResearchCandidate(row);
+    if (!rc || !researchLaneMatches(rc)) continue;
+    researchHits++;
+    const rr = researchCandidateToRow(rc, cycleId, cycleFileName!, enrolledAt);
+    if (researchExisting.has(rr.dedupeKey) || researchSeen.has(rr.dedupeKey)) { researchDupes++; continue; }
+    researchSeen.add(rr.dedupeKey);
+    researchToAppend.push(rr);
+  }
+  if (!dryRun && researchToAppend.length > 0) {
+    fs.mkdirSync(path.dirname(researchPath), { recursive: true });
+    fs.appendFileSync(researchPath, researchToAppend.map(r => JSON.stringify(r)).join('\n') + '\n', 'utf-8');
+  }
+  const researchLane: ResearchLaneEnrollResult = {
+    lane: 'NO_BM_RESEARCH', cohortName: NO_BM_RESEARCH_COHORT, cohortPath: researchPath,
+    rowsScanned: rows.length, hitsFound: researchHits, rowsAppended: researchToAppend.length,
+    duplicatesSkipped: researchDupes, appendedRows: researchToAppend, topEnrolled: researchToAppend.slice(0, topN),
+  };
+
   return {
     ...base,
     cycleId,
     rowsScanned: rows.length,
     lanes:       laneResults,
+    researchLane,
     reportOnly:  dryRun, // a real append is a write; still paper-only & gate-neutral
   };
 }
@@ -438,6 +625,27 @@ export function renderFamilyEnroll(r: FamilyEnrollResult): string {
         L.push(`      ${(c.symbol ?? '-').slice(0, 12).padEnd(12)} ${shortC(c.contract).padEnd(14)} ` +
           `band=${c.m5Band}  liq=${c.liquidityBucket}  vlr=${c.vlrBucket}  ` +
           `timing=${c.paperEntryTiming}  score=${c.ripperScore ?? 'n/a'}  cluster=${c.clusterRisk ?? 'n/a'}`);
+      }
+    }
+    L.push('');
+  }
+  if (r.researchLane) {
+    const rl = r.researchLane;
+    L.push(`  ${SEP2}`);
+    L.push(`  LANE ${rl.lane}  (BubbleMaps IGNORED for enrollment — paper-only research)`);
+    L.push(`  ${SEP2}`);
+    L.push(`    Cohort file       : ${rl.cohortPath}`);
+    L.push(`    Rows scanned      : ${rl.rowsScanned}`);
+    L.push(`    Hits found        : ${rl.hitsFound}`);
+    L.push(`    Rows appended     : ${rl.rowsAppended}${r.dryRun ? ' (would append)' : ''}`);
+    L.push(`    Duplicates skipped: ${rl.duplicatesSkipped}`);
+    L.push('    bmIgnoredForResearch=true  paperOnly=true  notBuySignal=true  unknownNotClean=true');
+    if (rl.topEnrolled.length > 0) {
+      L.push('    Top enrolled:');
+      for (const c of rl.topEnrolled) {
+        L.push(`      ${(c.symbol ?? '-').slice(0, 12).padEnd(12)} ${shortC(c.contract).padEnd(14)} ` +
+          `band=${c.m5Band}  liq=${c.liquidityBucket}  vlr=${c.vlrBucket}  ` +
+          `gate=${c.buyGateDecision ?? 'n/a'}  score=${c.ripperScore ?? 'n/a'}  cluster=${c.clusterRisk ?? 'n/a'}`);
       }
     }
     L.push('');
@@ -488,11 +696,28 @@ export interface LaneReport {
   recommendationReason: string;
 }
 
+/** Report shape for the NO_BM_RESEARCH shadow lane (BubbleMaps ignored for enrollment). */
+export interface ResearchLaneReport {
+  lane:             'NO_BM_RESEARCH';
+  cohortName:       string;
+  cohortPath:       string;
+  describe:         string;
+  enrolledCount:    number;
+  observedCount:    number;
+  pendingCount:     number;
+  unmatchedCount:   number;
+  stats:            LaneOutcomeStats;
+  recommendation:   FamilyLaneRecommendation;
+  recommendationReason: string;
+  bmIgnoredForResearch: true;
+}
+
 export interface FamilyReportResult {
   generatedAt:    string;
   dataDir:        string;
   baseline:       LaneOutcomeStats;   // OVERALL_APPROVED observed paper population
   lanes:          LaneReport[];
+  researchLane?:  ResearchLaneReport; // NO_BM_RESEARCH shadow lane (separate file)
   ranking: {
     byObservedN:        LaneKey[];
     byWinRate:          LaneKey[];
@@ -523,6 +748,7 @@ export interface FamilyReportOptions extends PaperTradeSimulationOptions {
   /** Test-only injection. */
   _trades?:          SimulatedTrade[];
   _cohortRowsByLane?: Partial<Record<LaneKey, FamilyCohortRow[]>>;
+  _researchCohortRows?: ResearchCohortRow[];
 }
 
 // stat helpers
@@ -578,9 +804,17 @@ function statsFromOutcomes(rows: OutcomeRow[]): LaneOutcomeStats {
   };
 }
 
+/** Minimal cohort-row shape needed to join to outcomes — satisfied by strict + research rows. */
+interface JoinableCohortRow {
+  contract:    string;
+  capturedAt:  string | null;
+  m5Band:      string;
+  clusterRisk: string | null;
+}
+
 /** Join cohort rows to observed outcomes by contract. Outcome fields used here ONLY for scoring. */
 function joinOutcomes(
-  cohortRows: FamilyCohortRow[],
+  cohortRows: JoinableCohortRow[],
   tradesByContract: Map<string, SimulatedTrade[]>,
 ): { observed: OutcomeRow[]; observedCount: number; pendingCount: number; unmatchedCount: number } {
   const observed: OutcomeRow[] = [];
@@ -687,6 +921,23 @@ export function runFamilyReport(opts: FamilyReportOptions = {}): FamilyReportRes
     };
   });
 
+  // NO_BM_RESEARCH shadow lane report (separate cohort file; BubbleMaps ignored for enrollment).
+  const researchPath = researchLaneFilePath(dataDir);
+  const researchRows = opts._researchCohortRows ?? readJsonl<ResearchCohortRow>(researchPath);
+  const researchJoined = joinOutcomes(researchRows, tradesByContract);
+  const researchStats  = statsFromOutcomes(researchJoined.observed);
+  const researchRec = laneRecommendation(researchStats, researchJoined.observedCount, baseline, minForwardN);
+  const researchLane: ResearchLaneReport = {
+    lane: 'NO_BM_RESEARCH', cohortName: NO_BM_RESEARCH_COHORT, cohortPath: researchPath,
+    describe: NO_BM_RESEARCH_DESCRIBE,
+    enrolledCount: researchRows.length,
+    observedCount: researchJoined.observedCount,
+    pendingCount:  researchJoined.pendingCount,
+    unmatchedCount: researchJoined.unmatchedCount,
+    stats: researchStats, recommendation: researchRec.rec, recommendationReason: researchRec.reason,
+    bmIgnoredForResearch: true,
+  };
+
   const rankBy = (cmp: (a: LaneReport, b: LaneReport) => number): LaneKey[] =>
     [...lanes].sort(cmp).map(l => l.lane);
 
@@ -705,7 +956,7 @@ export function runFamilyReport(opts: FamilyReportOptions = {}): FamilyReportRes
     'FORWARD_SAMPLE_TOO_SMALL';
 
   return {
-    generatedAt, dataDir, baseline, lanes, ranking, familyRecommendation,
+    generatedAt, dataDir, baseline, lanes, researchLane, ranking, familyRecommendation,
     config: { minForwardN, pnlCapPct: PNL_CAP_PCT },
     safetyLabel: WATCH_SAFETY_LABEL,
     reportOnly: true, readOnly: true, paperOnly: true, realTradingLocked: true,
@@ -758,6 +1009,40 @@ export function renderFamilyReport(r: FamilyReportResult): string {
     L.push(`    → ${lane.recommendationReason}`);
     L.push('');
   }
+
+  if (r.researchLane) {
+    const rl = r.researchLane;
+    const s = rl.stats;
+    L.push(`  ${SEP2}`);
+    L.push(`  LANE ${rl.lane}  [${rl.recommendation}]  (BubbleMaps IGNORED for enrollment)`);
+    L.push(`  ${SEP2}`);
+    L.push(`    ${rl.describe}`);
+    L.push(`    cohort file : ${rl.cohortPath}`);
+    L.push('    bmIgnoredForResearch=true  paperOnly=true  notBuySignal=true  unknownNotClean=true');
+    L.push(`    enrolled=${rl.enrolledCount}  observed=${rl.observedCount}  ` +
+      `pending=${rl.pendingCount}  unmatched=${rl.unmatchedCount}`);
+    L.push(`    win=${pctS(s.winRate)}  redLoss=${pctS(s.redLossRate)}  flat=${pctS(s.flatRate)}`);
+    L.push(`    avgRaw=${pnlS(s.avgPnlRaw)}  cappedAvg=${pnlS(s.avgPnlCapped)}  med=${pnlS(s.medianPnl)}  ` +
+      `worst=${pnlS(s.worstPnl)}  best=${pnlS(s.bestPnl)}  outlierDep=${s.outlierDependence.toFixed(2)}`);
+    L.push(`    cluster: ${bd(s.clusterBreakdown)}  (UNKNOWN is recorded, NEVER treated as CLEAN)`);
+    L.push(`    m5 band: ${bd(s.m5BandBreakdown)}`);
+    L.push(`    → ${rl.recommendationReason}`);
+    L.push('');
+  }
+
+  // STRICT_BM vs NO_BM_RESEARCH vs baseline comparison.
+  L.push(`  ${SEP2}`);
+  L.push('  COMPARISON — STRICT_BM vs NO_BM_RESEARCH vs BASELINE');
+  L.push(`  ${SEP2}`);
+  const fmtRow = (label: string, n: number, st: LaneOutcomeStats): string =>
+    `    ${label.padEnd(20)} obs=${String(n).padStart(5)}  win=${pctS(st.winRate).padStart(6)}  ` +
+    `redLoss=${pctS(st.redLossRate).padStart(6)}  flat=${pctS(st.flatRate).padStart(6)}  ` +
+    `med=${pnlS(st.medianPnl).padStart(8)}  cappedAvg=${pnlS(st.avgPnlCapped).padStart(8)}  ` +
+    `outlierDep=${st.outlierDependence.toFixed(2)}`;
+  L.push(fmtRow('BASELINE', r.baseline.n, r.baseline));
+  for (const lane of r.lanes) L.push(fmtRow(`STRICT_BM:${lane.lane}`, lane.observedCount, lane.stats));
+  if (r.researchLane) L.push(fmtRow('NO_BM_RESEARCH', r.researchLane.observedCount, r.researchLane.stats));
+  L.push('');
 
   L.push(`  ${SEP2}`);
   L.push('  COMPARISON — LANE RANKINGS');

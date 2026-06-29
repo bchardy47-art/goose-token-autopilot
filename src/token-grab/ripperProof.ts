@@ -85,6 +85,23 @@ export interface ProofBaseline {
   outlierDependence: number;
 }
 
+/** NO_BM_RESEARCH shadow-lane metrics surfaced in proof (BubbleMaps ignored for enrollment). */
+export interface ProofResearchLane {
+  observed:          number;
+  pending:           number;
+  winRate:           number;
+  redLossRate:       number;
+  flatRate:          number;
+  medianPnl:         number;
+  avgPnlCapped:      number;
+  worstPnl:          number;
+  bestPnl:           number;
+  outlierDependence: number;
+  clusterBreakdown:  Record<string, number>;
+  recommendation:    FamilyLaneRecommendation;
+  bmIgnoredForResearch: true;
+}
+
 export interface ProofSafety {
   PAPER_ONLY:                true;
   realTradingLocked:         boolean;
@@ -100,6 +117,7 @@ export interface ProofStatus {
   fastTestRunsObserved:   number | null;
   baseline:               ProofBaseline;
   lanes:                  ProofLaneMetrics[];
+  researchLane:           ProofResearchLane | null;  // NO_BM_RESEARCH shadow lane
   bestLane:               BestLaneSelection | null;
   baselineChecksPassedByBest: number;
   confidenceTier:         ConfidenceTier;
@@ -168,6 +186,23 @@ export function buildProofStatus(input: BuildProofStatusInput): ProofStatus {
     recommendation:    l.recommendation,
   }));
 
+  const rl = report.researchLane;
+  const researchLane: ProofResearchLane | null = rl ? {
+    observed:          rl.observedCount,
+    pending:           rl.pendingCount,
+    winRate:           rl.stats.winRate,
+    redLossRate:       rl.stats.redLossRate,
+    flatRate:          rl.stats.flatRate,
+    medianPnl:         rl.stats.medianPnl,
+    avgPnlCapped:      rl.stats.avgPnlCapped,
+    worstPnl:          rl.stats.worstPnl,
+    bestPnl:           rl.stats.bestPnl,
+    outlierDependence: rl.stats.outlierDependence,
+    clusterBreakdown:  rl.stats.clusterBreakdown,
+    recommendation:    rl.recommendation,
+    bmIgnoredForResearch: true,
+  } : null;
+
   const bestLane = selectBestLane(report.lanes, baseline);
 
   let checks = 0;
@@ -203,6 +238,7 @@ export function buildProofStatus(input: BuildProofStatusInput): ProofStatus {
       outlierDependence: baseline.outlierDependence,
     },
     lanes,
+    researchLane,
     bestLane,
     baselineChecksPassedByBest: checks,
     confidenceTier:       tier,
@@ -262,6 +298,20 @@ export function renderProofStatus(s: ProofStatus): string {
   }
   L.push('');
 
+  if (s.researchLane) {
+    const rl = s.researchLane;
+    L.push(`  ${SEP2}`);
+    L.push('  NO_BM_RESEARCH SHADOW LANE (BubbleMaps IGNORED for enrollment)');
+    L.push(`  ${SEP2}`);
+    L.push(`    [${rl.recommendation}]  bmIgnoredForResearch=true  paperOnly=true  notBuySignal=true  unknownNotClean=true`);
+    L.push(`      observed=${rl.observed}  pending=${rl.pending}  ` +
+      `win=${pctS(rl.winRate)}  redLoss=${pctS(rl.redLossRate)}  flat=${pctS(rl.flatRate)}`);
+    L.push(`      med=${pnlS(rl.medianPnl)}  cappedAvg=${pnlS(rl.avgPnlCapped)}  ` +
+      `worst=${pnlS(rl.worstPnl)}  best=${pnlS(rl.bestPnl)}  outlierDep=${rl.outlierDependence.toFixed(2)}`);
+    L.push(`      cluster: ${bd(rl.clusterBreakdown)}  (UNKNOWN recorded, NEVER treated as CLEAN)`);
+    L.push('');
+  }
+
   L.push(`  ${SEP2}`);
   L.push('  BEST LANE TODAY (conservative ranking)');
   L.push(`  ${SEP2}`);
@@ -302,6 +352,7 @@ export interface ProofLogRow {
   freshness:      string;
   baseline:       ProofBaseline;
   lanes:          ProofLaneMetrics[];
+  researchLane?:  ProofResearchLane | null;  // NO_BM_RESEARCH shadow lane (optional; older rows lack it)
   bestLane:       { lane: LaneKey; qualifies: boolean; observed: number } | null;
   confidenceTier: ConfidenceTier;
   recommendation: ProofDecision;
@@ -327,6 +378,7 @@ export function buildProofLogRow(status: ProofStatus, git: GitInfo): ProofLogRow
     freshness:      status.latestCycle.status,
     baseline:       status.baseline,
     lanes:          status.lanes,
+    researchLane:   status.researchLane,
     bestLane:       status.bestLane
       ? { lane: status.bestLane.lane, qualifies: status.bestLane.qualifies, observed: status.bestLane.observed }
       : null,
@@ -409,12 +461,21 @@ export interface LaneTrend {
   status:             LaneTrendStatus;
 }
 
+export interface ResearchLaneTrend {
+  firstObserved:      number;
+  lastObserved:       number;
+  observedDirection:  TrendDir;
+  cappedAvgDirection: TrendDir;
+  status:             LaneTrendStatus;
+}
+
 export interface ProofSummary {
   snapshots:              number;
   firstAt:                string | null;
   latestAt:               string | null;
   bestLaneTrend:          { first: string | null; last: string | null; sequence: Array<string | null> };
   laneTrends:             LaneTrend[];
+  researchLaneTrend:      ResearchLaneTrend | null;  // NO_BM_RESEARCH (null when no snapshot carries it)
   baselineRedLossTrend:   MetricTrend;
   baselineMedianTrend:    MetricTrend;
   baselineCappedAvgTrend: MetricTrend;
@@ -465,6 +526,7 @@ export function runProofSummary(opts: ProofSummaryOptions = {}): ProofSummary {
       laneTrends: ALL_LANES.map(lane => ({
         lane, firstObserved: 0, lastObserved: 0, observedDirection: 'FLAT', cappedAvgDirection: 'FLAT', status: 'FLAT',
       })),
+      researchLaneTrend: null,
       baselineRedLossTrend: flat, baselineMedianTrend: flat, baselineCappedAvgTrend: flat,
       anyImproving: false, anyDegrading: false,
       currentConfidenceTier: null, currentRecommendation: null, safety,
@@ -494,6 +556,24 @@ export function runProofSummary(opts: ProofSummaryOptions = {}): ProofSummary {
     return { lane, firstObserved, lastObserved, observedDirection, cappedAvgDirection, status };
   });
 
+  // NO_BM_RESEARCH trend — use the earliest + latest snapshots that actually carry it.
+  const researchRows = rows.filter(r => r.researchLane != null);
+  let researchLaneTrend: ResearchLaneTrend | null = null;
+  if (researchRows.length > 0) {
+    const rf = researchRows[0]!.researchLane!;
+    const rlst = researchRows[researchRows.length - 1]!.researchLane!;
+    const observedDirection  = dir(rf.observed, rlst.observed, 0);
+    const cappedAvgDirection = dir(rf.avgPnlCapped, rlst.avgPnlCapped, 0.005);
+    const status: LaneTrendStatus =
+      cappedAvgDirection === 'UP'   ? 'IMPROVING' :
+      cappedAvgDirection === 'DOWN' ? 'DEGRADING' :
+      observedDirection  === 'UP'   ? 'IMPROVING' : 'FLAT';
+    researchLaneTrend = {
+      firstObserved: rf.observed, lastObserved: rlst.observed,
+      observedDirection, cappedAvgDirection, status,
+    };
+  }
+
   return {
     snapshots: rows.length,
     firstAt:   first.generatedAt ?? null,
@@ -504,6 +584,7 @@ export function runProofSummary(opts: ProofSummaryOptions = {}): ProofSummary {
       sequence: rows.map(r => r.bestLane?.lane ?? null),
     },
     laneTrends,
+    researchLaneTrend,
     baselineRedLossTrend:   { first: first.baseline.redLossRate,  last: last.baseline.redLossRate,  direction: dir(first.baseline.redLossRate,  last.baseline.redLossRate,  0.0001) },
     baselineMedianTrend:    { first: first.baseline.medianPnl,    last: last.baseline.medianPnl,    direction: dir(first.baseline.medianPnl,    last.baseline.medianPnl,    0.005) },
     baselineCappedAvgTrend: { first: first.baseline.avgPnlCapped, last: last.baseline.avgPnlCapped, direction: dir(first.baseline.avgPnlCapped, last.baseline.avgPnlCapped, 0.005) },
@@ -538,6 +619,13 @@ export function renderProofSummary(s: ProofSummary): string {
     for (const t of s.laneTrends) {
       L.push(`    ${t.lane.padEnd(16)} observed ${t.firstObserved} → ${t.lastObserved} ${arrow(t.observedDirection)}  ` +
         `cappedAvg ${arrow(t.cappedAvgDirection)}  [${t.status}]`);
+    }
+    if (s.researchLaneTrend) {
+      const rt = s.researchLaneTrend;
+      L.push(`    ${'NO_BM_RESEARCH'.padEnd(16)} observed ${rt.firstObserved} → ${rt.lastObserved} ${arrow(rt.observedDirection)}  ` +
+        `cappedAvg ${arrow(rt.cappedAvgDirection)}  [${rt.status}]  (BM ignored for enrollment)`);
+    } else {
+      L.push(`    ${'NO_BM_RESEARCH'.padEnd(16)} (no snapshot carries research-lane data yet)`);
     }
     L.push(`    Baseline red-loss : ${pctS(s.baselineRedLossTrend.first)} → ${pctS(s.baselineRedLossTrend.last)} ${arrow(s.baselineRedLossTrend.direction)}`);
     L.push(`    Baseline median   : ${pnlS(s.baselineMedianTrend.first)} → ${pnlS(s.baselineMedianTrend.last)} ${arrow(s.baselineMedianTrend.direction)}`);
