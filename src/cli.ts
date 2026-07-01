@@ -256,6 +256,7 @@ import {
   enrollCohortFamily, renderFamilyEnroll,
   runFamilyReport, renderFamilyReport,
 } from './token-grab/ripperWatchCohortFamily';
+import { runNoBmQualityReport, renderNoBmQualityReport } from './token-grab/ripperNoBmQualityReport';
 import {
   runFastTest, renderFastTestSummary, FAST_TEST_SUBCOMMANDS,
 } from './token-grab/ripperFastTest';
@@ -4136,6 +4137,22 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(famReport, null, 2));
         } else {
           console.log(renderFamilyReport(famReport));
+        }
+        break;
+      }
+
+      case 'token:ripper-no-bm-quality-report': {
+        const nbqResult = runNoBmQualityReport({
+          dataDir:     getArgValue('--data-dir')    ?? 'data/token-grab/ripper',
+          cohortPath:  getArgValue('--cohort-path') ?? undefined,
+          intentsPath: getArgValue('--intents-path') ?? 'data/token-grab/ripper/paper-intents.jsonl',
+          memoryPath:  getArgValue('--memory-path')  ?? 'data/token-grab/ripper/learning-memory.jsonl',
+          cyclesDir:   getArgValue('--cycles-dir')   ?? 'data/token-grab/ripper/cycles',
+        });
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(nbqResult, null, 2));
+        } else {
+          console.log(renderNoBmQualityReport(nbqResult));
         }
         break;
       }
