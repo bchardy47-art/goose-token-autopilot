@@ -158,6 +158,8 @@ import { runDexLegitimacyReport, renderDexLegitimacyReport, renderDexLegitimacyR
 import { runDexWinnerCandidateReport, renderDexWinnerCandidateReport, renderDexWinnerCandidateReportUsage } from './token-grab/dexWinnerCandidateReport';
 import { runDexCandidateSafetyEnrich, renderDexCandidateSafetyEnrichReport, renderDexCandidateSafetyEnrichUsage } from './token-grab/dexCandidateSafetyEnrich';
 import { runRipperSession, runRipperAutopilot, loadOrCreateSessionState, renderRipperSessionSummary, renderRipperDashboard, renderRipperSessionUsage, renderRipperAutopilotUsage, renderRipperDashboardUsage } from './token-grab/dexRipperSession';
+import { runLiveShadowCycle, renderLiveShadowCycleSummary, renderLiveShadowUsage, DEFAULT_LIVE_SHADOW_FEED_PATH, DEFAULT_LIVE_SHADOW_STATE_PATH, DEFAULT_LIVE_SHADOW_EVENTS_PATH } from './token-grab/liveShadow';
+import { runLiveShadowReport, renderLiveShadowReport, renderLiveShadowReportUsage } from './token-grab/liveShadowReport';
 import { runRipperEarsReport, runRipperNearMiss, renderRipperEarsReport, renderRipperNearMissReport, renderRipperEarsUsage, renderRipperNearMissUsage, type EarsInputFormat } from './token-grab/ripperEarsReport';
 import { runLiveFixtureCapture, runLiveFixtureReport, runLiveFixtureAutopsy, renderCaptureResult, renderFixtureReport, renderAutopsyReport, renderLiveFixtureCaptureUsage, renderLiveFixtureReportUsage, renderLiveFixtureAutopsyUsage } from './token-grab/liveFixtureCapture';
 import { runRipperFeed, renderRipperFeedResult, renderRipperFeedUsage } from './token-grab/ripperFeed';
@@ -2802,6 +2804,40 @@ async function main(): Promise<void> {
         const rdState = getArgValue('--session-state') ?? 'data/token-grab/ripper/ripper-session.json';
         const rdSessionState = loadOrCreateSessionState(rdState, new Date().toISOString());
         console.log(renderRipperDashboard(rdSessionState));
+        break;
+      }
+
+      case 'token:live-shadow': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderLiveShadowUsage());
+          break;
+        }
+        const lsFeed   = getArgValue('--feed')   ?? DEFAULT_LIVE_SHADOW_FEED_PATH;
+        const lsState  = getArgValue('--state')  ?? DEFAULT_LIVE_SHADOW_STATE_PATH;
+        const lsEvents = getArgValue('--events') ?? DEFAULT_LIVE_SHADOW_EVENTS_PATH;
+        const lsReset  = process.argv.includes('--reset');
+
+        if (lsReset && fs.existsSync(lsState)) fs.unlinkSync(lsState);
+
+        const lsResult = runLiveShadowCycle({ feedPath: lsFeed, statePath: lsState, eventsPath: lsEvents });
+        console.log(renderLiveShadowCycleSummary(lsResult));
+        break;
+      }
+
+      case 'token:live-shadow-report': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderLiveShadowReportUsage());
+          break;
+        }
+        const lsrEvents = getArgValue('--events') ?? DEFAULT_LIVE_SHADOW_EVENTS_PATH;
+        const lsrState  = getArgValue('--state')  ?? DEFAULT_LIVE_SHADOW_STATE_PATH;
+
+        const lsrResult = runLiveShadowReport({ eventsPath: lsrEvents, statePath: lsrState });
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(lsrResult, null, 2));
+        } else {
+          console.log(renderLiveShadowReport(lsrResult));
+        }
         break;
       }
 

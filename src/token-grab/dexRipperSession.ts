@@ -113,7 +113,7 @@ export interface RipperSessionResult {
   noRealTradeSent: true;
 }
 
-function loadCandidates(candidatesPath: string): WinnerCandidate[] {
+export function loadCandidates(candidatesPath: string): WinnerCandidate[] {
   if (!fs.existsSync(candidatesPath)) return [];
   try {
     const raw = fs.readFileSync(candidatesPath, 'utf-8');
