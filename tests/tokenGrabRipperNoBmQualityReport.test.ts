@@ -80,6 +80,25 @@ describe('quality report breakdowns', () => {
     }
   });
 
+  it('surfaces best internal subgroups per actionable dimension (research-only, not a buy signal)', () => {
+    // Strong '-20 to -5' subgroup vs weak baseline → it should be picked & flagged beatsBaseline.
+    const strong = new Array(40).fill(0).map((_, i) => ({ contract: `A${i}`, m5Band: '-20 to -5' as const }));
+    const weak   = new Array(40).fill(0).map((_, i) => ({ contract: `B${i}`, m5Band: '-5 to +5' as const }));
+    const rows = [...strong, ...weak].map((o, i) => mkRow({ contract: o.contract, dedupeKey: `k${i}`, m5Band: o.m5Band }));
+    const trades = [
+      ...strong.map(o => mkTrade({ contract: o.contract, simulatedPnlPct: 8 })),   // strong wins
+      ...weak.map(o   => mkTrade({ contract: o.contract, simulatedPnlPct: -2 })),  // weak losses
+    ];
+    const r = runNoBmQualityReport({ _researchRows: rows, _trades: trades, subgroupMinN: 20 });
+    const m5best = r.bestSubgroups.find(s => s.dimension === 'm5Band')!;
+    expect(m5best.key).toBe('-20 to -5');
+    expect(m5best.beatsBaseline).toBe(true);
+    // Only actionable internal dimensions appear (not clusterRisk).
+    expect(r.bestSubgroups.map(s => s.dimension)).not.toContain('clusterRisk');
+    expect(r.bestSubgroups.map(s => s.dimension)).toEqual(
+      expect.arrayContaining(['m5Band', 'liquidityBucket', 'vlrBucket', 'ripperScoreBand']));
+  });
+
   it('overall observed matches the sum across each dimension breakdown', () => {
     const { rows, trades } = paired([5, -3, 0, 8, 2, -1]);
     const r = runNoBmQualityReport({ _researchRows: rows, _trades: trades });

@@ -171,8 +171,7 @@ import { runAutonomyReadinessAudit, renderAutonomyReadinessAuditReport } from '.
 import { runFixtureClusterEnrich, renderFixtureClusterEnrichReport, renderFixtureClusterEnrichUsage } from './token-grab/fixtureClusterEnrich';
 import { runClusterRiskAudit, renderClusterRiskAuditReport } from './token-grab/clusterRiskAudit';
 import { runBubbleMapsObservationReport, renderBubbleMapsObservationReport } from './token-grab/bubbleMapsObservationReport';
-import { createClusterRiskProvider } from './token-grab/clusterRiskProvider';
-import { createBubbleMapsCachedProvider } from './token-grab/bubbleMapsCache';
+import { createOperatingClusterProvider, isBubbleMapsEnabled, bubbleMapsModeLabel } from './token-grab/bubbleMapsMode';
 import { runRipperPaperCycle, renderRipperPaperCycleResult, renderRipperPaperCycleUsage } from './token-grab/ripperPaperCycle';
 import { runRipperPaperLoop, renderLoopCycleLine, renderRipperPaperLoopResult, renderRipperPaperLoopUsage } from './token-grab/ripperPaperLoop';
 import { runRipperNearMissReport as runCycleNearMissReport, renderRipperNearMissReport as renderCycleNearMissReport, renderRipperNearMissReportUsage } from './token-grab/ripperNearMissReport';
@@ -2873,10 +2872,8 @@ async function main(): Promise<void> {
         const rpcRunsDir   = getArgValue('--runs-dir')   ?? 'data/token-grab/dex-watch-runs';
         const rpcCyclesDir = getArgValue('--cycles-dir') ?? 'data/token-grab/ripper/cycles';
 
-        const { provider: rpcRawProvider, configNote: rpcClusterNote } =
-          createClusterRiskProvider();
-        if (rpcClusterNote) console.warn(`[cluster-risk] ${rpcClusterNote}`);
-        const rpcClusterProvider = createBubbleMapsCachedProvider(rpcRawProvider);
+        const { provider: rpcClusterProvider, note: rpcClusterNote } = createOperatingClusterProvider();
+        console.warn(`[cluster-risk] BubbleMaps ${rpcClusterNote}`);
 
         const rpcResult = await runRipperPaperCycle({
           runsDir:             rpcRunsDir,
@@ -2899,10 +2896,8 @@ async function main(): Promise<void> {
         const rplMaxCycles    = parseNumberArg('--max-cycles',       10,  { min: 1 });
         const rplRefreshSrc   = process.argv.includes('--refresh-source');
 
-        const { provider: rplRawProvider, configNote: rplClusterNote } =
-          createClusterRiskProvider();
-        if (rplClusterNote) console.warn(`[cluster-risk] ${rplClusterNote}`);
-        const rplClusterProvider = createBubbleMapsCachedProvider(rplRawProvider);
+        const { provider: rplClusterProvider, note: rplClusterNote } = createOperatingClusterProvider();
+        console.warn(`[cluster-risk] BubbleMaps ${rplClusterNote}`);
 
         console.log('');
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -3002,10 +2997,8 @@ async function main(): Promise<void> {
         const lfcReset   = process.argv.includes('--reset');
         const lfcDebug   = process.argv.includes('--debug');
 
-        const { provider: lfcRawProvider, configNote: lfcClusterNote } =
-          createClusterRiskProvider();
-        if (lfcClusterNote) console.warn(`[cluster-risk] ${lfcClusterNote}`);
-        const lfcClusterProvider = createBubbleMapsCachedProvider(lfcRawProvider);
+        const { provider: lfcClusterProvider, note: lfcClusterNote } = createOperatingClusterProvider();
+        console.warn(`[cluster-risk] BubbleMaps ${lfcClusterNote}`);
 
         const lfcResult = await runLiveFixtureCapture({
           inputPath: lfcInput,
@@ -3978,6 +3971,7 @@ async function main(): Promise<void> {
             dryRunEnroll:          opDryRunEnroll,
             skipDayWatch:          opSkipDayWatch,
             appendSkippedProofLog: process.argv.includes('--append-skipped-proof-log'),
+            bmEnabled:             isBubbleMapsEnabled(),   // OFF by default → cooldown never blocks
           },
           {
             readProofState: opReadProofState,
@@ -4141,6 +4135,11 @@ async function main(): Promise<void> {
         break;
       }
 
+      // token:ripper-internal-risk-report is the PRIMARY paper-only research path now that
+      // BubbleMaps is optional/off. It aliases the NO_BM quality report (internal-signal
+      // subgroups + baseline comparison + safety labels). token:ripper-no-bm-quality-report
+      // is kept as a synonym.
+      case 'token:ripper-internal-risk-report':
       case 'token:ripper-no-bm-quality-report': {
         const nbqResult = runNoBmQualityReport({
           dataDir:     getArgValue('--data-dir')    ?? 'data/token-grab/ripper',
@@ -4152,6 +4151,7 @@ async function main(): Promise<void> {
         if (process.argv.includes('--json')) {
           console.log(JSON.stringify(nbqResult, null, 2));
         } else {
+          console.log(`  BubbleMaps mode : ${bubbleMapsModeLabel()}`);
           console.log(renderNoBmQualityReport(nbqResult));
         }
         break;
@@ -5206,9 +5206,8 @@ async function main(): Promise<void> {
         // When set, the watch-cohort enroll step is dry-run (no cohort writes). Propagated by fast-test.
         const rllDryRunEnroll   = process.argv.includes('--dry-run-enroll');
 
-        const { provider: rllRawProvider, configNote: rllNote } = createClusterRiskProvider();
-        if (rllNote) console.warn(`[cluster-risk] ${rllNote}`);
-        const rllClusterProvider = createBubbleMapsCachedProvider(rllRawProvider);
+        const { provider: rllClusterProvider, note: rllNote } = createOperatingClusterProvider();
+        console.warn(`[cluster-risk] BubbleMaps ${rllNote}`);
 
         console.log('');
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');

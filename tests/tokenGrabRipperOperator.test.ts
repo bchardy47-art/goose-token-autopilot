@@ -96,9 +96,9 @@ describe('assessWindow', () => {
 // ── runOperator orchestration ─────────────────────────────────────────────────────────
 
 describe('runOperator', () => {
-  it('skips collection when cooldown active and --force absent → BAD_WINDOW_SKIP', () => {
+  it('skips collection when cooldown active and --force absent → BAD_WINDOW_SKIP (BM enabled)', () => {
     const { deps, calls } = makeDeps({ cooldownActive: true });
-    const d = runOperator({}, deps);
+    const d = runOperator({ bmEnabled: true }, deps);   // cooldown only matters when BM is enabled
     expect(calls.runCollection).toBe(0);
     expect(d.collected).toBe(false);
     expect(d.window).toBe('BAD_WINDOW');
@@ -108,9 +108,9 @@ describe('runOperator', () => {
     expect(d.cooldownExpiresAt).toBe('2099-01-01T00:00:00Z');
   });
 
-  it('runs collection when --force is present despite cooldown', () => {
+  it('runs collection when --force is present despite cooldown (BM enabled)', () => {
     const { deps, calls } = makeDeps({ cooldownActive: true });
-    const d = runOperator({ force: true }, deps);
+    const d = runOperator({ force: true, bmEnabled: true }, deps);
     expect(calls.runCollection).toBe(1);
     expect(d.collected).toBe(true);
     expect(d.forced).toBe(true);
@@ -149,11 +149,11 @@ describe('runOperator', () => {
   it('--append-skipped-proof-log only appends a skipped snapshot when explicitly passed', () => {
     const cd: DepsOverrides = { cooldownActive: true };
     const without = makeDeps(cd);
-    runOperator({}, without.deps);
+    runOperator({ bmEnabled: true }, without.deps);
     expect(without.calls.appendSkippedProof).toBe(0);
 
     const withFlag = makeDeps(cd);
-    const d = runOperator({ appendSkippedProofLog: true }, withFlag.deps);
+    const d = runOperator({ appendSkippedProofLog: true, bmEnabled: true }, withFlag.deps);
     expect(withFlag.calls.appendSkippedProof).toBe(1);
     expect(d.appendedSkippedProofLog).toBe(true);
     expect(d.collected).toBe(false); // still skipped
@@ -172,6 +172,43 @@ describe('runOperator', () => {
     deps.runCollection = (o) => { received = o; };
     runOperator({ dryRunEnroll: true, skipDayWatch: true }, deps);
     expect(received).toEqual({ dryRunEnroll: true, skipDayWatch: true });
+  });
+
+  // ── BubbleMaps disabled (default) — cooldown must NOT block collection ─────────────
+  it('BM disabled (default): active cooldown does NOT block — still collects', () => {
+    const { deps, calls } = makeDeps({ cooldownActive: true });   // an old cooldown file exists
+    const d = runOperator({}, deps);                              // bmEnabled defaults to false
+    expect(d.bmEnabled).toBe(false);
+    expect(calls.runCollection).toBe(1);                          // collection ran despite cooldown
+    expect(d.collected).toBe(true);
+    expect(d.cooldownActive).toBe(false);                        // effective cooldown is inactive
+    expect(d.reasons).not.toContain('COOLDOWN_ACTIVE');
+    expect(d.finalDecision).toBe('GOOD_WINDOW_COLLECT');
+  });
+
+  it('BM disabled: does not even read the cooldown marker', () => {
+    const { deps, calls } = makeDeps({ cooldownActive: true });
+    runOperator({}, deps);
+    expect(calls.readCooldown).toBe(0);                           // cooldown never consulted when BM off
+  });
+
+  it('BM disabled: still skips on STALE_FEED and NO_FRESH_CANDIDATES', () => {
+    const stale = makeDeps({ proofStates: [{ report: report(ALL.map(k => lane(k))), cycle: STALE, runsObserved: 0 }] });
+    const ds = runOperator({}, stale.deps);
+    expect(ds.finalDecision).toBe('BAD_WINDOW_SKIP');
+    expect(ds.reasons).toContain('STALE_FEED');
+
+    const noCand = makeDeps({ approved: 0 });
+    const dn = runOperator({}, noCand.deps);
+    expect(dn.reasons).toContain('NO_FRESH_CANDIDATES');
+    expect(dn.finalDecision).toBe('BAD_WINDOW_SKIP');
+  });
+
+  it('render shows BubbleMaps DISABLED and cooldown-ignored note', () => {
+    const { deps } = makeDeps({ cooldownActive: true });
+    const txt = renderOperatorDecision(runOperator({}, deps));
+    expect(txt).toContain('BubbleMaps        : DISABLED');
+    expect(txt).toContain('cooldown ignored');
   });
 
   it('surfaces best-lane metrics and tier', () => {
@@ -194,7 +231,7 @@ describe('runOperator', () => {
 describe('operator safety + render', () => {
   it('safety footer always present with DO_NOT_TRADE; only DO_NOT_ real-trading forms', () => {
     const { deps } = makeDeps({ cooldownActive: true });
-    const d = runOperator({}, deps);
+    const d = runOperator({ bmEnabled: true }, deps);   // BM on so the cooldown drives BAD_WINDOW_SKIP
     expect(d.safety.PAPER_ONLY).toBe(true);
     expect(d.safety.realTradingLocked).toBe(true);
     expect(d.safety.tradingExecuted).toBe(0);

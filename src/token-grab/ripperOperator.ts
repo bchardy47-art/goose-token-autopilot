@@ -41,9 +41,10 @@ export interface OperatorCooldown {
 
 export interface OperatorDecision {
   generatedAt:        string;
+  bmEnabled:          boolean;         // BubbleMaps mode (OFF by default; cooldown ignored when off)
   latestCycle:        string | null;
   cycleFreshness:     ProofCycleInfo['status'];
-  cooldownActive:     boolean;
+  cooldownActive:     boolean;         // EFFECTIVE cooldown (always false when BM disabled)
   cooldownExpiresAt:  string | null;
   approvedLatest:     number;
   rejectedLatest:     number;
@@ -124,8 +125,9 @@ export function assessWindow(input: AssessWindowInput): WindowAssessment {
 
 export interface AssembleOperatorInput {
   generatedAt:             string;
+  bmEnabled:               boolean;
   status:                  ProofStatus;     // proof state to REPORT (post-collection if collected)
-  cooldown:                OperatorCooldown;
+  cooldown:                OperatorCooldown; // EFFECTIVE cooldown (already gated by BM mode)
   approvedLatest:          number;
   rejectedLatest:          number;
   window:                  OperatorWindow;
@@ -150,6 +152,7 @@ export function assembleOperatorDecision(input: AssembleOperatorInput): Operator
 
   return {
     generatedAt:        input.generatedAt,
+    bmEnabled:          input.bmEnabled,
     latestCycle:        status.latestCycle.id,
     cycleFreshness:     status.latestCycle.status,
     cooldownActive:     input.cooldown.active,
@@ -207,6 +210,7 @@ export interface OperatorOptions {
   dryRunEnroll?:          boolean;
   skipDayWatch?:          boolean;
   appendSkippedProofLog?: boolean;
+  bmEnabled?:             boolean;   // BubbleMaps mode — default OFF; when off, cooldown never blocks
   generatedAt?:           string;
 }
 
@@ -219,12 +223,18 @@ export function runOperator(opts: OperatorOptions, deps: OperatorDeps): Operator
   const dryRunEnroll          = opts.dryRunEnroll ?? false;
   const skipDayWatch          = opts.skipDayWatch ?? false;
   const appendSkippedProofLog = opts.appendSkippedProofLog ?? false;
+  const bmEnabled             = opts.bmEnabled ?? false;   // BubbleMaps OFF by default
   const generatedAt           = opts.generatedAt ?? new Date(deps.now()).toISOString();
 
   // 1-4. Read current proof state, cooldown, autopilot.
   const before   = deps.readProofState();
-  const cooldown = deps.readCooldown();
   const auto     = deps.autopilot();
+  // BubbleMaps cooldown ONLY matters when BubbleMaps is enabled. When BM is disabled (the
+  // default, research-only mode), the operator NEVER reads/respects the cooldown — it must not
+  // block paper-evidence collection. Stale-feed / no-fresh-candidate skips still apply.
+  const cooldown: OperatorCooldown = bmEnabled
+    ? deps.readCooldown()
+    : { active: false, expiresAt: null, minutesRemaining: null };
   const statusBefore = buildProofStatus({
     generatedAt, report: before.report, cycle: before.cycle, fastTestRunsObserved: before.runsObserved,
   });
@@ -260,6 +270,7 @@ export function runOperator(opts: OperatorOptions, deps: OperatorDeps): Operator
 
   return assembleOperatorDecision({
     generatedAt,
+    bmEnabled,
     status:            statusFinal,
     cooldown,
     approvedLatest:    auto.approvedCount,
@@ -291,9 +302,10 @@ export function renderOperatorDecision(d: OperatorDecision): string {
   L.push(SEP, '');
   L.push(`  Generated at      : ${d.generatedAt}`);
   L.push(`  Latest cycle      : ${d.latestCycle ?? '(none)'}`);
+  L.push(`  BubbleMaps        : ${d.bmEnabled ? 'ENABLED' : 'DISABLED (research-only; cooldown ignored)'}`);
   L.push(`  Cycle freshness   : ${d.cycleFreshness}`);
   L.push(`  Cooldown active   : ${d.cooldownActive ? 'YES' : 'no'}` +
-    `${d.cooldownActive && d.cooldownExpiresAt ? `  (expires ${d.cooldownExpiresAt})` : ''}`);
+    `${!d.bmEnabled ? '  (BubbleMaps disabled)' : d.cooldownActive && d.cooldownExpiresAt ? `  (expires ${d.cooldownExpiresAt})` : ''}`);
   L.push(`  Approved / reject : ${d.approvedLatest} / ${d.rejectedLatest}`);
   L.push('');
 

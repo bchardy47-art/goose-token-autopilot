@@ -60,11 +60,27 @@ export interface QualityDimensionBreakdown {
   groups:    QualityGroupStats[];    // sorted by observed desc, then enrolled desc
 }
 
+/** The single strongest internal subgroup within one dimension (paper-only research, NOT a buy signal). */
+export interface BestSubgroup {
+  dimension:         string;
+  key:               string;
+  observed:          number;
+  winRate:           number;
+  medianPnl:         number;
+  avgPnlCapped:      number;
+  redLossRate:       number;
+  outlierDependence: number;
+  beatsBaseline:     boolean;
+}
+
+export const DEFAULT_SUBGROUP_MIN_N = 30;   // per-subgroup minimum before a group can "beat baseline"
+
 export interface NoBmQualityReportResult {
   generatedAt:   string;
   cohortPath:    string;
   overall:       QualityGroupStats;       // NO_BM_RESEARCH overall (self-computed)
   breakdowns:    QualityDimensionBreakdown[];
+  bestSubgroups: BestSubgroup[];          // strongest internal subgroup per dimension (best m5/liq/vlr/timing/score)
   comparison: {
     baseline:    LaneOutcomeStats;                                  // OVERALL_APPROVED paper population
     strictLanes: Array<{ lane: string; observed: number; stats: LaneOutcomeStats }>;
@@ -87,10 +103,11 @@ export interface NoBmQualityReportResult {
 }
 
 export interface NoBmQualityReportOptions extends PaperTradeSimulationOptions {
-  dataDir?:     string;
-  cohortPath?:  string;    // override; defaults to researchLaneFilePath(dataDir)
-  minForwardN?: number;
-  generatedAt?: string;
+  dataDir?:      string;
+  cohortPath?:   string;    // override; defaults to researchLaneFilePath(dataDir)
+  minForwardN?:  number;
+  subgroupMinN?: number;    // per-subgroup min before a group can be flagged as beating baseline
+  generatedAt?:  string;
   /** Test-only injection. */
   _trades?:        SimulatedTrade[];
   _researchRows?:  ResearchCohortRow[];
@@ -245,6 +262,7 @@ export function runNoBmQualityReport(opts: NoBmQualityReportOptions = {}): NoBmQ
     tradesByContract.set(t.contract, list);
   }
 
+  const subgroupMinN = opts.subgroupMinN ?? DEFAULT_SUBGROUP_MIN_N;
   const joined = joinResearchRows(researchRows, tradesByContract);
   const overall = statsForGroup('ALL', joined);
   const breakdowns = DIMENSIONS.map(d => breakdownBy(d, joined));
@@ -254,6 +272,15 @@ export function runNoBmQualityReport(opts: NoBmQualityReportOptions = {}): NoBmQ
     dataDir, intentsPath: opts.intentsPath, memoryPath: opts.memoryPath, cyclesDir: opts.cyclesDir,
     minForwardN, _trades: trades, _researchCohortRows: researchRows,
   });
+
+  // Best internal subgroup per dimension (paper-only research — NOT a buy signal).
+  // Excludes the trivial single-value 'entryTiming' / 'clusterRisk' dims from the "best" set;
+  // the actionable internal features are m5Band, liquidityBucket, vlrBucket, ripperScoreBand.
+  const BEST_DIMS = new Set(['m5Band', 'liquidityBucket', 'vlrBucket', 'ripperScoreBand', 'entryTiming']);
+  const bestSubgroups = breakdowns
+    .filter(b => BEST_DIMS.has(b.dimension))
+    .map(b => pickBestSubgroup(b, family.baseline, subgroupMinN))
+    .filter((x): x is BestSubgroup => x != null);
   const strictLanes = family.lanes.map((l: LaneReport) => ({ lane: l.lane, observed: l.observedCount, stats: l.stats }));
   const researchStats = family.researchLane ? family.researchLane.stats : overallToLaneStats(overall);
 
@@ -272,12 +299,37 @@ export function runNoBmQualityReport(opts: NoBmQualityReportOptions = {}): NoBmQ
     'KEEP_COLLECTING';
 
   return {
-    generatedAt, cohortPath, overall, breakdowns,
+    generatedAt, cohortPath, overall, breakdowns, bestSubgroups,
     comparison: { baseline: family.baseline, strictLanes, research: researchStats },
     beatsBaseline, recommendation,
     config: { minForwardN, pnlCapPct: PNL_CAP_PCT, minScore: NO_BM_RESEARCH_MIN_SCORE },
     reportOnly: true, readOnly: true, paperOnly: true, realTradingLocked: true, tradingExecuted: 0,
     noGateChanges: true, noBuySignal: true, noPaperIntentMutation: true, unknownNeverClean: true,
+  };
+}
+
+/** Pick the strongest subgroup in a dimension: highest observed among baseline-beating groups
+ *  (win + cappedAvg above baseline, median not worse, red-loss not worse, not outlier-driven,
+ *  n >= subgroupMinN). Falls back to the highest-observed group flagged beatsBaseline=false. */
+function pickBestSubgroup(
+  b: QualityDimensionBreakdown, baseline: LaneOutcomeStats, subgroupMinN: number,
+): BestSubgroup | null {
+  if (b.groups.length === 0) return null;
+  const beats = (g: QualityGroupStats): boolean =>
+    g.observed >= subgroupMinN &&
+    g.winRate      > baseline.winRate &&
+    g.avgPnlCapped > baseline.avgPnlCapped &&
+    g.medianPnl    >= baseline.medianPnl &&
+    g.redLossRate  <= baseline.redLossRate &&
+    g.outlierDependence <= OUTLIER_MAX;
+  const qualifying = b.groups.filter(beats);
+  const pool = qualifying.length > 0 ? qualifying : b.groups;
+  const top = [...pool].sort((a, c) => c.observed - a.observed || c.avgPnlCapped - a.avgPnlCapped)[0]!;
+  return {
+    dimension: b.dimension, key: top.key, observed: top.observed,
+    winRate: top.winRate, medianPnl: top.medianPnl, avgPnlCapped: top.avgPnlCapped,
+    redLossRate: top.redLossRate, outlierDependence: top.outlierDependence,
+    beatsBaseline: qualifying.length > 0,
   };
 }
 
@@ -345,6 +397,19 @@ export function renderNoBmQualityReport(r: NoBmQualityReportResult): string {
     else for (const g of b.groups) L.push(renderGroupLine(g));
     L.push('');
   }
+
+  // Best internal subgroups (paper-only research; NEVER a buy signal)
+  L.push(`  ${SEP2}`);
+  L.push('  BEST INTERNAL SUBGROUPS (paper-only research — NOT a buy signal)');
+  L.push(`  ${SEP2}`);
+  if (r.bestSubgroups.length === 0) L.push('    (no subgroups)');
+  else for (const s of r.bestSubgroups) {
+    L.push(`    ${s.dimension.padEnd(16)} best=${s.key.padEnd(14)} obs=${String(s.observed).padStart(4)}  ` +
+      `win=${pctS(s.winRate).padStart(6)} med=${pnlS(s.medianPnl).padStart(8)} cappedAvg=${pnlS(s.avgPnlCapped).padStart(8)} ` +
+      `redLoss=${pctS(s.redLossRate).padStart(6)} outlierDep=${s.outlierDependence.toFixed(2)}  ` +
+      `beatsBaseline=${s.beatsBaseline ? 'YES' : 'no'}`);
+  }
+  L.push('');
 
   // Recommendation + safety
   L.push(`  ${SEP2}`);
