@@ -32,6 +32,10 @@ import {
   type BotRisk,
 } from './dexRipperEngine';
 import { loadCandidates, winnerCandidateToRipperInput } from './dexRipperSession';
+import { bucketVlr } from './ripperLearningMemory';
+import { m5BandLabel } from './ripperSubgroupWatch';
+import { ripperScoreBand } from './ripperNoBmQualityReport';
+import { NO_BM_RESEARCH_MIN_SCORE } from './ripperWatchCohortFamily';
 
 // ── Safety constants ──────────────────────────────────────────────────────────────────────
 
@@ -46,6 +50,10 @@ export const NO_SIGNING = true;
 export const DEFAULT_LIVE_SHADOW_FEED_PATH   = 'data/token-grab/legitimacy/dex-winner-candidates-today.json';
 export const DEFAULT_LIVE_SHADOW_STATE_PATH  = 'data/token-grab/live-shadow/live-shadow-state.json';
 export const DEFAULT_LIVE_SHADOW_EVENTS_PATH = 'data/token-grab/live-shadow/live-shadow-events.jsonl';
+export const DEFAULT_LIVE_SHADOW_DIAGNOSTICS_PATH = 'data/token-grab/live-shadow/live-shadow-diagnostics.jsonl';
+
+const M5_FAMILY_BANDS   = new Set(['-20 to -5', '-5 to +5']);
+const BEST_SUBGROUP_VLR = 'VLR_0_5_TO_2';   // strongest VLR subgroup from the NO_BM quality report
 
 // ── Bankroll tiers ────────────────────────────────────────────────────────────────────────
 
@@ -285,7 +293,52 @@ export interface LiveShadowOptions {
   feedPath: string;
   statePath: string;
   eventsPath: string;
+  diagnosticsPath?: string;   // when set, append one per-cycle diagnostic record (append-only)
   nowMs?: number; // injectable for tests
+}
+
+// ── Reject diagnostic (why each candidate is ignored / watched / blocked / ready) ───────────
+
+export type LiveShadowDecision = 'IGNORED' | 'WATCH' | 'BLOCKED' | 'READY';
+
+export interface LiveShadowCandidateDiagnostic {
+  symbol:              string | null;
+  contract:            string;
+  decision:            LiveShadowDecision;
+  rejectReasons:       string[];
+  m5Band:              string;
+  liquidityBucket:     string;   // liquidity-quality bucket from the scorer (feed has no USD liquidity)
+  vlrBucket:           string;
+  ripperScoreBand:     string;
+  ripperScore:         number;
+  clusterRisk:         ClusterRisk;   // UNKNOWN stays UNKNOWN, never CLEAN
+  buyGateDecision:     string;
+  matchesNoBmResearch: boolean;
+  matchesBestSubgroup: boolean;       // VLR_0_5_TO_2
+}
+
+export interface LiveShadowDiagnosticRecord {
+  schemaVersion:        number;
+  ts:                   string;
+  feedPath:             string;
+  totalCandidates:      number;
+  decisionCounts:       Record<LiveShadowDecision, number>;
+  ignoredByReason:      Record<string, number>;
+  blockedByReason:      Record<string, number>;
+  missingConditionTally: Record<string, number>;
+  readyCount:           number;
+  wouldBuyCount:        number;
+  approvedGateCount:    number;
+  approvedGateExplain:  string;
+  matchesNoBmResearchCount: number;
+  matchesBestSubgroupCount: number;
+  topMissingCondition:  string | null;
+  liveShadowOnly:       true;
+  realTrading:          false;
+  noWallet:             true;
+  noSwap:               true;
+  noSigning:            true;
+  unknownNeverClean:    true;
 }
 
 export interface LiveShadowBankrollCycleSummary {
@@ -312,6 +365,9 @@ export interface LiveShadowCycleResult extends LiveShadowSafetyFlags {
   eventsWritten: LiveShadowEvent[];
   state: LiveShadowState;
   tradingExecuted: 0;
+  diagnostics: LiveShadowCandidateDiagnostic[];
+  diagnosticRecord: LiveShadowDiagnosticRecord;
+  approvedGateExplain: string;
 }
 
 // ── Core cycle runner ─────────────────────────────────────────────────────────────────────
@@ -335,6 +391,9 @@ export function runLiveShadowCycle(options: LiveShadowOptions): LiveShadowCycleR
 
   const eventsWritten: LiveShadowEvent[] = [];
   const bankrollSummaries: LiveShadowBankrollCycleSummary[] = [];
+  // Reference tier ($20, the tightest) drives the per-candidate READY/BLOCKED diagnostic.
+  const REF_TIER = 20 as BankrollTier;
+  const refRiskSkipped = new Map<string, string>();
 
   for (const tier of BANKROLL_TIERS) {
     const bs = state.bankrolls[tier];
@@ -420,6 +479,7 @@ export function runLiveShadowCycle(options: LiveShadowOptions): LiveShadowCycleR
       const riskCheck = checkRiskLimits(bs, riskCfg);
       if (!riskCheck.allowed) {
         bs.skippedByRiskLimit += 1;
+        if (tier === REF_TIER) refRiskSkipped.set(signal.contract, riskCheck.reason ?? 'RISK_LIMIT');
         continue;
       }
 
@@ -485,13 +545,119 @@ export function runLiveShadowCycle(options: LiveShadowOptions): LiveShadowCycleR
   const blockedCount = signals.filter(s => s.entryDecision === 'PAPER_BUY_BLOCKED').length;
   const approvedCount = signals.filter(s => checkPaperBuyGate(s, config).decision === 'BUY_APPROVED_PAPER').length;
 
+  // ── Per-candidate reject diagnostics (why each was IGNORED / WATCH / BLOCKED / READY) ──────
+  const diagnostics: LiveShadowCandidateDiagnostic[] = signals.map(s =>
+    buildCandidateDiagnostic(s, checkPaperBuyGate(s, config), refRiskSkipped.get(s.contract)));
+  const approvedGateExplain = explainApprovedGate(approvedCount, diagnostics);
+  const diagnosticRecord = buildLiveShadowDiagnosticRecord(nowIso, options.feedPath, diagnostics, approvedCount, approvedGateExplain);
+
+  // Optional append-only diagnostics file (only when a path is provided — keeps the default
+  // "writes only state + events" contract intact).
+  if (options.diagnosticsPath) appendLiveShadowDiagnostics([diagnosticRecord], options.diagnosticsPath);
+
   return {
     ts: nowIso, feedPath: options.feedPath,
     candidatesScanned: signals.length, ignoredCount, watchCount, readyCount, blockedCount, approvedCount,
     bankrollSummaries, eventsWritten, state,
     tradingExecuted: 0,
+    diagnostics, diagnosticRecord, approvedGateExplain,
     ...safetyFlags(),
   };
+}
+
+// ── Diagnostic builders ─────────────────────────────────────────────────────────────────────
+
+function buildCandidateDiagnostic(
+  s: ReturnType<typeof scoreRipper>,
+  gate: ReturnType<typeof checkPaperBuyGate>,
+  refRiskReason: string | undefined,
+): LiveShadowCandidateDiagnostic {
+  const m5Band          = m5BandLabel(s.priceChangePct ?? null);
+  const vlrBucket       = bucketVlr(s.volumeLiquidityRatio ?? null);
+  const scoreBand       = ripperScoreBand(s.ripperScore);
+  const liquidityBucket = s.liquidityProfile.quality;   // scorer's liquidity classification
+  const clusterRisk     = s.holderCluster.clusterRisk;  // UNKNOWN stays UNKNOWN
+
+  // Internal NO_BM research match (this feed lacks USD liquidity, so use momentum + vlr + score).
+  const matchesNoBmResearch =
+    M5_FAMILY_BANDS.has(m5Band) && s.ripperScore >= NO_BM_RESEARCH_MIN_SCORE && vlrBucket !== 'VLR_UNKNOWN';
+  const matchesBestSubgroup = vlrBucket === BEST_SUBGROUP_VLR;
+
+  let decision: LiveShadowDecision;
+  let rejectReasons: string[];
+  if (s.entryDecision === 'IGNORE') {
+    decision = 'IGNORED';
+    rejectReasons = s.blockers.length ? s.blockers.slice() : ['ENTRY_DECISION_IGNORE'];
+  } else if (s.entryDecision === 'WATCH') {
+    decision = 'WATCH';
+    rejectReasons = s.blockers.length ? s.blockers.slice() : ['ENTRY_DECISION_WATCH'];
+  } else if (s.entryDecision === 'PAPER_BUY_BLOCKED') {
+    decision = 'BLOCKED';
+    rejectReasons = s.blockers.length ? s.blockers.slice() : ['ENTRY_DECISION_PAPER_BUY_BLOCKED'];
+  } else {
+    // READY_TO_SNIPE_PAPER — buy only if the (never-loosened) gate approves AND risk allows.
+    if (gate.decision !== 'BUY_APPROVED_PAPER') {
+      decision = 'BLOCKED';
+      rejectReasons = gate.blockers.length ? gate.blockers.slice() : ['BUY_GATE_REJECTED'];
+    } else if (refRiskReason) {
+      decision = 'BLOCKED';
+      rejectReasons = [`RISK_LIMIT: ${refRiskReason}`];
+    } else {
+      decision = 'READY';
+      rejectReasons = [];
+    }
+  }
+
+  return {
+    symbol: s.symbol ?? null, contract: s.contract, decision, rejectReasons,
+    m5Band, liquidityBucket, vlrBucket, ripperScoreBand: scoreBand, ripperScore: s.ripperScore,
+    clusterRisk, buyGateDecision: gate.decision, matchesNoBmResearch, matchesBestSubgroup,
+  };
+}
+
+function explainApprovedGate(approvedCount: number, diagnostics: LiveShadowCandidateDiagnostic[]): string {
+  if (approvedCount > 0) return `Production buy gate approved ${approvedCount}.`;
+  const tally: Record<string, number> = {};
+  for (const d of diagnostics) if (d.decision !== 'READY') for (const r of d.rejectReasons) tally[r] = (tally[r] ?? 0) + 1;
+  const top = Object.entries(tally).sort((a, b) => b[1] - a[1])[0]?.[0];
+  return `Production buy gate approved 0 (gate NOT loosened). Top blocking condition: ${top ?? '(none — no candidates)'}. ` +
+    `UNKNOWN cluster risk stays UNKNOWN (never CLEAN).`;
+}
+
+export function buildLiveShadowDiagnosticRecord(
+  ts: string, feedPath: string, diagnostics: LiveShadowCandidateDiagnostic[],
+  approvedGateCount: number, approvedGateExplain: string,
+): LiveShadowDiagnosticRecord {
+  const decisionCounts: Record<LiveShadowDecision, number> = { IGNORED: 0, WATCH: 0, BLOCKED: 0, READY: 0 };
+  const ignoredByReason: Record<string, number> = {};
+  const blockedByReason: Record<string, number> = {};
+  const missingConditionTally: Record<string, number> = {};
+  let matchesNoBmResearchCount = 0, matchesBestSubgroupCount = 0;
+  for (const d of diagnostics) {
+    decisionCounts[d.decision]++;
+    if (d.matchesNoBmResearch) matchesNoBmResearchCount++;
+    if (d.matchesBestSubgroup) matchesBestSubgroupCount++;
+    if (d.decision === 'IGNORED') for (const r of d.rejectReasons) { bump(ignoredByReason, r); bump(missingConditionTally, r); }
+    if (d.decision === 'BLOCKED') for (const r of d.rejectReasons) { bump(blockedByReason, r); bump(missingConditionTally, r); }
+    if (d.decision === 'WATCH')   for (const r of d.rejectReasons) { bump(missingConditionTally, r); }
+  }
+  const topMissingCondition = Object.entries(missingConditionTally).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  return {
+    schemaVersion: 1, ts, feedPath, totalCandidates: diagnostics.length,
+    decisionCounts, ignoredByReason, blockedByReason, missingConditionTally,
+    readyCount: decisionCounts.READY, wouldBuyCount: decisionCounts.READY,
+    approvedGateCount, approvedGateExplain, matchesNoBmResearchCount, matchesBestSubgroupCount, topMissingCondition,
+    liveShadowOnly: true, realTrading: false, noWallet: true, noSwap: true, noSigning: true, unknownNeverClean: true,
+  };
+}
+
+function bump(m: Record<string, number>, k: string): void { m[k] = (m[k] ?? 0) + 1; }
+
+/** Append-only diagnostics write — ONLY to the given live-shadow diagnostics jsonl. */
+export function appendLiveShadowDiagnostics(records: LiveShadowDiagnosticRecord[], diagnosticsPath: string): void {
+  if (records.length === 0) return;
+  fs.mkdirSync(path.dirname(diagnosticsPath), { recursive: true });
+  fs.appendFileSync(diagnosticsPath, records.map(r => JSON.stringify(r)).join('\n') + '\n', 'utf-8');
 }
 
 // ── Renderer ──────────────────────────────────────────────────────────────────────────────
@@ -519,6 +685,21 @@ export function renderLiveShadowCycleSummary(r: LiveShadowCycleResult): string {
   L.push(`  Blocked         : ${r.blockedCount}`);
   L.push(`  Ready           : ${r.readyCount}`);
   L.push(`  Approved (gate) : ${r.approvedCount}`);
+  L.push(`    ${r.approvedGateExplain}`);
+  L.push('');
+
+  // Per-candidate reject diagnostics
+  L.push(THIN);
+  L.push('  CANDIDATE DIAGNOSTICS (why each is IGNORED / WATCH / BLOCKED / READY)');
+  L.push(THIN);
+  if (r.diagnostics.length === 0) L.push('  (no candidates in current feed)');
+  for (const d of r.diagnostics) {
+    const c = d.contract.length > 12 ? d.contract.slice(0, 5) + '..' + d.contract.slice(-4) : d.contract;
+    L.push(`  [${d.decision.padEnd(7)}] ${(d.symbol ?? '-').slice(0, 12).padEnd(12)} ${c.padEnd(12)} ` +
+      `m5=${d.m5Band}  liq=${d.liquidityBucket}  vlr=${d.vlrBucket}  score=${d.ripperScoreBand}  cluster=${d.clusterRisk}`);
+    L.push(`             noBmResearch=${d.matchesNoBmResearch ? 'YES' : 'no'}  bestSubgroup(VLR_0_5_TO_2)=${d.matchesBestSubgroup ? 'YES' : 'no'}  ` +
+      `gate=${d.buyGateDecision}` + (d.rejectReasons.length ? `  reasons=[${d.rejectReasons.join('; ')}]` : ''));
+  }
   L.push('');
 
   L.push(THIN);

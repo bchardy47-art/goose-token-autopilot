@@ -158,7 +158,8 @@ import { runDexLegitimacyReport, renderDexLegitimacyReport, renderDexLegitimacyR
 import { runDexWinnerCandidateReport, renderDexWinnerCandidateReport, renderDexWinnerCandidateReportUsage } from './token-grab/dexWinnerCandidateReport';
 import { runDexCandidateSafetyEnrich, renderDexCandidateSafetyEnrichReport, renderDexCandidateSafetyEnrichUsage } from './token-grab/dexCandidateSafetyEnrich';
 import { runRipperSession, runRipperAutopilot, loadOrCreateSessionState, renderRipperSessionSummary, renderRipperDashboard, renderRipperSessionUsage, renderRipperAutopilotUsage, renderRipperDashboardUsage } from './token-grab/dexRipperSession';
-import { runLiveShadowCycle, renderLiveShadowCycleSummary, renderLiveShadowUsage, DEFAULT_LIVE_SHADOW_FEED_PATH, DEFAULT_LIVE_SHADOW_STATE_PATH, DEFAULT_LIVE_SHADOW_EVENTS_PATH } from './token-grab/liveShadow';
+import { runLiveShadowCycle, renderLiveShadowCycleSummary, renderLiveShadowUsage, DEFAULT_LIVE_SHADOW_FEED_PATH, DEFAULT_LIVE_SHADOW_STATE_PATH, DEFAULT_LIVE_SHADOW_EVENTS_PATH, DEFAULT_LIVE_SHADOW_DIAGNOSTICS_PATH } from './token-grab/liveShadow';
+import { runLiveShadowDiagnostic, renderLiveShadowDiagnostic } from './token-grab/liveShadowDiagnostic';
 import { runLiveShadowReport, renderLiveShadowReport, renderLiveShadowReportUsage } from './token-grab/liveShadowReport';
 import { runRipperEarsReport, runRipperNearMiss, renderRipperEarsReport, renderRipperNearMissReport, renderRipperEarsUsage, renderRipperNearMissUsage, type EarsInputFormat } from './token-grab/ripperEarsReport';
 import { runLiveFixtureCapture, runLiveFixtureReport, runLiveFixtureAutopsy, renderCaptureResult, renderFixtureReport, renderAutopsyReport, renderLiveFixtureCaptureUsage, renderLiveFixtureReportUsage, renderLiveFixtureAutopsyUsage } from './token-grab/liveFixtureCapture';
@@ -2815,12 +2816,26 @@ async function main(): Promise<void> {
         const lsFeed   = getArgValue('--feed')   ?? DEFAULT_LIVE_SHADOW_FEED_PATH;
         const lsState  = getArgValue('--state')  ?? DEFAULT_LIVE_SHADOW_STATE_PATH;
         const lsEvents = getArgValue('--events') ?? DEFAULT_LIVE_SHADOW_EVENTS_PATH;
+        const lsDiag   = getArgValue('--diagnostics') ?? DEFAULT_LIVE_SHADOW_DIAGNOSTICS_PATH;
         const lsReset  = process.argv.includes('--reset');
 
         if (lsReset && fs.existsSync(lsState)) fs.unlinkSync(lsState);
 
-        const lsResult = runLiveShadowCycle({ feedPath: lsFeed, statePath: lsState, eventsPath: lsEvents });
-        console.log(renderLiveShadowCycleSummary(lsResult));
+        const lsResult = runLiveShadowCycle({ feedPath: lsFeed, statePath: lsState, eventsPath: lsEvents, diagnosticsPath: lsDiag });
+        if (process.argv.includes('--json')) console.log(JSON.stringify(lsResult.diagnosticRecord, null, 2));
+        else console.log(renderLiveShadowCycleSummary(lsResult));
+        break;
+      }
+
+      case 'token:live-shadow-diagnostic': {
+        const lsdDiag  = getArgValue('--diagnostics') ?? DEFAULT_LIVE_SHADOW_DIAGNOSTICS_PATH;
+        const lsdLastN = getArgValue('--last-n');
+        const lsdResult = runLiveShadowDiagnostic({
+          diagnosticsPath: lsdDiag,
+          lastN: lsdLastN != null ? Number(lsdLastN) : undefined,
+        });
+        if (process.argv.includes('--json')) console.log(JSON.stringify(lsdResult, null, 2));
+        else console.log(renderLiveShadowDiagnostic(lsdResult));
         break;
       }
 
