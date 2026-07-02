@@ -134,13 +134,20 @@ export interface LiveShadowPosition {
   entryRipperScore: number;
   positionSizeUsd: number;
   peakPriceChangePct?: number;
+  // Real absolute entry valuation (e.g. priceUsd) — the basis for realized P/L.
+  entryValuation?: number | null;
+  valuationField?: string | null;
   riskLabels: LiveShadowRiskLabels;
   status: 'OPEN' | 'CLOSED';
   closedAt?: string;
   exitReason?: RipperSellReason;
   exitPriceChangePct?: number;
-  pnlPct?: number;
-  pnlUsd?: number;
+  exitValuation?: number | null;
+  valuationUsable?: boolean;              // true only when P/L came from real entry+exit valuations
+  valuationStatus?: 'OK' | 'VALUATION_UNAVAILABLE';
+  valuationMissing?: string[];           // which valuation inputs were missing (when unusable)
+  pnlPct?: number | null;                // null when valuation unavailable (NOT a fake 0)
+  pnlUsd?: number | null;
   holdMinutes?: number;
 }
 
@@ -177,6 +184,9 @@ export interface LiveShadowWouldBuyEvent extends LiveShadowSafetyFlags {
   liveShadowOnly: true;
   realTrading: false;
   notBuySignal: true;
+  // Real absolute entry valuation (basis for realized P/L on exit).
+  entryValuation: number | null;
+  valuationField: string | null;   // e.g. 'priceUsd'; null when no valuation field was captured
   // Simulation bookkeeping.
   entryPriceChangePct?: number;
   entryLiquidityChangePct?: number;
@@ -200,8 +210,15 @@ export interface LiveShadowWouldSellEvent extends LiveShadowSafetyFlags {
   note: string;
   entryPriceChangePct?: number;
   exitPriceChangePct?: number;
-  pnlPct: number;
-  pnlUsd: number;
+  // Real valuation-based realized P/L. null (with VALUATION_UNAVAILABLE) — never a fake 0.
+  entryValuation: number | null;
+  exitValuation: number | null;
+  valuationField: string | null;
+  valuationUsable: boolean;
+  valuationStatus: 'OK' | 'VALUATION_UNAVAILABLE';
+  valuationMissing: string[];
+  pnlPct: number | null;
+  pnlUsd: number | null;
   holdMinutes: number;
   paperOnly: true;
   notBuySignal: true;
@@ -364,10 +381,25 @@ export interface ShadowCandidate {
   ripperScoreBand: string;
   priceChangePct: number | null;
   liquidityChangePct: number | null;
+  // Real absolute valuation snapshot for this row (e.g. priceUsd) — basis for realized P/L.
+  valuation: number | null;
+  valuationField: string | null;
+  valuationChecked: string[];   // semantic valuation fields we looked for (for missing reporting)
   topReasons: string[];
   /** Current-snapshot signal used only for exit evaluation (evaluateSell). */
   signal: RipperSignal;
 }
+
+// ── Valuation extraction (real absolute price/valuation from a cycle row) ────────────────────
+//
+// Cycle rows do not carry marketCap/fdv today, but they DO carry an absolute token price under
+// raw.final.priceUsd / raw.entry.priceUsd. We prefer that. The check order is future-proofed for
+// marketCap / fdv / priceNative should they appear later. `priceChangePct` is NOT a valuation —
+// it is ~0 at capture, which is exactly why momentum-based P/L reads flat.
+
+export const VALUATION_FIELDS_CHECKED = ['priceUsd', 'marketCapUsd', 'fdvUsd', 'priceNative'] as const;
+
+export interface ValuationExtract { value: number | null; field: string | null; checked: string[]; }
 
 // ── Source resolution + freshness ───────────────────────────────────────────────────────────
 
@@ -402,6 +434,78 @@ export function cycleFileTimestampMs(fileName: string): number | null {
 
 const asNum = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const asStr = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+const asObj = (v: unknown): RawCycleObj => (v && typeof v === 'object' ? v as RawCycleObj : {});
+
+/** First finite, strictly-positive number among the candidates (valuations must be > 0). */
+function firstPositive(...vals: unknown[]): number | null {
+  for (const v of vals) { const n = asNum(v); if (n != null && n > 0) return n; }
+  return null;
+}
+
+/** Extract a real absolute valuation from a cycle row (priceUsd preferred; mcap/fdv/native next). */
+export function extractCycleValuation(row: RawCycleObj): ValuationExtract {
+  const ns      = asObj(row['normalizedSignal']);
+  const raw     = asObj(row['raw']);
+  const nsRaw   = asObj(ns['raw']);
+  const rawFinal = asObj(raw['final']);
+  const rawEntry = asObj(raw['entry']);
+  const nsFinal  = asObj(nsRaw['final']);
+  const nsEntry  = asObj(nsRaw['entry']);
+  const checked = [...VALUATION_FIELDS_CHECKED];
+
+  const priceUsd = firstPositive(
+    rawFinal['priceUsd'], rawEntry['priceUsd'], nsFinal['priceUsd'], nsEntry['priceUsd'],
+    ns['priceUsd'], row['priceUsd'],
+  );
+  if (priceUsd != null) return { value: priceUsd, field: 'priceUsd', checked };
+
+  const marketCap = firstPositive(row['marketCap'], raw['marketCap'], ns['marketCap'], rawFinal['marketCap'], rawEntry['marketCap']);
+  if (marketCap != null) return { value: marketCap, field: 'marketCapUsd', checked };
+
+  const fdv = firstPositive(row['fdv'], raw['fdv'], ns['fdv'], rawFinal['fdv'], rawEntry['fdv']);
+  if (fdv != null) return { value: fdv, field: 'fdvUsd', checked };
+
+  const priceNative = firstPositive(rawFinal['priceNative'], rawEntry['priceNative'], ns['priceNative'], row['priceNative']);
+  if (priceNative != null) return { value: priceNative, field: 'priceNative', checked };
+
+  return { value: null, field: null, checked };
+}
+
+// ── Realized P/L from real valuations ────────────────────────────────────────────────────────
+
+export interface RealizedPnl {
+  entryValuation: number | null;
+  exitValuation: number | null;
+  pnlPct: number | null;    // null → VALUATION_UNAVAILABLE (NOT a fake 0)
+  pnlUsd: number | null;
+  usable: boolean;
+  status: 'OK' | 'VALUATION_UNAVAILABLE';
+  missing: string[];        // which valuation inputs were missing when unusable
+}
+
+interface PnlPositionLike { entryValuation?: number | null; positionSizeUsd: number }
+interface PnlCandidateLike { valuation: number | null }
+
+/**
+ * Compute realized P/L strictly from real absolute valuations (e.g. priceUsd) at entry vs. the
+ * matched current cycle. If either valuation is missing, returns VALUATION_UNAVAILABLE with
+ * pnl=null — we NEVER pretend the trade was flat when we simply lacked a price.
+ */
+export function computeRealizedPnl(pos: PnlPositionLike, currentCandidate: PnlCandidateLike | null): RealizedPnl {
+  const entryValuation = pos.entryValuation ?? null;
+  const exitValuation  = currentCandidate?.valuation ?? null;
+  const missing: string[] = [];
+  if (entryValuation == null || !(entryValuation > 0)) missing.push('entryValuation');
+  if (currentCandidate == null) missing.push('contractNotInLatestCycle');
+  else if (exitValuation == null || !(exitValuation > 0)) missing.push('exitValuation');
+
+  if (entryValuation != null && entryValuation > 0 && exitValuation != null && exitValuation > 0) {
+    const pnlPct = (exitValuation / entryValuation - 1) * 100;
+    const pnlUsd = (pnlPct / 100) * pos.positionSizeUsd;
+    return { entryValuation, exitValuation, pnlPct, pnlUsd, usable: true, status: 'OK', missing: [] };
+  }
+  return { entryValuation, exitValuation, pnlPct: null, pnlUsd: null, usable: false, status: 'VALUATION_UNAVAILABLE', missing };
+}
 
 function normalizeClusterRisk(v: unknown): ClusterRisk {
   return v === 'CLEAN' || v === 'WATCH' || v === 'RISKY' ? v : 'UNKNOWN';   // UNKNOWN stays UNKNOWN
@@ -448,6 +552,7 @@ function cycleRowToShadowCandidate(row: RawCycleObj): ShadowCandidate | null {
   const liquidityBucket = bucketLiquidity(liquidityUsd);
   const vlrBucket = bucketVlr(volumeLiquidityRatio);
   const scoreBand = ripperScoreBand(ripperScore);
+  const valuation = extractCycleValuation(row);
   const topReasons = Array.isArray(row['topReasons']) ? (row['topReasons'] as string[]).slice(0, 5) : [];
 
   const signal: RipperSignal = {
@@ -471,7 +576,9 @@ function cycleRowToShadowCandidate(row: RawCycleObj): ShadowCandidate | null {
     contract, symbol, capturedAt, ripperScore, launchAgeBucket, productionGateApproved,
     clusterRisk, holderRisk, botRisk, liquidityQuality,
     entryMomentumPct, m5Band, liquidityUsd, liquidityBucket, volumeLiquidityRatio, vlrBucket,
-    ripperScoreBand: scoreBand, priceChangePct, liquidityChangePct, topReasons, signal,
+    ripperScoreBand: scoreBand, priceChangePct, liquidityChangePct,
+    valuation: valuation.value, valuationField: valuation.field, valuationChecked: valuation.checked,
+    topReasons, signal,
   };
 }
 
@@ -507,6 +614,8 @@ function legacyFeedToShadowCandidates(feedPath: string, nowMs: number): ShadowCa
       ripperScoreBand: ripperScoreBand(signal.ripperScore),
       priceChangePct: signal.priceChangePct ?? null,
       liquidityChangePct: signal.liquidityChangePct ?? null,
+      // Legacy winner-candidate feed carries no absolute valuation → VALUATION_UNAVAILABLE.
+      valuation: null, valuationField: null, valuationChecked: [...VALUATION_FIELDS_CHECKED],
       topReasons: signal.topReasons,
       signal,
     } satisfies ShadowCandidate;
@@ -821,11 +930,13 @@ export function runLiveShadowCycle(options: LiveShadowOptions): LiveShadowCycleR
       const sellResult = evaluateSell(asRipperPos, currentSignal, config, nowMs);
 
       if (sellResult.shouldSell) {
-        const entryPct   = pos.entryPriceChangePct ?? 0;
-        const currentPct = currentSignal?.priceChangePct ?? entryPct;
-        const pnlPct = sellResult.fakePnlPct ?? ((100 + currentPct) / (100 + entryPct) - 1) * 100;
-        const pnlUsd = (pnlPct / 100) * pos.positionSizeUsd;
+        const currentCandidate = candidateByContract.get(pos.contract) ?? null;
+        const currentPct = currentSignal?.priceChangePct ?? pos.entryPriceChangePct ?? 0;
         const holdMinutes = (nowMs - new Date(pos.openedAt).getTime()) / 60000;
+
+        // Realized P/L from REAL absolute valuations (priceUsd) — never a fake 0. If either the
+        // entry or the exit valuation is missing, P/L is VALUATION_UNAVAILABLE (null), not 0.
+        const pnl = computeRealizedPnl(pos, currentCandidate);
 
         const closed: LiveShadowPosition = {
           ...pos,
@@ -833,21 +944,28 @@ export function runLiveShadowCycle(options: LiveShadowOptions): LiveShadowCycleR
           closedAt: nowIso,
           exitReason: sellResult.reason,
           exitPriceChangePct: currentPct,
-          pnlPct,
-          pnlUsd,
+          exitValuation: pnl.exitValuation,
+          valuationUsable: pnl.usable,
+          valuationStatus: pnl.status,
+          valuationMissing: pnl.missing,
+          pnlPct: pnl.pnlPct,
+          pnlUsd: pnl.pnlUsd,
           holdMinutes,
         };
         bs.closedPositions.unshift(closed);
         bs.totalWouldSells += 1;
         wouldSellsThisCycle += 1;
-        if (pnlUsd < 0) bs.dailyLossUsd += Math.abs(pnlUsd);
+        if (pnl.pnlUsd != null && pnl.pnlUsd < 0) bs.dailyLossUsd += Math.abs(pnl.pnlUsd);
 
         eventsWritten.push({
           type: 'WOULD_SELL', ts: nowIso, bankroll: tier, contract: pos.contract, symbol: pos.symbol,
           lane: pos.lane, sourceCycle: pos.sourceCycle,
           exitReason: sellResult.reason!, note: sellResult.note,
           entryPriceChangePct: pos.entryPriceChangePct, exitPriceChangePct: currentPct,
-          pnlPct, pnlUsd, holdMinutes, paperOnly: true, notBuySignal: true,
+          entryValuation: pos.entryValuation ?? null, exitValuation: pnl.exitValuation,
+          valuationField: pos.valuationField ?? null, valuationUsable: pnl.usable,
+          valuationStatus: pnl.status, valuationMissing: pnl.missing,
+          pnlPct: pnl.pnlPct, pnlUsd: pnl.pnlUsd, holdMinutes, paperOnly: true, notBuySignal: true,
           ...safetyFlags(),
         });
       } else {
@@ -909,6 +1027,8 @@ export function runLiveShadowCycle(options: LiveShadowOptions): LiveShadowCycleR
         entryRipperScore: c.ripperScore,
         positionSizeUsd: riskCfg.maxPositionSizeUsd,
         peakPriceChangePct: c.priceChangePct ?? undefined,
+        entryValuation: c.valuation,
+        valuationField: c.valuationField,
         riskLabels,
         status: 'OPEN',
       };
@@ -923,6 +1043,7 @@ export function runLiveShadowCycle(options: LiveShadowOptions): LiveShadowCycleR
         lane, m5Band: c.m5Band, liquidityBucket: c.liquidityBucket, vlrBucket: c.vlrBucket,
         ripperScoreBand: c.ripperScoreBand, clusterRisk: c.clusterRisk, sourceCycle,
         paperOnly: true, notBuySignal: true,
+        entryValuation: c.valuation, valuationField: c.valuationField,
         entryPriceChangePct: c.priceChangePct ?? undefined, entryLiquidityChangePct: c.liquidityChangePct ?? undefined,
         entryVlr: c.volumeLiquidityRatio ?? undefined, positionSizeUsd: riskCfg.maxPositionSizeUsd,
         ripperScore: c.ripperScore, productionGateApproved: c.productionGateApproved,

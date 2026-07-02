@@ -31,12 +31,14 @@ export interface LiveShadowBankrollReport {
   wouldSellEvents: number;
   openPositions: number;
   closedPositions: number;
+  valuationUsableClosed: number;      // closed trades with real entry+exit valuation
+  valuationUnavailableClosed: number; // closed trades where P/L could NOT be valued (not counted as flat)
   wins: number;
   losses: number;
-  flats: number;
-  winRate: number;
+  flats: number;                      // REAL flat only: valuation usable AND pnl == 0
+  winRate: number;                    // over valuation-usable closed trades
   redLossRate: number;
-  simulatedPnlUsd: number;
+  simulatedPnlUsd: number;            // sum over valuation-usable closed trades
   simulatedPnlPct: number;
   maxDrawdownUsd: number;
   worstTrade: LiveShadowTradeRef | null;
@@ -82,9 +84,14 @@ function readLiveShadowEvents(eventsPath: string): LiveShadowEvent[] {
     .filter((e): e is LiveShadowEvent => e != null);
 }
 
+/** A closed trade whose P/L came from real entry+exit valuations (not VALUATION_UNAVAILABLE). */
+function isValuationUsable(p: LiveShadowPosition): boolean {
+  return p.valuationUsable === true && p.pnlUsd != null && p.pnlPct != null;
+}
+
 function maxDrawdownUsd(closed: LiveShadowPosition[]): number {
   const sorted = [...closed]
-    .filter(p => p.closedAt != null)
+    .filter(p => p.closedAt != null && isValuationUsable(p))
     .sort((a, b) => (a.closedAt! < b.closedAt! ? -1 : a.closedAt! > b.closedAt! ? 1 : 0));
 
   let equity = 0, peak = 0, worstDrawdown = 0;
@@ -98,8 +105,9 @@ function maxDrawdownUsd(closed: LiveShadowPosition[]): number {
 }
 
 function extremeTrade(closed: LiveShadowPosition[], pick: 'worst' | 'best'): LiveShadowTradeRef | null {
-  if (closed.length === 0) return null;
-  const chosen = closed.reduce((a, b) => {
+  const usable = closed.filter(isValuationUsable);
+  if (usable.length === 0) return null;
+  const chosen = usable.reduce((a, b) => {
     const av = a.pnlUsd ?? 0, bv = b.pnlUsd ?? 0;
     return pick === 'worst' ? (av <= bv ? a : b) : (av >= bv ? a : b);
   });
@@ -124,11 +132,15 @@ export function runLiveShadowReport(opts: LiveShadowReportOptions = {}): LiveSha
     const bs = state.bankrolls[tier];
     const closed = bs?.closedPositions ?? [];
     const n = closed.length;
-    const wins   = closed.filter(p => (p.pnlPct ?? 0) > 0).length;
-    const losses = closed.filter(p => (p.pnlPct ?? 0) < 0).length;
-    const flats  = closed.filter(p => (p.pnlPct ?? 0) === 0).length;
-    const simulatedPnlUsd = closed.reduce((s, p) => s + (p.pnlUsd ?? 0), 0);
-    const simulatedPnlPct = n ? closed.reduce((s, p) => s + (p.pnlPct ?? 0), 0) / n : 0;
+    // Win/loss/flat and P/L are computed ONLY over trades with real valuations. Trades where the
+    // price could not be valued are counted separately and NEVER treated as flat $0.
+    const usable = closed.filter(isValuationUsable);
+    const u = usable.length;
+    const wins   = usable.filter(p => (p.pnlPct ?? 0) > 0).length;
+    const losses = usable.filter(p => (p.pnlPct ?? 0) < 0).length;
+    const flats  = usable.filter(p => (p.pnlPct ?? 0) === 0).length;  // REAL flat only
+    const simulatedPnlUsd = usable.reduce((s, p) => s + (p.pnlUsd ?? 0), 0);
+    const simulatedPnlPct = u ? usable.reduce((s, p) => s + (p.pnlPct ?? 0), 0) / u : 0;
     const riskCfg = DEFAULT_RISK_LIMITS[tier];
 
     return {
@@ -137,9 +149,11 @@ export function runLiveShadowReport(opts: LiveShadowReportOptions = {}): LiveSha
       wouldSellEvents: events.filter(e => e.type === 'WOULD_SELL' && e.bankroll === tier).length,
       openPositions: bs?.openPositions.length ?? 0,
       closedPositions: n,
+      valuationUsableClosed: u,
+      valuationUnavailableClosed: n - u,
       wins, losses, flats,
-      winRate:     n ? wins   / n : 0,
-      redLossRate: n ? losses / n : 0,
+      winRate:     u ? wins   / u : 0,
+      redLossRate: u ? losses / u : 0,
       simulatedPnlUsd, simulatedPnlPct,
       maxDrawdownUsd: maxDrawdownUsd(closed),
       worstTrade: extremeTrade(closed, 'worst'),
@@ -198,10 +212,11 @@ export function renderLiveShadowReport(r: LiveShadowReportResult): string {
     L.push(`    Would-sell events  : ${b.wouldSellEvents}`);
     L.push(`    Open positions     : ${b.openPositions}`);
     L.push(`    Closed positions   : ${b.closedPositions}`);
-    L.push(`    Win / Loss / Flat  : ${b.wins} / ${b.losses} / ${b.flats}`);
+    L.push(`    Valued / Unvalued  : ${b.valuationUsableClosed} / ${b.valuationUnavailableClosed}  ${b.valuationUnavailableClosed > 0 ? '(VALUATION_UNAVAILABLE — excluded from P/L, NOT counted as flat)' : ''}`);
+    L.push(`    Win / Loss / Flat  : ${b.wins} / ${b.losses} / ${b.flats}   (flat = real $0 move only; over ${b.valuationUsableClosed} valued)`);
     L.push(`    Win rate           : ${pctS(b.winRate)}`);
     L.push(`    Red-loss rate      : ${pctS(b.redLossRate)}`);
-    L.push(`    Simulated P/L      : ${usdS(b.simulatedPnlUsd)}  (avg ${pnlS(b.simulatedPnlPct)}/trade)`);
+    L.push(`    Simulated P/L      : ${usdS(b.simulatedPnlUsd)}  (avg ${pnlS(b.simulatedPnlPct)}/valued trade)`);
     L.push(`    Max drawdown       : $${b.maxDrawdownUsd.toFixed(2)}`);
     L.push(`    Worst trade        : ${tradeS(b.worstTrade)}`);
     L.push(`    Best trade         : ${tradeS(b.bestTrade)}`);

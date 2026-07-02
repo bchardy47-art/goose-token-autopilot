@@ -39,12 +39,17 @@ interface RowOpts {
   liquidityChangePct?: number;
   clusterRisk?: string;
   topReasons?: string[];
+  priceUsd?: number | null;    // absolute valuation; null → omit price fields (VALUATION_UNAVAILABLE)
 }
 
 /** A pre-scored ripper cycle row that (with defaults) matches NO_BM_INTERNAL_BROAD + best-VLR. */
 function cycleRow(contract: string, o: RowOpts = {}): Record<string, unknown> {
   const m5 = o.entryMomentumPct ?? -10;         // '-20 to -5' band
   const captured = o.capturedAt ?? nowIso;
+  const priceUsd = o.priceUsd === undefined ? 0.001 : o.priceUsd;  // default carries a real valuation
+  const raw = priceUsd == null
+    ? { contract }
+    : { contract, entry: { contract, priceUsd }, final: { contract, priceUsd } };
   return {
     capturedAt: captured,
     ripperScore: o.ripperScore ?? 70,           // >= NO_BM_RESEARCH_MIN_SCORE (60)
@@ -54,6 +59,7 @@ function cycleRow(contract: string, o: RowOpts = {}): Record<string, unknown> {
     entryMomentumPct: m5,
     topReasons: o.topReasons ?? [`momentum ${m5}%`],
     ripperInput: { contract, clusterRisk: o.clusterRisk ?? 'UNKNOWN' },
+    raw,
     normalizedSignal: {
       contract,
       symbol: o.symbol ?? contract.slice(0, 4),
@@ -387,13 +393,13 @@ describe('WOULD_SELL exits', () => {
     const eventsPath = path.join(dir, 'events.jsonl');
     const contract = 'CrashToken111111111111111111111111111111111';
 
-    writeCycle(cyclesDir, '2026-07-01-115500', [cycleRow(contract, { priceChangePct: 35 })]);
+    writeCycle(cyclesDir, '2026-07-01-115500', [cycleRow(contract, { priceChangePct: 35, priceUsd: 0.001 })]);
     runLiveShadowCycle({ cyclesDir, statePath, eventsPath, nowMs: NOW_MS });
 
-    // Same contract crashes. Score below floor so it is NOT re-bought after the stop-loss exit
-    // closes it — the exit reads the price snapshot, entries read the shadow lanes.
+    // Same contract crashes (priceUsd halves). Score below floor so it is NOT re-bought after the
+    // stop-loss exit — the exit reads the real valuation, entries read the shadow lanes.
     const t2 = NOW_MS + 5 * 60_000;
-    writeCycle(cyclesDir, '2026-07-01-116000', [cycleRow(contract, { priceChangePct: -70, ripperScore: 40, capturedAt: new Date(t2).toISOString() })]);
+    writeCycle(cyclesDir, '2026-07-01-116000', [cycleRow(contract, { priceChangePct: -70, ripperScore: 40, priceUsd: 0.0005, capturedAt: new Date(t2).toISOString() })]);
     const r2 = runLiveShadowCycle({ cyclesDir, statePath, eventsPath, nowMs: t2 });
 
     for (const b of r2.bankrollSummaries) {
@@ -404,6 +410,9 @@ describe('WOULD_SELL exits', () => {
     expect(sells).toHaveLength(3);
     for (const sell of sells as any[]) {
       expect(sell.exitReason).toBe('STOP_LOSS');
+      expect(sell.valuationUsable).toBe(true);
+      expect(sell.valuationStatus).toBe('OK');
+      expect(sell.pnlPct).toBeCloseTo(-50, 5);   // 0.0005 / 0.001 - 1 = -50%
       expect(sell.pnlUsd).toBeLessThan(0);
       expect(sell.paperOnly).toBe(true);
     }
@@ -425,7 +434,88 @@ describe('WOULD_SELL exits', () => {
     const sells = readEvents(eventsPath).filter(e => e.type === 'WOULD_SELL') as any[];
     expect(sells.length).toBeGreaterThan(0);
     expect(sells.every(s => s.exitReason === 'DATA_STALE_EXIT')).toBe(true);
+    // Contract left the feed → no exit valuation → VALUATION_UNAVAILABLE, never a fake flat 0.
+    for (const s of sells) {
+      expect(s.valuationUsable).toBe(false);
+      expect(s.valuationStatus).toBe('VALUATION_UNAVAILABLE');
+      expect(s.pnlPct).toBeNull();
+      expect(s.pnlUsd).toBeNull();
+      expect(s.valuationMissing).toContain('contractNotInLatestCycle');
+    }
     for (const b of r2.bankrollSummaries) expect(b.wouldSells).toBe(1);
+  });
+});
+
+// ── Real valuation-based P/L ──────────────────────────────────────────────────────────────────
+
+describe('valuation-based realized P/L', () => {
+  function openThenExit(cyclesDir: string, dir: string, contract: string, entryPriceUsd: number | null, exitPriceUsd: number | null) {
+    const statePath = path.join(dir, 'state.json');
+    const eventsPath = path.join(dir, 'events.jsonl');
+    writeCycle(cyclesDir, '2026-07-01-115500', [cycleRow(contract, { priceUsd: entryPriceUsd })]);
+    runLiveShadowCycle({ cyclesDir, statePath, eventsPath, nowMs: NOW_MS });
+    // Advance past max-hold (30m) → MAX_HOLD_TIME exit; score below floor so no re-buy.
+    const t2 = NOW_MS + 31 * 60_000;
+    writeCycle(cyclesDir, '2026-07-01-120600', [cycleRow(contract, { ripperScore: 40, priceUsd: exitPriceUsd, capturedAt: new Date(t2).toISOString() })]);
+    const r2 = runLiveShadowCycle({ cyclesDir, statePath, eventsPath, nowMs: t2 });
+    const sells = readEvents(eventsPath).filter(e => e.type === 'WOULD_SELL') as any[];
+    return { r2, sells, buys: readEvents(eventsPath).filter(e => e.type === 'WOULD_BUY') as any[] };
+  }
+
+  it('stores a real entry valuation on WOULD_BUY when the field exists', () => {
+    const dir = tmpDir(); const cyclesDir = cyclesDirIn(dir);
+    writeCycle(cyclesDir, '2026-07-01-115500', [cycleRow('ValToken111111111111111111111111111111111A', { priceUsd: 0.00042 })]);
+    const eventsPath = path.join(dir, 'events.jsonl');
+    runLiveShadowCycle({ cyclesDir, statePath: path.join(dir, 'state.json'), eventsPath, nowMs: NOW_MS });
+    const buy = readEvents(eventsPath).find(e => e.type === 'WOULD_BUY') as any;
+    expect(buy.valuationField).toBe('priceUsd');
+    expect(buy.entryValuation).toBe(0.00042);
+  });
+
+  it('computes POSITIVE pnl when the exit valuation is higher than entry', () => {
+    const dir = tmpDir(); const cyclesDir = cyclesDirIn(dir);
+    const { sells } = openThenExit(cyclesDir, dir, 'UpToken1111111111111111111111111111111111A', 0.001, 0.002);
+    expect(sells.length).toBe(3);
+    for (const s of sells) {
+      expect(s.exitReason).toBe('MAX_HOLD_TIME');
+      expect(s.valuationUsable).toBe(true);
+      expect(s.pnlPct).toBeCloseTo(100, 5);        // 0.002/0.001 - 1 = +100%
+      expect(s.pnlUsd).toBeGreaterThan(0);
+    }
+  });
+
+  it('computes NEGATIVE pnl when the exit valuation is lower than entry', () => {
+    const dir = tmpDir(); const cyclesDir = cyclesDirIn(dir);
+    const { sells } = openThenExit(cyclesDir, dir, 'DownToken11111111111111111111111111111111A', 0.001, 0.00025);
+    expect(sells.length).toBe(3);
+    for (const s of sells) {
+      expect(s.valuationUsable).toBe(true);
+      expect(s.pnlPct).toBeCloseTo(-75, 5);        // 0.00025/0.001 - 1 = -75%
+      expect(s.pnlUsd).toBeLessThan(0);
+    }
+  });
+
+  it('returns VALUATION_UNAVAILABLE (not a fake flat 0) when no valuation field exists', () => {
+    const dir = tmpDir(); const cyclesDir = cyclesDirIn(dir);
+    const { sells } = openThenExit(cyclesDir, dir, 'NoValToken1111111111111111111111111111111A', null, null);
+    expect(sells.length).toBe(3);
+    for (const s of sells) {
+      expect(s.valuationUsable).toBe(false);
+      expect(s.valuationStatus).toBe('VALUATION_UNAVAILABLE');
+      expect(s.pnlPct).toBeNull();      // NOT 0
+      expect(s.pnlUsd).toBeNull();
+      expect(s.valuationMissing).toContain('entryValuation');
+    }
+  });
+
+  it('a genuinely flat move (exit == entry valuation) is a real $0, and IS valuation-usable', () => {
+    const dir = tmpDir(); const cyclesDir = cyclesDirIn(dir);
+    const { sells } = openThenExit(cyclesDir, dir, 'FlatToken11111111111111111111111111111111A', 0.001, 0.001);
+    for (const s of sells) {
+      expect(s.valuationUsable).toBe(true);
+      expect(s.pnlPct).toBe(0);
+      expect(s.pnlUsd).toBe(0);
+    }
   });
 });
 
@@ -472,14 +562,15 @@ describe('kill-switch', () => {
       openedAt: nowIso, lane: 'NO_BM_BEST_VLR', sourceCycle: 'seed',
       entryPriceChangePct: 35, entryLiquidityChangePct: 10, entryVlr: 0.6, entryRipperScore: 80,
       positionSizeUsd: 2, peakPriceChangePct: 35,
+      entryValuation: 0.001, valuationField: 'priceUsd',
       riskLabels: { ripperScore: 80, launchAgeBucket: 'PRIME_WINDOW', liquidityQuality: 'GOOD', holderRisk: 'UNKNOWN', clusterRisk: 'UNKNOWN', botRisk: 'CLEAN' },
       status: 'OPEN',
     }];
     saveLiveShadowState(state, statePath);
 
-    // Cycle 1: seeded position crashes → stop-loss pushes realized loss past $4.
+    // Cycle 1: seeded position crashes (priceUsd 0.001 → 0.0004, −60%) → realized loss pushes past $4.
     const t1 = NOW_MS + 60_000;
-    writeCycle(cyclesDir, '2026-07-01-115600', [cycleRow('SeededToken11111111111111111111111111111111', { priceChangePct: -50, capturedAt: new Date(t1).toISOString() })]);
+    writeCycle(cyclesDir, '2026-07-01-115600', [cycleRow('SeededToken11111111111111111111111111111111', { priceChangePct: -50, priceUsd: 0.0004, capturedAt: new Date(t1).toISOString() })]);
     const r1 = runLiveShadowCycle({ cyclesDir, statePath, eventsPath, nowMs: t1 });
     expect(r1.bankrollSummaries.find(b => b.bankroll === 20)!.killSwitchActive).toBe(true);
 

@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { runLiveShadowCycle } from '../src/token-grab/liveShadow';
+import { runLiveShadowCycle, loadOrCreateLiveShadowState, saveLiveShadowState } from '../src/token-grab/liveShadow';
 import { runLiveShadowReport, renderLiveShadowReport } from '../src/token-grab/liveShadowReport';
 
 const NOW_MS = new Date('2026-07-01T12:00:00Z').getTime();
@@ -13,6 +13,8 @@ const nowIso = new Date(NOW_MS).toISOString();
 function cycleRow(contract: string, o: Record<string, unknown> = {}): Record<string, unknown> {
   const m5 = (o.entryMomentumPct as number) ?? -10;
   const captured = (o.capturedAt as string) ?? nowIso;
+  const priceUsd = o.priceUsd === undefined ? 0.001 : (o.priceUsd as number | null);
+  const raw = priceUsd == null ? { contract } : { contract, entry: { contract, priceUsd }, final: { contract, priceUsd } };
   return {
     capturedAt: captured,
     ripperScore: (o.ripperScore as number) ?? 70,
@@ -22,6 +24,7 @@ function cycleRow(contract: string, o: Record<string, unknown> = {}): Record<str
     entryMomentumPct: m5,
     topReasons: [],
     ripperInput: { contract, clusterRisk: 'UNKNOWN' },
+    raw,
     normalizedSignal: {
       contract, symbol: contract.slice(0, 4),
       liquidityUsd: 20_000, volumeLiquidityRatio: 0.6,
@@ -62,13 +65,13 @@ describe('runLiveShadowReport', () => {
     const eventsPath = path.join(dir, 'events.jsonl');
     const contract = 'ReportToken1111111111111111111111111111111';
 
-    writeCycle(cyclesDir, '2026-07-01-115500', [cycleRow(contract, { priceChangePct: 35 })]);
+    writeCycle(cyclesDir, '2026-07-01-115500', [cycleRow(contract, { priceChangePct: 35, priceUsd: 0.001 })]);
     runLiveShadowCycle({ cyclesDir, statePath, eventsPath, nowMs: NOW_MS });
 
-    // Next cycle: same contract takes profit (price 120). Score below floor so it is NOT re-bought
-    // after the exit closes it — exit uses the price snapshot, entry uses the shadow lanes.
-    const t2 = NOW_MS + 5 * 60_000;
-    writeCycle(cyclesDir, '2026-07-01-116000', [cycleRow(contract, { priceChangePct: 120, ripperScore: 40, capturedAt: new Date(t2).toISOString() })]);
+    // Next cycle: same contract's valuation doubles (0.001 → 0.002 = +100%). Advance past max-hold
+    // so it exits; score below floor so it is NOT re-bought after the exit closes it.
+    const t2 = NOW_MS + 31 * 60_000;
+    writeCycle(cyclesDir, '2026-07-01-120600', [cycleRow(contract, { priceChangePct: 120, ripperScore: 40, priceUsd: 0.002, capturedAt: new Date(t2).toISOString() })]);
     runLiveShadowCycle({ cyclesDir, statePath, eventsPath, nowMs: t2 });
 
     const report = runLiveShadowReport({ eventsPath, statePath, nowMs: t2 + 60_000 });
@@ -76,6 +79,8 @@ describe('runLiveShadowReport', () => {
     expect(report.totalWouldSellEvents).toBe(3);
 
     for (const b of report.bankrolls) {
+      expect(b.valuationUsableClosed).toBe(1);
+      expect(b.valuationUnavailableClosed).toBe(0);
       expect(b.wins).toBe(1);
       expect(b.losses).toBe(0);
       expect(b.winRate).toBe(1);
@@ -85,6 +90,38 @@ describe('runLiveShadowReport', () => {
       expect(b.bestTrade!.contract).toBe(contract);
       expect(b.maxDrawdownUsd).toBe(0);
     }
+  });
+
+  it('separates a REAL flat trade from a VALUATION_UNAVAILABLE trade (never conflates them)', () => {
+    const dir = tmpDir();
+    const statePath = path.join(dir, 'state.json');
+    const eventsPath = path.join(dir, 'events.jsonl');
+
+    // Seed state directly: one genuinely-flat valued trade, one valuation-unavailable trade.
+    const nowIso2 = new Date(NOW_MS).toISOString();
+    const st: any = loadOrCreateLiveShadowState(statePath, nowIso2);
+    st.bankrolls[20].closedPositions = [
+      { contract: 'FlatReal11111111111111111111111111111111A', symbol: 'FLAT', bankroll: 20, openedAt: nowIso2,
+        lane: 'NO_BM_BEST_VLR', sourceCycle: 'c', positionSizeUsd: 2, entryRipperScore: 70,
+        entryValuation: 0.001, exitValuation: 0.001, valuationField: 'priceUsd', valuationUsable: true,
+        valuationStatus: 'OK', pnlPct: 0, pnlUsd: 0, status: 'CLOSED', closedAt: nowIso2,
+        riskLabels: { ripperScore: 70, launchAgeBucket: 'PRIME_WINDOW', liquidityQuality: 'GOOD', holderRisk: 'UNKNOWN', clusterRisk: 'UNKNOWN', botRisk: 'UNKNOWN' } },
+      { contract: 'Unvalued111111111111111111111111111111111A', symbol: 'UNV', bankroll: 20, openedAt: nowIso2,
+        lane: 'NO_BM_BEST_VLR', sourceCycle: 'c', positionSizeUsd: 2, entryRipperScore: 70,
+        entryValuation: null, exitValuation: null, valuationField: null, valuationUsable: false,
+        valuationStatus: 'VALUATION_UNAVAILABLE', pnlPct: null, pnlUsd: null, status: 'CLOSED', closedAt: nowIso2,
+        riskLabels: { ripperScore: 70, launchAgeBucket: 'PRIME_WINDOW', liquidityQuality: 'GOOD', holderRisk: 'UNKNOWN', clusterRisk: 'UNKNOWN', botRisk: 'UNKNOWN' } },
+    ];
+    saveLiveShadowState(st, statePath);
+
+    const report = runLiveShadowReport({ eventsPath, statePath, nowMs: NOW_MS });
+    const b20 = report.bankrolls.find(b => b.bankroll === 20)!;
+    expect(b20.closedPositions).toBe(2);
+    expect(b20.valuationUsableClosed).toBe(1);       // only the real flat counts as valued
+    expect(b20.valuationUnavailableClosed).toBe(1);  // the unvalued one is NOT treated as flat
+    expect(b20.flats).toBe(1);                        // real flat only
+    expect(b20.wins).toBe(0);
+    expect(b20.losses).toBe(0);
   });
 
   it('reports risk-limit violations and kill-switch status per bankroll', () => {

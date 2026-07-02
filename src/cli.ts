@@ -161,6 +161,7 @@ import { runRipperSession, runRipperAutopilot, loadOrCreateSessionState, renderR
 import { runLiveShadowCycle, renderLiveShadowCycleSummary, renderLiveShadowUsage, DEFAULT_LIVE_SHADOW_CYCLES_DIR, DEFAULT_LIVE_SHADOW_STATE_PATH, DEFAULT_LIVE_SHADOW_EVENTS_PATH, DEFAULT_LIVE_SHADOW_DIAGNOSTICS_PATH } from './token-grab/liveShadow';
 import { runLiveShadowDiagnostic, renderLiveShadowDiagnostic } from './token-grab/liveShadowDiagnostic';
 import { runLiveShadowReport, renderLiveShadowReport, renderLiveShadowReportUsage } from './token-grab/liveShadowReport';
+import { runLiveShadowValuationDiagnostic, renderLiveShadowValuationDiagnostic, renderLiveShadowValuationDiagnosticUsage } from './token-grab/liveShadowValuationDiagnostic';
 import { runRipperEarsReport, runRipperNearMiss, renderRipperEarsReport, renderRipperNearMissReport, renderRipperEarsUsage, renderRipperNearMissUsage, type EarsInputFormat } from './token-grab/ripperEarsReport';
 import { runLiveFixtureCapture, runLiveFixtureReport, runLiveFixtureAutopsy, renderCaptureResult, renderFixtureReport, renderAutopsyReport, renderLiveFixtureCaptureUsage, renderLiveFixtureReportUsage, renderLiveFixtureAutopsyUsage } from './token-grab/liveFixtureCapture';
 import { runRipperFeed, renderRipperFeedResult, renderRipperFeedUsage } from './token-grab/ripperFeed';
@@ -2843,6 +2844,26 @@ async function main(): Promise<void> {
         });
         if (process.argv.includes('--json')) console.log(JSON.stringify(lsdResult, null, 2));
         else console.log(renderLiveShadowDiagnostic(lsdResult));
+        break;
+      }
+
+      case 'token:live-shadow-valuation-diagnostic': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderLiveShadowValuationDiagnosticUsage());
+          break;
+        }
+        const lsvCyclesDir = getArgValue('--cycles-dir') ?? DEFAULT_LIVE_SHADOW_CYCLES_DIR;
+        const lsvLegacy    = getArgValue('--legacy-feed');
+        const lsvMaxAge    = getArgValue('--max-source-age-minutes');
+        const lsvState     = getArgValue('--state') ?? DEFAULT_LIVE_SHADOW_STATE_PATH;
+        const lsvResult = runLiveShadowValuationDiagnostic({
+          cyclesDir: lsvCyclesDir,
+          legacyFeedPath: lsvLegacy ?? undefined,
+          maxSourceAgeMinutes: lsvMaxAge != null ? Number(lsvMaxAge) : undefined,
+          statePath: lsvState,
+        });
+        if (process.argv.includes('--json')) console.log(JSON.stringify(lsvResult, null, 2));
+        else console.log(renderLiveShadowValuationDiagnostic(lsvResult));
         break;
       }
 
