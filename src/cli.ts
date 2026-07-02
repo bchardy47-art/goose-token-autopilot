@@ -158,7 +158,7 @@ import { runDexLegitimacyReport, renderDexLegitimacyReport, renderDexLegitimacyR
 import { runDexWinnerCandidateReport, renderDexWinnerCandidateReport, renderDexWinnerCandidateReportUsage } from './token-grab/dexWinnerCandidateReport';
 import { runDexCandidateSafetyEnrich, renderDexCandidateSafetyEnrichReport, renderDexCandidateSafetyEnrichUsage } from './token-grab/dexCandidateSafetyEnrich';
 import { runRipperSession, runRipperAutopilot, loadOrCreateSessionState, renderRipperSessionSummary, renderRipperDashboard, renderRipperSessionUsage, renderRipperAutopilotUsage, renderRipperDashboardUsage } from './token-grab/dexRipperSession';
-import { runLiveShadowCycle, renderLiveShadowCycleSummary, renderLiveShadowUsage, DEFAULT_LIVE_SHADOW_FEED_PATH, DEFAULT_LIVE_SHADOW_STATE_PATH, DEFAULT_LIVE_SHADOW_EVENTS_PATH, DEFAULT_LIVE_SHADOW_DIAGNOSTICS_PATH } from './token-grab/liveShadow';
+import { runLiveShadowCycle, renderLiveShadowCycleSummary, renderLiveShadowUsage, DEFAULT_LIVE_SHADOW_CYCLES_DIR, DEFAULT_LIVE_SHADOW_STATE_PATH, DEFAULT_LIVE_SHADOW_EVENTS_PATH, DEFAULT_LIVE_SHADOW_DIAGNOSTICS_PATH } from './token-grab/liveShadow';
 import { runLiveShadowDiagnostic, renderLiveShadowDiagnostic } from './token-grab/liveShadowDiagnostic';
 import { runLiveShadowReport, renderLiveShadowReport, renderLiveShadowReportUsage } from './token-grab/liveShadowReport';
 import { runRipperEarsReport, runRipperNearMiss, renderRipperEarsReport, renderRipperNearMissReport, renderRipperEarsUsage, renderRipperNearMissUsage, type EarsInputFormat } from './token-grab/ripperEarsReport';
@@ -2813,7 +2813,9 @@ async function main(): Promise<void> {
           console.log(renderLiveShadowUsage());
           break;
         }
-        const lsFeed   = getArgValue('--feed')   ?? DEFAULT_LIVE_SHADOW_FEED_PATH;
+        const lsCyclesDir = getArgValue('--cycles-dir') ?? DEFAULT_LIVE_SHADOW_CYCLES_DIR;
+        const lsLegacy    = getArgValue('--legacy-feed');   // explicit legacy/debug source only
+        const lsMaxAge    = getArgValue('--max-source-age-minutes');
         const lsState  = getArgValue('--state')  ?? DEFAULT_LIVE_SHADOW_STATE_PATH;
         const lsEvents = getArgValue('--events') ?? DEFAULT_LIVE_SHADOW_EVENTS_PATH;
         const lsDiag   = getArgValue('--diagnostics') ?? DEFAULT_LIVE_SHADOW_DIAGNOSTICS_PATH;
@@ -2821,7 +2823,12 @@ async function main(): Promise<void> {
 
         if (lsReset && fs.existsSync(lsState)) fs.unlinkSync(lsState);
 
-        const lsResult = runLiveShadowCycle({ feedPath: lsFeed, statePath: lsState, eventsPath: lsEvents, diagnosticsPath: lsDiag });
+        const lsResult = runLiveShadowCycle({
+          cyclesDir: lsCyclesDir,
+          legacyFeedPath: lsLegacy ?? undefined,
+          maxSourceAgeMinutes: lsMaxAge != null ? Number(lsMaxAge) : undefined,
+          statePath: lsState, eventsPath: lsEvents, diagnosticsPath: lsDiag,
+        });
         if (process.argv.includes('--json')) console.log(JSON.stringify(lsResult.diagnosticRecord, null, 2));
         else console.log(renderLiveShadowCycleSummary(lsResult));
         break;

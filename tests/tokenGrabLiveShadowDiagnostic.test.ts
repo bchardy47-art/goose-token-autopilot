@@ -7,134 +7,180 @@ import * as path from 'path';
 import {
   runLiveShadowCycle, renderLiveShadowCycleSummary,
   buildLiveShadowDiagnosticRecord,
-  type LiveShadowDiagnosticRecord, type LiveShadowCandidateDiagnostic,
+  type LiveShadowDiagnosticRecord, type LiveShadowCandidateDiagnostic, type LiveShadowSourceInfo,
 } from '../src/token-grab/liveShadow';
 import { runLiveShadowDiagnostic, renderLiveShadowDiagnostic } from '../src/token-grab/liveShadowDiagnostic';
 
 const NOW_MS = new Date('2026-07-01T12:00:00Z').getTime();
+const nowIso = new Date(NOW_MS).toISOString();
 
-// ── Fixtures ──────────────────────────────────────────────────────────────────────────────
+// ── Cycle fixtures ──────────────────────────────────────────────────────────────────────────
 
 const dirs: string[] = [];
 function tmpDir(): string { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'ls-diag-')); dirs.push(d); return d; }
+function cyclesDirIn(base: string): string { const d = path.join(base, 'cycles'); fs.mkdirSync(d, { recursive: true }); return d; }
 afterEach(() => { while (dirs.length) fs.rmSync(dirs.pop()!, { recursive: true, force: true }); });
 
-/** Prime-window candidates that score BUY_APPROVED_PAPER (mirrors the existing live-shadow fixture). */
-function writeFeed(dir: string, contracts: string[]): string {
-  const filePath = path.join(dir, 'feed.json');
-  fs.writeFileSync(filePath, JSON.stringify({
-    generatedAt: new Date(NOW_MS).toISOString(),
-    candidateCount: contracts.length,
-    candidates: contracts.map(contract => ({
-      tier: 'WATCH', contract, symbol: contract.slice(0, 4),
-      observedAt: new Date(NOW_MS - 10 * 60 * 1000).toISOString(),
-      priceChangePct: 35, liquidityChangePct: 10, volumeLiquidityRatio: 0.6,
-      confidence: 'MEDIUM', reasons: [], missingSafetySignals: [],
-    })),
-  }, null, 2));
-  return filePath;
+/** Pre-scored ripper cycle row that (defaults) matches NO_BM_INTERNAL_BROAD + best-VLR. */
+function cycleRow(contract: string, o: Record<string, unknown> = {}): Record<string, unknown> {
+  const m5 = (o.entryMomentumPct as number) ?? -10;
+  return {
+    capturedAt: (o.capturedAt as string) ?? nowIso,
+    ripperScore: (o.ripperScore as number) ?? 70,
+    launchAgeBucket: (o.launchAgeBucket as string) ?? 'PRIME_WINDOW',
+    buyGateDecision: (o.buyGateDecision as string) ?? 'BUY_REJECTED',
+    entryDecision: (o.entryDecision as string) ?? 'READY_TO_SNIPE_PAPER',
+    entryMomentumPct: m5,
+    topReasons: [],
+    ripperInput: { contract, clusterRisk: (o.clusterRisk as string) ?? 'UNKNOWN' },
+    normalizedSignal: {
+      contract, symbol: contract.slice(0, 4),
+      liquidityUsd: (o.liquidityUsd as number) ?? 20_000,
+      volumeLiquidityRatio: (o.volumeLiquidityRatio as number) ?? 0.6,
+      priceChangePct: (o.priceChangePct as number) ?? 35,
+      liquidityChangePct: 10,
+      entryPriceChangeM5: m5,
+      observedAt: nowIso,
+    },
+  };
+}
+function writeCycle(cyclesDir: string, slug: string, rows: Record<string, unknown>[]): void {
+  fs.writeFileSync(path.join(cyclesDir, `cycle-${slug}.jsonl`), rows.map(r => JSON.stringify(r)).join('\n') + '\n', 'utf-8');
 }
 
 // ── Per-candidate reject diagnostics on the cycle result ────────────────────────────────────
 
 describe('runLiveShadowCycle per-candidate reject diagnostics', () => {
   it('produces a diagnostic per candidate with the required fields; UNKNOWN cluster stays UNKNOWN', () => {
-    const dir = tmpDir();
-    const feedPath = writeFeed(dir, ['GoodToken1111111111111111111111111111111111']);
-    const r = runLiveShadowCycle({ feedPath, statePath: path.join(dir, 'state.json'), eventsPath: path.join(dir, 'events.jsonl'), nowMs: NOW_MS });
+    const dir = tmpDir(); const cyclesDir = cyclesDirIn(dir);
+    writeCycle(cyclesDir, '2026-07-01-115500', [cycleRow('GoodToken1111111111111111111111111111111111')]);
+    const r = runLiveShadowCycle({ cyclesDir, statePath: path.join(dir, 'state.json'), eventsPath: path.join(dir, 'events.jsonl'), nowMs: NOW_MS });
 
     expect(r.diagnostics).toHaveLength(1);
     const d = r.diagnostics[0]!;
-    for (const k of ['symbol', 'contract', 'decision', 'rejectReasons', 'm5Band', 'liquidityBucket', 'vlrBucket', 'ripperScoreBand', 'clusterRisk', 'buyGateDecision', 'matchesNoBmResearch', 'matchesBestSubgroup'] as const) {
+    for (const k of ['symbol', 'contract', 'decision', 'rejectReasons', 'm5Band', 'liquidityBucket', 'vlrBucket', 'ripperScoreBand', 'clusterRisk', 'productionGateApproved', 'matchesNoBmResearch', 'matchesBestSubgroup', 'matchesPullback', 'primaryLane'] as const) {
       expect(d).toHaveProperty(k);
     }
-    // UNKNOWN cluster (no BubbleMaps) is carried verbatim — never CLEAN.
     expect(d.clusterRisk).toBe('UNKNOWN');
-    expect(d.clusterRisk).not.toBe('CLEAN');
     expect(JSON.stringify(r.diagnostics)).not.toContain('"CLEAN"');
-    // vlr 0.6 → best subgroup VLR_0_5_TO_2.
     expect(d.vlrBucket).toBe('VLR_0_5_TO_2');
     expect(d.matchesBestSubgroup).toBe(true);
   });
 
-  it('a qualifying approved candidate is READY; render shows candidate diagnostics + gate explanation', () => {
-    const dir = tmpDir();
-    const feedPath = writeFeed(dir, ['GoodToken1111111111111111111111111111111111']);
-    const r = runLiveShadowCycle({ feedPath, statePath: path.join(dir, 'state.json'), eventsPath: path.join(dir, 'events.jsonl'), nowMs: NOW_MS });
-    expect(r.approvedCount).toBe(1);
+  it('a lane-matching candidate is READY; render shows candidate diagnostics + lane summary', () => {
+    const dir = tmpDir(); const cyclesDir = cyclesDirIn(dir);
+    writeCycle(cyclesDir, '2026-07-01-115500', [cycleRow('GoodToken1111111111111111111111111111111111')]);
+    const r = runLiveShadowCycle({ cyclesDir, statePath: path.join(dir, 'state.json'), eventsPath: path.join(dir, 'events.jsonl'), nowMs: NOW_MS });
+    expect(r.readyCount).toBe(1);
     expect(r.diagnostics[0]!.decision).toBe('READY');
     const txt = renderLiveShadowCycleSummary(r);
     expect(txt).toContain('CANDIDATE DIAGNOSTICS');
     expect(txt).toContain('[READY');
-    expect(txt).toContain('bestSubgroup(VLR_0_5_TO_2)=YES');
+    expect(txt).toContain('bestVlr(VLR_0_5_TO_2)=YES');
     expect(txt).toMatch(/Production buy gate approved/);
   });
 
-  it('enforces risk limits — the 3rd concurrent candidate is BLOCKED by the $20 open-position cap', () => {
-    const dir = tmpDir();
-    // $20 tier openPositionCap=2; three qualifying candidates in one cycle → 3rd blocked at the reference tier.
-    const feedPath = writeFeed(dir, [
-      'AToken111111111111111111111111111111111111A',
-      'BToken222222222222222222222222222222222222B',
-      'CToken333333333333333333333333333333333333C',
+  it('normalizes reject reasons into buckets (no per-minute strings)', () => {
+    const dir = tmpDir(); const cyclesDir = cyclesDirIn(dir);
+    writeCycle(cyclesDir, '2026-07-01-115500', [
+      cycleRow('DeadToken1111111111111111111111111111111111', { launchAgeBucket: 'DEAD_WINDOW', ripperScore: 20, entryMomentumPct: 200 }),
     ]);
-    const r = runLiveShadowCycle({ feedPath, statePath: path.join(dir, 'state.json'), eventsPath: path.join(dir, 'events.jsonl'), nowMs: NOW_MS });
+    const r = runLiveShadowCycle({ cyclesDir, statePath: path.join(dir, 'state.json'), eventsPath: path.join(dir, 'events.jsonl'), nowMs: NOW_MS });
+    const reasons = r.diagnostics[0]!.rejectReasons;
+    expect(reasons).toContain('DEAD_WINDOW_TOO_OLD');
+    expect(reasons).toContain('SCORE_BELOW_FLOOR');
+    // No per-minute noise like "dead window (31922m)".
+    expect(reasons.join(' ')).not.toMatch(/\d+m\)/);
+    expect(reasons.join(' ')).not.toMatch(/\d{3,}/);
+  });
+
+  it('enforces risk limits — the 3rd concurrent candidate is BLOCKED by the $20 open-position cap', () => {
+    const dir = tmpDir(); const cyclesDir = cyclesDirIn(dir);
+    writeCycle(cyclesDir, '2026-07-01-115500', [
+      cycleRow('AToken111111111111111111111111111111111111A'),
+      cycleRow('BToken222222222222222222222222222222222222B'),
+      cycleRow('CToken333333333333333333333333333333333333C'),
+    ]);
+    const r = runLiveShadowCycle({ cyclesDir, statePath: path.join(dir, 'state.json'), eventsPath: path.join(dir, 'events.jsonl'), nowMs: NOW_MS });
     const blocked = r.diagnostics.filter(d => d.decision === 'BLOCKED');
     expect(blocked.length).toBeGreaterThanOrEqual(1);
     expect(blocked.some(d => d.rejectReasons.some(x => /RISK_LIMIT/.test(x) && /open position cap/.test(x)))).toBe(true);
-    // The $20 bankroll actually skipped by risk limit.
-    const b20 = r.bankrollSummaries.find(b => b.bankroll === 20)!;
-    expect(b20.skippedByRiskLimit).toBeGreaterThanOrEqual(1);
+    expect(r.bankrollSummaries.find(b => b.bankroll === 20)!.skippedByRiskLimit).toBeGreaterThanOrEqual(1);
   });
 
   it('writes ONLY live-shadow files (state, events, diagnostics) when diagnosticsPath is set', () => {
-    const dir = tmpDir();
-    const feedPath = writeFeed(dir, ['GoodToken1111111111111111111111111111111111']);
+    const dir = tmpDir(); const cyclesDir = cyclesDirIn(dir);
+    writeCycle(cyclesDir, '2026-07-01-115500', [cycleRow('GoodToken1111111111111111111111111111111111')]);
     runLiveShadowCycle({
-      feedPath, statePath: path.join(dir, 'state.json'), eventsPath: path.join(dir, 'events.jsonl'),
+      cyclesDir, statePath: path.join(dir, 'state.json'), eventsPath: path.join(dir, 'events.jsonl'),
       diagnosticsPath: path.join(dir, 'diagnostics.jsonl'), nowMs: NOW_MS,
     });
-    expect(fs.readdirSync(dir).sort()).toEqual(['diagnostics.jsonl', 'events.jsonl', 'feed.json', 'state.json'].sort());
-    // The diagnostics file is JSONL with a per-cycle record carrying safety flags.
+    expect(fs.readdirSync(dir).sort()).toEqual(['cycles', 'diagnostics.jsonl', 'events.jsonl', 'state.json'].sort());
     const rec = JSON.parse(fs.readFileSync(path.join(dir, 'diagnostics.jsonl'), 'utf-8').trim()) as LiveShadowDiagnosticRecord;
     expect(rec.realTrading).toBe(false);
     expect(rec.liveShadowOnly).toBe(true);
     expect(rec.unknownNeverClean).toBe(true);
+    expect(rec.readyForRealTrading).toBe(false);
+    expect(rec.staleSource).toBe(false);
   });
 
-  it('does NOT write a diagnostics file when diagnosticsPath is omitted (default contract preserved)', () => {
-    const dir = tmpDir();
-    const feedPath = writeFeed(dir, ['GoodToken1111111111111111111111111111111111']);
-    runLiveShadowCycle({ feedPath, statePath: path.join(dir, 'state.json'), eventsPath: path.join(dir, 'events.jsonl'), nowMs: NOW_MS });
-    expect(fs.readdirSync(dir).sort()).toEqual(['events.jsonl', 'feed.json', 'state.json'].sort());
+  it('does NOT write a diagnostics file when diagnosticsPath is omitted', () => {
+    const dir = tmpDir(); const cyclesDir = cyclesDirIn(dir);
+    writeCycle(cyclesDir, '2026-07-01-115500', [cycleRow('GoodToken1111111111111111111111111111111111')]);
+    runLiveShadowCycle({ cyclesDir, statePath: path.join(dir, 'state.json'), eventsPath: path.join(dir, 'events.jsonl'), nowMs: NOW_MS });
+    expect(fs.readdirSync(dir).sort()).toEqual(['cycles', 'events.jsonl', 'state.json'].sort());
   });
 });
 
 // ── Diagnostic record builder ───────────────────────────────────────────────────────────────
 
 describe('buildLiveShadowDiagnosticRecord', () => {
+  function source(o: Partial<LiveShadowSourceInfo> = {}): LiveShadowSourceInfo {
+    return {
+      sourceMode: 'FRESH_CYCLE', sourceFile: 'cycles/cycle-x.jsonl', sourceTimestamp: nowIso,
+      sourceAgeMinutes: 2, candidateCount: 4, staleSource: false, maxSourceAgeMinutes: 15, ...o,
+    };
+  }
   function diag(o: Partial<LiveShadowCandidateDiagnostic>): LiveShadowCandidateDiagnostic {
     return {
       symbol: 'S', contract: 'C', decision: 'IGNORED', rejectReasons: [],
-      m5Band: '-5 to +5', liquidityBucket: 'GOOD', vlrBucket: 'VLR_0_5_TO_2', ripperScoreBand: 'SCORE_80_89',
-      ripperScore: 85, clusterRisk: 'UNKNOWN', buyGateDecision: 'BUY_REJECTED',
-      matchesNoBmResearch: true, matchesBestSubgroup: true, ...o,
+      m5Band: '-5 to +5', liquidityBucket: 'LIQ_10K_30K', vlrBucket: 'VLR_0_5_TO_2', ripperScoreBand: 'SCORE_80_89',
+      ripperScore: 85, clusterRisk: 'UNKNOWN', productionGateApproved: false,
+      matchesNoBmResearch: true, matchesBestSubgroup: true, matchesPullback: false,
+      matchedLanes: ['NO_BM_BEST_VLR', 'NO_BM_INTERNAL_BROAD'], primaryLane: 'NO_BM_BEST_VLR', ...o,
     };
   }
-  it('tallies decisions, ignored/blocked reasons, and top missing condition', () => {
+  it('tallies decisions, normalized reasons, lane counts, and top missing condition', () => {
     const diagnostics = [
-      diag({ decision: 'IGNORED', rejectReasons: ['too early (2m) — wait for prime window'] }),
-      diag({ decision: 'IGNORED', rejectReasons: ['too early (2m) — wait for prime window'] }),
+      diag({ decision: 'IGNORED', rejectReasons: ['M5_OUTSIDE_LANE'], matchesNoBmResearch: false, matchesBestSubgroup: false }),
+      diag({ decision: 'IGNORED', rejectReasons: ['M5_OUTSIDE_LANE'], matchesNoBmResearch: false, matchesBestSubgroup: false }),
       diag({ decision: 'BLOCKED', rejectReasons: ['RISK_LIMIT: open position cap reached (2/2)'] }),
       diag({ decision: 'READY',   rejectReasons: [] }),
     ];
-    const rec = buildLiveShadowDiagnosticRecord('t', 'feed.json', diagnostics, 1, 'ok');
+    const rec = buildLiveShadowDiagnosticRecord({
+      ts: 't', source: source(), sourceCycle: 'cycle-x', skipped: false, skipReason: null,
+      diagnostics, productionGateApprovedCount: 1,
+    });
     expect(rec.decisionCounts).toEqual({ IGNORED: 2, WATCH: 0, BLOCKED: 1, READY: 1 });
-    expect(rec.ignoredByReason['too early (2m) — wait for prime window']).toBe(2);
+    expect(rec.ignoredByReason['M5_OUTSIDE_LANE']).toBe(2);
     expect(rec.blockedByReason['RISK_LIMIT: open position cap reached (2/2)']).toBe(1);
-    expect(rec.topMissingCondition).toBe('too early (2m) — wait for prime window');
+    expect(rec.topMissingCondition).toBe('M5_OUTSIDE_LANE');
     expect(rec.readyCount).toBe(1);
+    expect(rec.wouldBuyCount).toBe(1);
+    expect(rec.laneMatchCounts.NO_BM_BEST_VLR).toBe(2);
+    expect(rec.productionGateApprovedCount).toBe(1);
     expect(rec.realTrading).toBe(false);
+  });
+
+  it('a stale-skipped cycle records STALE_SOURCE as the single reason', () => {
+    const rec = buildLiveShadowDiagnosticRecord({
+      ts: 't', source: source({ staleSource: true, candidateCount: 5 }), sourceCycle: 'cycle-x',
+      skipped: true, skipReason: 'STALE_SOURCE', diagnostics: [], productionGateApprovedCount: 0,
+    });
+    expect(rec.staleSource).toBe(true);
+    expect(rec.ignoredByReason.STALE_SOURCE).toBe(5);
+    expect(rec.topMissingCondition).toBe('STALE_SOURCE');
+    expect(rec.totalCandidates).toBe(5);
   });
 });
 
@@ -143,13 +189,16 @@ describe('buildLiveShadowDiagnosticRecord', () => {
 describe('runLiveShadowDiagnostic report', () => {
   function record(o: Partial<LiveShadowDiagnosticRecord>): LiveShadowDiagnosticRecord {
     return {
-      schemaVersion: 1, ts: 't', feedPath: 'f', totalCandidates: 0,
+      schemaVersion: 2, ts: 't', sourceMode: 'FRESH_CYCLE', sourceFile: 'cycles/cycle-x.jsonl', sourceCycle: 'cycle-x',
+      sourceTimestamp: nowIso, sourceAgeMinutes: 2, staleSource: false, maxSourceAgeMinutes: 15,
+      skipped: false, skipReason: null, totalCandidates: 0,
       decisionCounts: { IGNORED: 0, WATCH: 0, BLOCKED: 0, READY: 0 },
       ignoredByReason: {}, blockedByReason: {}, missingConditionTally: {},
-      readyCount: 0, wouldBuyCount: 0, approvedGateCount: 0, approvedGateExplain: '',
-      matchesNoBmResearchCount: 0, matchesBestSubgroupCount: 0, topMissingCondition: null,
-      liveShadowOnly: true, realTrading: false, noWallet: true, noSwap: true, noSigning: true, unknownNeverClean: true,
-      ...o,
+      readyCount: 0, wouldBuyCount: 0, productionGateApprovedCount: 0,
+      laneMatchCounts: { NO_BM_INTERNAL_BROAD: 0, NO_BM_BEST_VLR: 0, NO_BM_PULLBACK: 0 },
+      matchesNoBmResearchCount: 0, matchesBestSubgroupCount: 0, matchesPullbackCount: 0, topMissingCondition: null,
+      liveShadowOnly: true, realTrading: false, noWallet: true, noSwap: true, noSigning: true,
+      unknownNeverClean: true, readyForRealTrading: false, ...o,
     };
   }
 
@@ -162,20 +211,23 @@ describe('runLiveShadowDiagnostic report', () => {
     expect(() => renderLiveShadowDiagnostic(r)).not.toThrow();
   });
 
-  it('summarizes last N cycles: total candidates, ignored/blocked by reason, ready/would-buy, top missing', () => {
+  it('summarizes last N cycles: candidates, normalized reasons, lanes, ready/would-buy, top missing, stale count', () => {
     const recs = [
-      record({ ts: 'c1', totalCandidates: 5, decisionCounts: { IGNORED: 3, WATCH: 1, BLOCKED: 0, READY: 1 }, readyCount: 1, wouldBuyCount: 1, ignoredByReason: { M5_NOT_IN_FAMILY: 3 }, missingConditionTally: { M5_NOT_IN_FAMILY: 3 } }),
-      record({ ts: 'c2', totalCandidates: 4, decisionCounts: { IGNORED: 1, WATCH: 0, BLOCKED: 2, READY: 1 }, readyCount: 1, wouldBuyCount: 1, blockedByReason: { 'RISK_LIMIT: open position cap': 2 }, ignoredByReason: { M5_NOT_IN_FAMILY: 1 }, missingConditionTally: { M5_NOT_IN_FAMILY: 4, 'RISK_LIMIT: open position cap': 2 } }),
+      record({ ts: 'c1', totalCandidates: 5, decisionCounts: { IGNORED: 3, WATCH: 1, BLOCKED: 0, READY: 1 }, readyCount: 1, wouldBuyCount: 1, ignoredByReason: { M5_OUTSIDE_LANE: 3 }, missingConditionTally: { M5_OUTSIDE_LANE: 3 }, laneMatchCounts: { NO_BM_INTERNAL_BROAD: 2, NO_BM_BEST_VLR: 1, NO_BM_PULLBACK: 1 }, productionGateApprovedCount: 1 }),
+      record({ ts: 'c2', staleSource: true, totalCandidates: 4, decisionCounts: { IGNORED: 4, WATCH: 0, BLOCKED: 0, READY: 0 }, ignoredByReason: { STALE_SOURCE: 4 }, missingConditionTally: { STALE_SOURCE: 4 } }),
     ];
     const r = runLiveShadowDiagnostic({ _records: recs, lastN: 20 });
     expect(r.cyclesSummarized).toBe(2);
     expect(r.totalCandidates).toBe(9);
-    expect(r.decisionCounts).toEqual({ IGNORED: 4, WATCH: 1, BLOCKED: 2, READY: 2 });
-    expect(r.readyCount).toBe(2);
-    expect(r.wouldBuyCount).toBe(2);
-    expect(r.ignoredByReason['M5_NOT_IN_FAMILY']).toBe(4);
-    expect(r.blockedByReason['RISK_LIMIT: open position cap']).toBe(2);
-    expect(r.topMissingCondition).toBe('M5_NOT_IN_FAMILY');
+    expect(r.decisionCounts).toEqual({ IGNORED: 7, WATCH: 1, BLOCKED: 0, READY: 1 });
+    expect(r.readyCount).toBe(1);
+    expect(r.wouldBuyCount).toBe(1);
+    expect(r.ignoredByReason['M5_OUTSIDE_LANE']).toBe(3);
+    expect(r.ignoredByReason['STALE_SOURCE']).toBe(4);
+    expect(r.laneMatchCounts.NO_BM_INTERNAL_BROAD).toBe(2);
+    expect(r.productionGateApprovedTotal).toBe(1);
+    expect(r.staleCycles).toBe(1);
+    expect(r.topMissingCondition).toBe('STALE_SOURCE');
   });
 
   it('respects lastN (only summarizes the most recent N records)', () => {
@@ -210,14 +262,13 @@ describe('live-shadow diagnostic introduces no unsafe behavior', () => {
       expect(src).not.toMatch(/signTransaction|walletSign|keypair|privateKey|secretKey|executeSwap|sendTransaction/i);
     }
   });
-  it('the new diagnostic module never references token:auto-paper / token:paper-buy / --live', () => {
-    // (liveShadow.ts documents in its header that it does NOT run those — negated mentions only.)
+  it('the diagnostic module never references token:auto-paper / token:paper-buy / --live', () => {
     const src = fs.readFileSync(path.resolve(__dirname, '../src/token-grab/liveShadowDiagnostic.ts'), 'utf-8');
     expect(src).not.toContain('token:auto-paper');
     expect(src).not.toContain('token:paper-buy');
     expect(src).not.toContain('--live');
   });
-  it('neither module can spawn a subprocess (no child_process import → cannot invoke any command)', () => {
+  it('neither module can spawn a subprocess (no child_process import)', () => {
     for (const f of files) {
       const src = fs.readFileSync(f, 'utf-8');
       expect(src).not.toMatch(/from ['"](node:)?child_process['"]/);

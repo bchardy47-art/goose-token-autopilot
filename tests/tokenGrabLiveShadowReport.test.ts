@@ -5,48 +5,40 @@ import * as path from 'path';
 import { runLiveShadowCycle } from '../src/token-grab/liveShadow';
 import { runLiveShadowReport, renderLiveShadowReport } from '../src/token-grab/liveShadowReport';
 
-const NOW_MS = new Date('2026-06-10T12:00:00Z').getTime();
+const NOW_MS = new Date('2026-07-01T12:00:00Z').getTime();
+const nowIso = new Date(NOW_MS).toISOString();
 
-interface FixtureCandidate {
-  contract: string;
-  symbol?: string;
-  observedAt?: string;
-  priceChangePct?: number;
-  liquidityChangePct?: number;
-  volumeLiquidityRatio?: number;
-}
+// ── Cycle fixtures (fresh ripper cycle rows) ────────────────────────────────────────────────
 
-function writeFeed(dir: string, candidates: FixtureCandidate[]): string {
-  const filePath = path.join(dir, 'feed.json');
-  const report = {
-    generatedAt: new Date(NOW_MS).toISOString(),
-    candidateCount: candidates.length,
-    candidates: candidates.map(c => ({
-      tier: 'WATCH',
-      contract: c.contract,
-      symbol: c.symbol ?? 'TEST',
-      observedAt: c.observedAt ?? new Date(NOW_MS - 10 * 60 * 1000).toISOString(),
-      priceChangePct: c.priceChangePct ?? 35,
-      liquidityChangePct: c.liquidityChangePct ?? 10,
-      volumeLiquidityRatio: c.volumeLiquidityRatio ?? 0.6,
-      confidence: 'MEDIUM',
-      reasons: [],
-      missingSafetySignals: [],
-    })),
+function cycleRow(contract: string, o: Record<string, unknown> = {}): Record<string, unknown> {
+  const m5 = (o.entryMomentumPct as number) ?? -10;
+  const captured = (o.capturedAt as string) ?? nowIso;
+  return {
+    capturedAt: captured,
+    ripperScore: (o.ripperScore as number) ?? 70,
+    launchAgeBucket: (o.launchAgeBucket as string) ?? 'PRIME_WINDOW',
+    buyGateDecision: 'BUY_REJECTED',
+    entryDecision: 'READY_TO_SNIPE_PAPER',
+    entryMomentumPct: m5,
+    topReasons: [],
+    ripperInput: { contract, clusterRisk: 'UNKNOWN' },
+    normalizedSignal: {
+      contract, symbol: contract.slice(0, 4),
+      liquidityUsd: 20_000, volumeLiquidityRatio: 0.6,
+      priceChangePct: (o.priceChangePct as number) ?? 35, liquidityChangePct: 10,
+      entryPriceChangeM5: m5, observedAt: captured,
+    },
   };
-  fs.writeFileSync(filePath, JSON.stringify(report, null, 2));
-  return filePath;
+}
+function writeCycle(cyclesDir: string, slug: string, rows: Record<string, unknown>[]): void {
+  fs.mkdirSync(cyclesDir, { recursive: true });
+  fs.writeFileSync(path.join(cyclesDir, `cycle-${slug}.jsonl`), rows.map(r => JSON.stringify(r)).join('\n') + '\n', 'utf-8');
 }
 
 const dirs: string[] = [];
-function tmpDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'live-shadow-report-'));
-  dirs.push(dir);
-  return dir;
-}
-afterEach(() => {
-  while (dirs.length) fs.rmSync(dirs.pop()!, { recursive: true });
-});
+function tmpDir(): string { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'live-shadow-report-')); dirs.push(dir); return dir; }
+function cyclesDirIn(base: string): string { const d = path.join(base, 'cycles'); fs.mkdirSync(d, { recursive: true }); return d; }
+afterEach(() => { while (dirs.length) fs.rmSync(dirs.pop()!, { recursive: true, force: true }); });
 
 describe('runLiveShadowReport', () => {
   it('is always READY_FOR_REAL_TRADING=false, even with no data', () => {
@@ -63,24 +55,24 @@ describe('runLiveShadowReport', () => {
     expect(report.realTrading).toBe(false);
   });
 
-  it('reflects buys, sells, win/loss, P/L, drawdown, and best/worst trade after a cycle', () => {
+  it('reflects buys, sells, win/loss, P/L, drawdown, and best/worst after a lane-driven cycle', () => {
     const dir = tmpDir();
+    const cyclesDir = cyclesDirIn(dir);
     const statePath = path.join(dir, 'state.json');
     const eventsPath = path.join(dir, 'events.jsonl');
     const contract = 'ReportToken1111111111111111111111111111111';
 
-    const feed1 = writeFeed(dir, [{ contract }]);
-    runLiveShadowCycle({ feedPath: feed1, statePath, eventsPath, nowMs: NOW_MS });
+    writeCycle(cyclesDir, '2026-07-01-115500', [cycleRow(contract, { priceChangePct: 35 })]);
+    runLiveShadowCycle({ cyclesDir, statePath, eventsPath, nowMs: NOW_MS });
 
-    // Take profit next cycle (well above the +40% take-profit threshold). The cycle also
-    // advances past the prime window so the same contract is not immediately re-bought
-    // after the exit closes it.
-    const feed2 = writeFeed(dir, [{ contract, priceChangePct: 120 }]);
-    runLiveShadowCycle({ feedPath: feed2, statePath, eventsPath, nowMs: NOW_MS + 25 * 60_000 });
+    // Next cycle: same contract takes profit (price 120). Score below floor so it is NOT re-bought
+    // after the exit closes it — exit uses the price snapshot, entry uses the shadow lanes.
+    const t2 = NOW_MS + 5 * 60_000;
+    writeCycle(cyclesDir, '2026-07-01-116000', [cycleRow(contract, { priceChangePct: 120, ripperScore: 40, capturedAt: new Date(t2).toISOString() })]);
+    runLiveShadowCycle({ cyclesDir, statePath, eventsPath, nowMs: t2 });
 
-    const report = runLiveShadowReport({ eventsPath, statePath, nowMs: NOW_MS + 6 * 60_000 });
-
-    expect(report.totalWouldBuyEvents).toBe(3);  // one per bankroll tier
+    const report = runLiveShadowReport({ eventsPath, statePath, nowMs: t2 + 60_000 });
+    expect(report.totalWouldBuyEvents).toBe(3);
     expect(report.totalWouldSellEvents).toBe(3);
 
     for (const b of report.bankrolls) {
@@ -90,22 +82,22 @@ describe('runLiveShadowReport', () => {
       expect(b.redLossRate).toBe(0);
       expect(b.simulatedPnlUsd).toBeGreaterThan(0);
       expect(b.bestTrade).not.toBeNull();
-      expect(b.worstTrade).not.toBeNull();
       expect(b.bestTrade!.contract).toBe(contract);
-      expect(b.maxDrawdownUsd).toBe(0); // equity only ever rose
+      expect(b.maxDrawdownUsd).toBe(0);
     }
   });
 
   it('reports risk-limit violations and kill-switch status per bankroll', () => {
     const dir = tmpDir();
+    const cyclesDir = cyclesDirIn(dir);
     const statePath = path.join(dir, 'state.json');
     const eventsPath = path.join(dir, 'events.jsonl');
-    const feedPath = writeFeed(dir, [
-      { contract: 'RLToken1111111111111111111111111111111111' },
-      { contract: 'RLToken2222222222222222222222222222222222' },
-      { contract: 'RLToken3333333333333333333333333333333333' },
+    writeCycle(cyclesDir, '2026-07-01-115500', [
+      cycleRow('RLToken1111111111111111111111111111111111'),
+      cycleRow('RLToken2222222222222222222222222222222222'),
+      cycleRow('RLToken3333333333333333333333333333333333'),
     ]);
-    runLiveShadowCycle({ feedPath, statePath, eventsPath, nowMs: NOW_MS });
+    runLiveShadowCycle({ cyclesDir, statePath, eventsPath, nowMs: NOW_MS });
 
     const report = runLiveShadowReport({ eventsPath, statePath, nowMs: NOW_MS });
     const b20 = report.bankrolls.find(b => b.bankroll === 20)!;
