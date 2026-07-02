@@ -153,6 +153,7 @@ import { runDexPaperJournal, renderDexPaperJournal } from './token-grab/dexPaper
 import { runDexPaperEntryPlanner, renderDexPaperEntryPlanReport } from './token-grab/dexPaperEntryPlanner';
 import { runDexValidationLoop, renderValidationLoopSummary, renderValidationLoopUsage } from './token-grab/dexValidationLoop';
 import { runDexDayWatch, renderDayWatchUsage, loadDayLog, buildDayReport, renderDayReport, renderDayReportUsage } from './token-grab/dexDayWatch';
+import { runDexFeedRefresh, renderDexFeedRefreshUsage, renderDexFeedRefreshResult } from './token-grab/dexFeedRefresh';
 import { runDexPaperPositionTracker, renderDexPaperPositionTrackerReport, renderDexPaperPositionTrackerUsage } from './token-grab/dexPaperPositionTracker';
 import { runDexLegitimacyReport, renderDexLegitimacyReport, renderDexLegitimacyReportUsage } from './token-grab/dexLegitimacyReport';
 import { runDexWinnerCandidateReport, renderDexWinnerCandidateReport, renderDexWinnerCandidateReportUsage } from './token-grab/dexWinnerCandidateReport';
@@ -2565,6 +2566,45 @@ async function main(): Promise<void> {
 
         console.log(`\n  Day watch complete. ${dwResult.cyclesRun} cycles written to ${dwResult.dayLogPath}`);
         console.log(`  Run: npm run token:dex-day-report -- --day-log ${dwResult.dayLogPath}`);
+        break;
+      }
+
+      case 'token:dex-feed-refresh': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderDexFeedRefreshUsage());
+          break;
+        }
+        // ONE-SHOT: exactly one cycle, no sleep. cycles/sleep are hard-capped inside
+        // runDexFeedRefresh and are NOT exposed as flags — cron-safe by construction.
+        const dfrConfig     = getArgValue('--dex-config');
+        const dfrSignals    = getArgValue('--signals-out');
+        const dfrRunsDir    = getArgValue('--runs-dir');
+        const dfrJournal    = getArgValue('--journal');
+        const dfrPlannerOut = getArgValue('--planner-out');
+        const dfrDayLog     = getArgValue('--day-log');
+        const dfrMinutes    = process.argv.includes('--minutes')          ? parseNumberArg('--minutes', 1, { min: 0 })          : undefined;
+        const dfrInterval   = process.argv.includes('--interval-seconds') ? parseNumberArg('--interval-seconds', 30, { min: 1 }) : undefined;
+        const dfrBankroll   = process.argv.includes('--fake-bankroll')    ? parseNumberArg('--fake-bankroll', 20, { min: 0 })    : undefined;
+        const dfrPosition   = process.argv.includes('--position-size')    ? parseNumberArg('--position-size', 1, { min: 0 })     : undefined;
+
+        if (dfrConfig && !fs.existsSync(dfrConfig)) {
+          throw new Error(`[token:dex-feed-refresh] Cannot read --dex-config: ${dfrConfig}`);
+        }
+
+        const dfrResult = await runDexFeedRefresh({
+          dexConfigPath:   dfrConfig,
+          signalsOut:      dfrSignals,
+          runsDir:         dfrRunsDir,
+          journalOut:      dfrJournal,
+          plannerOut:      dfrPlannerOut,
+          dayLogPath:      dfrDayLog,
+          minutes:         dfrMinutes,
+          intervalSeconds: dfrInterval,
+          fakeBankroll:    dfrBankroll,
+          positionSize:    dfrPosition,
+          log:             (m) => console.log(m),
+        });
+        console.log(renderDexFeedRefreshResult(dfrResult));
         break;
       }
 

@@ -89,6 +89,7 @@
     "token:dex-paper-entry-plan": "tsx src/cli.ts token:dex-paper-entry-plan",
     "token:dex-validation-loop": "tsx src/cli.ts token:dex-validation-loop",
     "token:dex-day-watch": "tsx src/cli.ts token:dex-day-watch",
+    "token:dex-feed-refresh": "tsx src/cli.ts token:dex-feed-refresh",
     "token:dex-day-report": "tsx src/cli.ts token:dex-day-report",
     "token:dex-paper-position-tracker": "tsx src/cli.ts token:dex-paper-position-tracker",
     "token:dex-legitimacy-report": "tsx src/cli.ts token:dex-legitimacy-report",
