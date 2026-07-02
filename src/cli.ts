@@ -162,6 +162,8 @@ import { runRipperSession, runRipperAutopilot, loadOrCreateSessionState, renderR
 import { runLiveShadowCycle, renderLiveShadowCycleSummary, renderLiveShadowUsage, DEFAULT_LIVE_SHADOW_CYCLES_DIR, DEFAULT_LIVE_SHADOW_STATE_PATH, DEFAULT_LIVE_SHADOW_EVENTS_PATH, DEFAULT_LIVE_SHADOW_DIAGNOSTICS_PATH } from './token-grab/liveShadow';
 import { runLiveShadowDiagnostic, renderLiveShadowDiagnostic } from './token-grab/liveShadowDiagnostic';
 import { runLiveShadowReport, renderLiveShadowReport, renderLiveShadowReportUsage } from './token-grab/liveShadowReport';
+import { runResearchShadowReport, renderResearchShadowReport, renderResearchShadowReportUsage } from './token-grab/researchShadowReport';
+import { DEFAULT_RESEARCH_SHADOW_EVENTS_PATH, DEFAULT_RESEARCH_SHADOW_STATE_PATH } from './token-grab/researchShadow';
 import { runLiveShadowValuationDiagnostic, renderLiveShadowValuationDiagnostic, renderLiveShadowValuationDiagnosticUsage } from './token-grab/liveShadowValuationDiagnostic';
 import { runRipperEarsReport, runRipperNearMiss, renderRipperEarsReport, renderRipperNearMissReport, renderRipperEarsUsage, renderRipperNearMissUsage, type EarsInputFormat } from './token-grab/ripperEarsReport';
 import { runLiveFixtureCapture, runLiveFixtureReport, runLiveFixtureAutopsy, renderCaptureResult, renderFixtureReport, renderAutopsyReport, renderLiveFixtureCaptureUsage, renderLiveFixtureReportUsage, renderLiveFixtureAutopsyUsage } from './token-grab/liveFixtureCapture';
@@ -2920,6 +2922,23 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(lsrResult, null, 2));
         } else {
           console.log(renderLiveShadowReport(lsrResult));
+        }
+        break;
+      }
+
+      case 'token:research-shadow-report': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderResearchShadowReportUsage());
+          break;
+        }
+        const rsrEvents = getArgValue('--events') ?? DEFAULT_RESEARCH_SHADOW_EVENTS_PATH;
+        const rsrState  = getArgValue('--state')  ?? DEFAULT_RESEARCH_SHADOW_STATE_PATH;
+
+        const rsrResult = runResearchShadowReport({ eventsPath: rsrEvents, statePath: rsrState });
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(rsrResult, null, 2));
+        } else {
+          console.log(renderResearchShadowReport(rsrResult));
         }
         break;
       }

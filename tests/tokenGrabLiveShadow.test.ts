@@ -313,7 +313,7 @@ describe('runLiveShadowCycle safety', () => {
     expect(r.noSigning).toBe(true);
   });
 
-  it('writes ONLY to the given state and events files (plus the cycles dir input)', () => {
+  it('writes ONLY to the given state/events files, the research stream beside them, and the cycles dir input', () => {
     const dir = tmpDir();
     const cyclesDir = cyclesDirIn(dir);
     writeCycle(cyclesDir, '2026-07-01-115500', [cycleRow('WriteToken1111111111111111111111111111111')]);
@@ -321,7 +321,21 @@ describe('runLiveShadowCycle safety', () => {
     const eventsPath = path.join(dir, 'events.jsonl');
     runLiveShadowCycle({ cyclesDir, statePath, eventsPath, nowMs: NOW_MS });
     const entries = fs.readdirSync(dir).sort();
-    expect(entries).toEqual(['cycles', 'events.jsonl', 'state.json'].sort());
+    // The bankroll-independent research recorder writes its own stream BESIDE the live-shadow files.
+    expect(entries).toEqual(
+      ['cycles', 'events.jsonl', 'state.json', 'research-shadow-events.jsonl', 'research-shadow-state.json'].sort(),
+    );
+  });
+
+  it('writes NO research files when recordResearch=false (still only the live-shadow files)', () => {
+    const dir = tmpDir();
+    const cyclesDir = cyclesDirIn(dir);
+    writeCycle(cyclesDir, '2026-07-01-115500', [cycleRow('WriteToken2222222222222222222222222222222')]);
+    runLiveShadowCycle({
+      cyclesDir, statePath: path.join(dir, 'state.json'), eventsPath: path.join(dir, 'events.jsonl'),
+      nowMs: NOW_MS, recordResearch: false,
+    });
+    expect(fs.readdirSync(dir).sort()).toEqual(['cycles', 'events.jsonl', 'state.json'].sort());
   });
 
   it('UNKNOWN risk labels stay UNKNOWN — never upgraded to CLEAN', () => {
@@ -618,6 +632,91 @@ describe('renderLiveShadowCycleSummary', () => {
     writeCycle(cyclesDir, '2026-07-01-110000', [cycleRow('StaleRender111111111111111111111111111111', { capturedAt: oldIso })]);
     const r = runLiveShadowCycle({ cyclesDir, statePath: path.join(dir, 'state.json'), eventsPath: path.join(dir, 'events.jsonl'), nowMs: NOW_MS });
     expect(renderLiveShadowCycleSummary(r)).toContain('CYCLE SKIPPED — STALE_SOURCE');
+  });
+});
+
+// ── Research-shadow integration (bankroll-independent recorder) ─────────────────────────────
+
+function readResearchEvents(base: string): any[] {
+  const p = path.join(base, 'research-shadow-events.jsonl');
+  if (!fs.existsSync(p)) return [];
+  return fs.readFileSync(p, 'utf-8').split('\n').filter(l => l.trim()).map(l => JSON.parse(l));
+}
+
+describe('research-shadow recorder runs alongside the bankroll simulation', () => {
+  // Six candidates that all match the same internal shadow lane in ONE fresh cycle.
+  function sixLaneMatches(dir: string): { cyclesDir: string; eventsPath: string; statePath: string } {
+    const cyclesDir = cyclesDirIn(dir);
+    const rows = Array.from({ length: 6 }, (_, i) =>
+      cycleRow(`ResearchTok${i}${'x'.repeat(43 - `ResearchTok${i}`.length)}`));
+    writeCycle(cyclesDir, '2026-07-01-115500', rows);
+    return { cyclesDir, eventsPath: path.join(dir, 'events.jsonl'), statePath: path.join(dir, 'state.json') };
+  }
+
+  it('bankroll caps still block normal would-buy (existing behavior unchanged)', () => {
+    const dir = tmpDir();
+    const { cyclesDir, eventsPath, statePath } = sixLaneMatches(dir);
+    const r = runLiveShadowCycle({ cyclesDir, statePath, eventsPath, nowMs: NOW_MS });
+
+    const b20 = r.bankrollSummaries.find(b => b.bankroll === 20)!;
+    // With 6 lane matches the $20 tier cannot open all six — its caps block the rest.
+    expect(b20.wouldBuys).toBeLessThan(6);
+    expect(b20.wouldBuys).toBeLessThanOrEqual(DEFAULT_RISK_LIMITS[20].maxDailyBuys);
+    expect(b20.skippedByRiskLimit).toBeGreaterThan(0);
+  });
+
+  it('research shadow records EVERY lane match even when the bankroll cap is reached', () => {
+    const dir = tmpDir();
+    const { cyclesDir, eventsPath, statePath } = sixLaneMatches(dir);
+    const r = runLiveShadowCycle({ cyclesDir, statePath, eventsPath, nowMs: NOW_MS });
+
+    const b20 = r.bankrollSummaries.find(b => b.bankroll === 20)!;
+    expect(r.research).not.toBeNull();
+    // All six lane matches are recorded in the research stream, independent of bankroll caps.
+    expect(r.research!.researchBuys).toBe(6);
+
+    const rEvents = readResearchEvents(dir).filter(e => e.type === 'RESEARCH_WOULD_BUY');
+    expect(rEvents).toHaveLength(6);
+    // The candidates the $20 tier could NOT open are annotated BANKROLL_CAP_REACHED.
+    const blockedCount = rEvents.filter(e => e.bankrollBlockedReason === 'BANKROLL_CAP_REACHED').length;
+    expect(blockedCount).toBe(6 - b20.wouldBuys);
+    expect(blockedCount).toBeGreaterThan(0);
+    // Every research event is research-only and carries no execution intent.
+    for (const e of rEvents) {
+      expect(e.researchOnly).toBe(true);
+      expect(e.realTrading).toBe(false);
+      expect(e.noWallet).toBe(true);
+      expect(e.notBuySignal).toBe(true);
+    }
+  });
+
+  it('research writes to research-shadow-events.jsonl beside the live-shadow events file', () => {
+    const dir = tmpDir();
+    const { cyclesDir, eventsPath, statePath } = sixLaneMatches(dir);
+    runLiveShadowCycle({ cyclesDir, statePath, eventsPath, nowMs: NOW_MS });
+    expect(fs.existsSync(path.join(dir, 'research-shadow-events.jsonl'))).toBe(true);
+    expect(fs.existsSync(path.join(dir, 'research-shadow-state.json'))).toBe(true);
+    // The bankroll (live-shadow) events file is untouched by the research stream.
+    expect(fs.existsSync(eventsPath)).toBe(true);
+  });
+
+  it('stale source records NO research buys (research null, consistent with bankroll skip)', () => {
+    const dir = tmpDir();
+    const cyclesDir = cyclesDirIn(dir);
+    const oldIso = new Date(NOW_MS - 60 * 60 * 1000).toISOString();
+    writeCycle(cyclesDir, '2026-07-01-110000', [cycleRow('StaleResearch11111111111111111111111111111', { capturedAt: oldIso })]);
+    const r = runLiveShadowCycle({ cyclesDir, statePath: path.join(dir, 'state.json'), eventsPath: path.join(dir, 'events.jsonl'), nowMs: NOW_MS });
+    expect(r.skipped).toBe(true);
+    expect(r.research).toBeNull();
+    expect(readResearchEvents(dir)).toHaveLength(0);
+  });
+
+  it('can be disabled with recordResearch=false (no research files written)', () => {
+    const dir = tmpDir();
+    const { cyclesDir, eventsPath, statePath } = sixLaneMatches(dir);
+    const r = runLiveShadowCycle({ cyclesDir, statePath, eventsPath, nowMs: NOW_MS, recordResearch: false });
+    expect(r.research).toBeNull();
+    expect(fs.existsSync(path.join(dir, 'research-shadow-events.jsonl'))).toBe(false);
   });
 });
 

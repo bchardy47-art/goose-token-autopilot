@@ -115,7 +115,10 @@ describe('runLiveShadowCycle per-candidate reject diagnostics', () => {
       cyclesDir, statePath: path.join(dir, 'state.json'), eventsPath: path.join(dir, 'events.jsonl'),
       diagnosticsPath: path.join(dir, 'diagnostics.jsonl'), nowMs: NOW_MS,
     });
-    expect(fs.readdirSync(dir).sort()).toEqual(['cycles', 'diagnostics.jsonl', 'events.jsonl', 'state.json'].sort());
+    // The bankroll-independent research recorder writes its own stream beside the live-shadow files.
+    expect(fs.readdirSync(dir).sort()).toEqual(
+      ['cycles', 'diagnostics.jsonl', 'events.jsonl', 'state.json', 'research-shadow-events.jsonl', 'research-shadow-state.json'].sort(),
+    );
     const rec = JSON.parse(fs.readFileSync(path.join(dir, 'diagnostics.jsonl'), 'utf-8').trim()) as LiveShadowDiagnosticRecord;
     expect(rec.realTrading).toBe(false);
     expect(rec.liveShadowOnly).toBe(true);
@@ -128,7 +131,10 @@ describe('runLiveShadowCycle per-candidate reject diagnostics', () => {
     const dir = tmpDir(); const cyclesDir = cyclesDirIn(dir);
     writeCycle(cyclesDir, '2026-07-01-115500', [cycleRow('GoodToken1111111111111111111111111111111111')]);
     runLiveShadowCycle({ cyclesDir, statePath: path.join(dir, 'state.json'), eventsPath: path.join(dir, 'events.jsonl'), nowMs: NOW_MS });
-    expect(fs.readdirSync(dir).sort()).toEqual(['cycles', 'events.jsonl', 'state.json'].sort());
+    // No diagnostics file (diagnosticsPath omitted); the research stream still writes beside the live-shadow files.
+    expect(fs.readdirSync(dir).sort()).toEqual(
+      ['cycles', 'events.jsonl', 'state.json', 'research-shadow-events.jsonl', 'research-shadow-state.json'].sort(),
+    );
   });
 });
 

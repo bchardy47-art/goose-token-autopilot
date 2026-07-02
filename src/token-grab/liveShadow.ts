@@ -43,6 +43,12 @@ import { m5BandLabel } from './ripperSubgroupWatch';
 import { ripperScoreBand } from './ripperNoBmQualityReport';
 import { findLatestRawCycleFile } from './ripperWatchRawCycle';
 import { NO_BM_RESEARCH_MIN_SCORE } from './ripperWatchCohortFamily';
+import {
+  recordResearchShadow,
+  RESEARCH_SHADOW_EVENTS_FILENAME,
+  RESEARCH_SHADOW_STATE_FILENAME,
+  type RecordResearchShadowResult,
+} from './researchShadow';
 
 // ── Safety constants ──────────────────────────────────────────────────────────────────────
 
@@ -751,6 +757,12 @@ export interface LiveShadowOptions {
   diagnosticsPath?: string;   // when set, append one per-cycle diagnostic record (append-only)
   maxSourceAgeMinutes?: number;
   nowMs?: number;             // injectable for tests
+  // ── Research-shadow recorder (bankroll-independent learning stream) ──
+  // Records a RESEARCH_WOULD_BUY for every lane-matching candidate even when bankroll caps block
+  // the normal would-buy. Paths default to sitting BESIDE the live-shadow state/events files.
+  recordResearch?: boolean;      // default true; set false to disable (e.g. isolated unit tests)
+  researchEventsPath?: string;   // default: <dir of eventsPath>/research-shadow-events.jsonl
+  researchStatePath?: string;    // default: <dir of statePath>/research-shadow-state.json
 }
 
 // ── Reject diagnostic (why each candidate is ignored / watched / blocked / ready) ───────────
@@ -842,6 +854,8 @@ export interface LiveShadowCycleResult extends LiveShadowSafetyFlags {
   readyForRealTrading: false;
   diagnostics: LiveShadowCandidateDiagnostic[];
   diagnosticRecord: LiveShadowDiagnosticRecord;
+  /** Bankroll-independent research recorder result (null when disabled or the cycle was skipped). */
+  research: RecordResearchShadowResult | null;
 }
 
 // ── Core cycle runner ─────────────────────────────────────────────────────────────────────
@@ -892,7 +906,7 @@ export function runLiveShadowCycle(options: LiveShadowOptions): LiveShadowCycleR
       wouldBuyCount: 0, productionGateApprovedCount: 0,
       laneMatchCounts: { NO_BM_INTERNAL_BROAD: 0, NO_BM_BEST_VLR: 0, NO_BM_PULLBACK: 0 },
       bankrollSummaries, eventsWritten, state, tradingExecuted: 0, readyForRealTrading: false,
-      diagnostics, diagnosticRecord, ...safetyFlags(),
+      diagnostics, diagnosticRecord, research: null, ...safetyFlags(),
     };
   }
 
@@ -1070,6 +1084,22 @@ export function runLiveShadowCycle(options: LiveShadowOptions): LiveShadowCycleR
   saveLiveShadowState(state, options.statePath);
   appendLiveShadowEvents(eventsWritten, options.eventsPath);
 
+  // ── Research-shadow recorder (bankroll-independent; never alters the bankroll sim above) ──
+  // Records a RESEARCH_WOULD_BUY for EVERY lane-matching candidate — including those the $20 tier
+  // could not open once its daily buy cap was reached (refRiskSkipped) — into a SEPARATE stream.
+  let research: RecordResearchShadowResult | null = null;
+  if (options.recordResearch !== false) {
+    const researchEventsPath = options.researchEventsPath
+      ?? path.join(path.dirname(options.eventsPath), RESEARCH_SHADOW_EVENTS_FILENAME);
+    const researchStatePath = options.researchStatePath
+      ?? path.join(path.dirname(options.statePath), RESEARCH_SHADOW_STATE_FILENAME);
+    research = recordResearchShadow({
+      candidates, sourceCycle, nowMs,
+      statePath: researchStatePath, eventsPath: researchEventsPath,
+      bankrollBlockedContracts: new Set(refRiskSkipped.keys()),
+    });
+  }
+
   // ── Per-candidate diagnostics (reference $20 tier drives READY/BLOCKED) ──
   const diagnostics: LiveShadowCandidateDiagnostic[] = candidates.map(c =>
     buildCandidateDiagnostic(c, refRiskSkipped.get(c.contract), refDuplicate.has(c.contract)));
@@ -1098,7 +1128,7 @@ export function runLiveShadowCycle(options: LiveShadowOptions): LiveShadowCycleR
     candidatesScanned: candidates.length, ignoredCount, watchCount, readyCount, blockedCount,
     wouldBuyCount, productionGateApprovedCount, laneMatchCounts,
     bankrollSummaries, eventsWritten, state, tradingExecuted: 0, readyForRealTrading: false,
-    diagnostics, diagnosticRecord, ...safetyFlags(),
+    diagnostics, diagnosticRecord, research, ...safetyFlags(),
   };
 }
 
@@ -1293,6 +1323,18 @@ export function renderLiveShadowCycleSummary(r: LiveShadowCycleResult): string {
     L.push(`    Open positions        : ${b.openPositions}`);
     L.push(`    Skipped (risk limit)  : ${b.skippedByRiskLimit}`);
     L.push(`    Kill-switch           : ${b.killSwitchActive ? `ACTIVE — ${b.killSwitchReason ?? ''}` : 'inactive'}`);
+    L.push('');
+  }
+
+  if (r.research) {
+    L.push(THIN);
+    L.push('  RESEARCH SHADOW (bankroll-independent — separate stream, NOT a buy signal)');
+    L.push(THIN);
+    L.push(`    Research would-buys this cycle  : ${r.research.researchBuys}`);
+    L.push(`    Research would-sells this cycle : ${r.research.researchSells}`);
+    L.push(`    Open research positions         : ${r.research.openPositions}`);
+    L.push('    Records lane matches even when bankroll daily-buy caps are reached.');
+    L.push('    Report: npm run token:research-shadow-report');
     L.push('');
   }
 
