@@ -193,6 +193,43 @@ describe('shows killed lane suppression', () => {
     const r = build(ev, memory);
     expect(r.killedLaneSuppression.some(k => k.lane === 'NO_BM_BEST_VLR')).toBe(true);
   });
+
+  it('sticky KILL: measures buys/skips AFTER killedAt and trulyStoppedAfterKill', () => {
+    seq = 0;
+    const killedAt = '2026-07-01T15:00:00.000Z';
+    const memory = {
+      version: 1.2, generatedAt: GEN, eventsPath: 'x', totalProfiles: 0, profiles: {}, totalGlobalGroups: 1,
+      globalGroups: {
+        'lane:NO_BM_BEST_VLR': {
+          key: 'lane:NO_BM_BEST_VLR', dimension: 'lane', value: 'NO_BM_BEST_VLR', buys: 40, valuedClosed: 39,
+          unvaluedClosed: 1, wins: 13, losses: 26, flats: 0, medianPnlPct: -4, cappedAveragePnlPct: -8, redLossRate: 0.67,
+          bestTrade: null, worstTrade: null, lastUpdated: GEN, confidenceTier: 'STRONG', policyStatus: 'KILL',
+          killedAt, recoveryState: 'RECOVERING', postKillValuedClosed: 8, recoveryProgress: 0.4,
+        },
+      },
+      realTrading: false, readyForRealTrading: false, noWallet: true, noSwap: true, noSigning: true,
+      paperOnly: true, researchOnly: true, unknownStaysUnknown: true, tradingExecuted: 0,
+    } as unknown as BrainPolicyMemory;
+    // A buy BEFORE the kill, and two skips AFTER the kill → truly stopped opening post-kill.
+    const b = buy({ ts: '2026-07-01T14:00:00.000Z', lane: 'NO_BM_BEST_VLR', gate: false, brainAction: 'WATCH' });
+    const ev = [
+      b.e,
+      skip({ ts: '2026-07-01T16:00:00.000Z', lane: 'NO_BM_BEST_VLR', brainStatus: 'KILL' }),
+      skip({ ts: '2026-07-01T16:30:00.000Z', lane: 'NO_BM_BEST_VLR', brainStatus: 'KILL' }),
+    ];
+    const r = build(ev, memory);
+    const k = r.killedLaneSuppression.find(x => x.lane === 'NO_BM_BEST_VLR')!;
+    expect(k.killedAt).toBe(killedAt);
+    expect(k.recoveryState).toBe('RECOVERING');
+    expect(k.buysAfterKill).toBe(0);           // the only buy was before killedAt
+    expect(k.skipsAfterKill).toBe(2);
+    expect(k.trulyStoppedAfterKill).toBe(true);
+
+    // The report renders the sticky line.
+    const text = renderPostBrainReport(r);
+    expect(text).toContain('sticky killedAt');
+    expect(text).toContain('trulyStoppedAfterKill=true');
+  });
 });
 
 // ── Safety ──────────────────────────────────────────────────────────────────────────────────

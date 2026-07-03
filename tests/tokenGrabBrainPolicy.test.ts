@@ -10,6 +10,9 @@ import {
   globalPolicyStatus,
   globalGroupsForParts,
   resolveBrainDecision,
+  applyKillHysteresis,
+  isRecovered,
+  KILL_HYSTERESIS,
   confidenceTier,
   resolvePolicyStatus,
   renderBrainRefreshReport,
@@ -604,5 +607,175 @@ describe('brain v1.1 report + safety', () => {
     expect(text).toContain('READY_FOR_REAL_TRADING=false');
     expect(text).toContain('UNKNOWN stays UNKNOWN');
     expect(text).toContain('DO_NOT_ENABLE_REAL_TRADING');
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// BRAIN v1.2 — KILL HYSTERESIS
+// ════════════════════════════════════════════════════════════════════════════════════════════
+
+const T1 = '2026-07-01T10:00:00.000Z';   // pre-kill trades
+const R1 = '2026-07-01T11:00:00.000Z';   // refresh 1 (kill anchor)
+const T2 = '2026-07-01T12:00:00.000Z';   // post-kill trades
+const R2 = '2026-07-01T13:00:00.000Z';   // refresh 2
+const R3 = '2026-07-01T14:00:00.000Z';   // refresh 3
+
+/** Emit buy+sell pairs pinned on one dimension, all stamped with an explicit ts. */
+function dimEventsAt(fixed: Partial<PolicyProfileParts>, tag: string, valuedPnls: number[], ts: string): any[] {
+  const out: any[] = [];
+  let i = 0;
+  for (const pnl of valuedPnls) {
+    const parts: PolicyProfileParts = {
+      lane: fixed.lane ?? 'NO_BM_INTERNAL_BROAD',
+      productionGateApproved: fixed.productionGateApproved ?? false,
+      launchAgeBucket: fixed.launchAgeBucket ?? 'PRIME_WINDOW',
+      m5Band: fixed.m5Band ?? M5S[i % M5S.length],
+      liquidityBucket: fixed.liquidityBucket ?? LIQS[i % LIQS.length],
+      vlrBucket: fixed.vlrBucket ?? VLRS[i % VLRS.length],
+      ripperScoreBand: fixed.ripperScoreBand ?? SCORE_BANDS[i % SCORE_BANDS.length],
+    };
+    const contract = `${tag}${i}${'z'.repeat(43)}`.slice(0, 43);
+    const cyc = `cyc-${tag}-${i}`;
+    const b: any = buyEvent(parts, contract, cyc); b.ts = ts;
+    const s: any = sellEvent(parts, contract, cyc, true, pnl); s.ts = ts;
+    out.push(b, s);
+    i++;
+  }
+  return out;
+}
+function writeLines(p: string, events: any[]) { fs.writeFileSync(p, events.map(e => JSON.stringify(e)).join('\n') + '\n', 'utf-8'); }
+function appendLines(p: string, events: any[]) { fs.appendFileSync(p, events.map(e => JSON.stringify(e)).join('\n') + '\n', 'utf-8'); }
+
+describe('applyKillHysteresis (pure)', () => {
+  it('isRecovered requires >=20 valued, median>0, cappedAvg>0, redLoss<=45%', () => {
+    expect(isRecovered({ valuedClosed: 20, medianPnlPct: 5, cappedAveragePnlPct: 10, redLossRate: 0.3 })).toBe(true);
+    expect(isRecovered({ valuedClosed: 19, medianPnlPct: 5, cappedAveragePnlPct: 10, redLossRate: 0.3 })).toBe(false);  // too few
+    expect(isRecovered({ valuedClosed: 20, medianPnlPct: -1, cappedAveragePnlPct: 10, redLossRate: 0.3 })).toBe(false); // median<0
+    expect(isRecovered({ valuedClosed: 20, medianPnlPct: 5, cappedAveragePnlPct: 10, redLossRate: 0.5 })).toBe(false);  // redLoss>45%
+    expect(KILL_HYSTERESIS.recoveryMinValued).toBe(20);
+  });
+
+  it('newly killed anchors killedAt = generatedAt and priorStatus', () => {
+    const r = applyKillHysteresis({ freshStatus: 'KILL', freshIsKill: true, freshKillReason: 'r', prevStatus: 'WATCH', prevKilledAt: null, prevKillReason: null, prevPriorStatus: null, postKill: { valuedClosed: 0, medianPnlPct: null, cappedAveragePnlPct: null, redLossRate: 0 }, generatedAt: R1 });
+    expect(r.policyStatus).toBe('KILL');
+    expect(r.meta.killedAt).toBe(R1);
+    expect(r.meta.priorStatus).toBe('WATCH');
+    expect(r.meta.recoveryState).toBe('KILLED');
+  });
+
+  it('PROMOTE fresh does NOT override a sticky KILL that has not recovered', () => {
+    const r = applyKillHysteresis({ freshStatus: 'PROMOTE', freshIsKill: false, freshKillReason: null, prevStatus: 'KILL', prevKilledAt: R1, prevKillReason: 'r', prevPriorStatus: 'WATCH', postKill: { valuedClosed: 15, medianPnlPct: 30, cappedAveragePnlPct: 30, redLossRate: 0 }, generatedAt: R2 });
+    expect(r.policyStatus).toBe('KILL');   // stays killed despite PROMOTE-looking fresh stats
+    expect(r.recovered).toBe(false);
+    expect(r.meta.recoveryState).toBe('RECOVERING');
+    expect(r.meta.killedAt).toBe(R1);      // anchor preserved
+  });
+
+  it('recovers only when post-kill evidence meets ALL criteria', () => {
+    const r = applyKillHysteresis({ freshStatus: 'WATCH', freshIsKill: false, freshKillReason: null, prevStatus: 'KILL', prevKilledAt: R1, prevKillReason: 'r', prevPriorStatus: 'WATCH', postKill: { valuedClosed: 22, medianPnlPct: 5, cappedAveragePnlPct: 12, redLossRate: 0.2 }, generatedAt: R2 });
+    expect(r.recovered).toBe(true);
+    expect(r.policyStatus).not.toBe('KILL');
+    expect(r.meta.killedAt).toBeNull();
+  });
+});
+
+describe('KILL hysteresis via refresh (stateful)', () => {
+  it('killed group remains KILL after only marginal (insufficient) post-kill improvement', () => {
+    const dir = tmpDir();
+    const eventsPath = path.join(dir, 'research-shadow-events.jsonl');
+    const memoryPath = path.join(dir, 'm.json');
+    writeLines(eventsPath, dimEventsAt({ productionGateApproved: false }, 'k', mixLose(17, 5), T1));   // 22 valued, redLoss 77%
+    const r1 = refreshBrainPolicy({ eventsPath, memoryPath, generatedAt: R1 });
+    expect(r1.memory.globalGroups['gate:false'].policyStatus).toBe('KILL');
+    expect(r1.memory.globalGroups['gate:false'].killedAt).toBe(R1);
+
+    // Only 5 post-kill winners (< 20 recovery threshold) — marginal all-time improvement.
+    appendLines(eventsPath, dimEventsAt({ productionGateApproved: false }, 'p', winners(5), T2));
+    const r2 = refreshBrainPolicy({ eventsPath, memoryPath, generatedAt: R2 });
+    const g = r2.memory.globalGroups['gate:false'];
+    expect(g.policyStatus).toBe('KILL');            // STILL killed
+    expect(g.killedAt).toBe(R1);                    // same anchor persists
+    expect(g.recoveryState).toBe('RECOVERING');
+    expect(g.postKillValuedClosed).toBe(5);
+    expect(g.recoveryProgress).toBeCloseTo(5 / 20, 5);
+  });
+
+  it('killed group only recovers after ENOUGH post-kill positive evidence (19 → still KILL, 20 → recover)', () => {
+    const dir = tmpDir();
+    const eventsPath = path.join(dir, 'research-shadow-events.jsonl');
+    const memoryPath = path.join(dir, 'm.json');
+    writeLines(eventsPath, dimEventsAt({ productionGateApproved: false }, 'k', mixLose(17, 5), T1));
+    refreshBrainPolicy({ eventsPath, memoryPath, generatedAt: R1 });
+
+    // 19 post-kill winners — one short of the recovery minimum.
+    appendLines(eventsPath, dimEventsAt({ productionGateApproved: false }, 'p', winners(19), T2));
+    const r2 = refreshBrainPolicy({ eventsPath, memoryPath, generatedAt: R2 });
+    expect(r2.memory.globalGroups['gate:false'].policyStatus).toBe('KILL');
+
+    // One more post-kill winner → 20 total post-kill → recovers.
+    appendLines(eventsPath, dimEventsAt({ productionGateApproved: false }, 'q', winners(1), T2));
+    const r3 = refreshBrainPolicy({ eventsPath, memoryPath, generatedAt: R3 });
+    const g = r3.memory.globalGroups['gate:false'];
+    expect(g.policyStatus).not.toBe('KILL');
+    expect(g.killedAt).toBeNull();
+    expect(r3.recovered).toContain('gate:false');
+  });
+
+  it('exact-profile KILL is also sticky across refreshes', () => {
+    const dir = tmpDir();
+    const eventsPath = path.join(dir, 'research-shadow-events.jsonl');
+    const memoryPath = path.join(dir, 'm.json');
+    // Pin ALL 7 dims (BASE_PROFILE) so one exact profile accumulates the whole sample:
+    // 10 valued (9 losers + 1 winner) → redLoss 90% → exact KILL (>=75%, valued>=10).
+    const fixed: PolicyProfileParts = { ...BASE_PROFILE };
+    writeLines(eventsPath, dimEventsAt(fixed, 'ex', [...losers(9), 10], T1));
+    const r1 = refreshBrainPolicy({ eventsPath, memoryPath, generatedAt: R1 });
+    const key = policyProfileKey(fixed);
+    expect(r1.memory.profiles[key].policyStatus).toBe('KILL');
+    expect(r1.memory.profiles[key].killedAt).toBe(R1);
+    // Marginal post-kill improvement (few winners) — exact profile stays KILL (sticky).
+    appendLines(eventsPath, dimEventsAt(fixed, 'exp', winners(3), T2));
+    const r2 = refreshBrainPolicy({ eventsPath, memoryPath, generatedAt: R2 });
+    expect(r2.memory.profiles[key].policyStatus).toBe('KILL');
+    expect(r2.memory.profiles[key].killedAt).toBe(R1);
+  });
+});
+
+describe('research-shadow skips a STICKY KILL', () => {
+  it('a sticky-killed (RECOVERING) global group still suppresses new research opens', () => {
+    const dir = tmpDir();
+    const eventsPath = path.join(dir, 'events.jsonl');
+    const { candidates, sourceCycle } = resolveCycle([cycleRow('StickyKill1111111111111111111111111111111A')], '2026-07-01-115500');
+    const parts = partsOf(candidates[0]);
+    const memory = memoryWithGlobal(parts, `lane:${parts.lane}`, 'KILL');
+    // Make it explicitly a sticky, mid-recovery kill.
+    memory.globalGroups[`lane:${parts.lane}`].killedAt = R1;
+    memory.globalGroups[`lane:${parts.lane}`].recoveryState = 'RECOVERING';
+    memory.globalGroups[`lane:${parts.lane}`].postKillValuedClosed = 8;
+
+    const res = recordResearchShadow({ candidates, sourceCycle, nowMs: NOW_MS, statePath: path.join(dir, 's.json'), eventsPath, policyMemory: memory });
+    expect(res.researchBuys).toBe(0);
+    expect(res.skippedByBrain).toBe(1);
+    const skip = readEvents(eventsPath).find(e => e.type === 'RESEARCH_SKIPPED_BY_BRAIN');
+    expect(skip.brainStatus).toBe('KILL');
+  });
+});
+
+describe('brain v1.2 report + safety', () => {
+  it('sticky-kill section + kill age render, safety strings preserved', () => {
+    const dir = tmpDir();
+    const eventsPath = path.join(dir, 'research-shadow-events.jsonl');
+    const memoryPath = path.join(dir, 'm.json');
+    writeLines(eventsPath, dimEventsAt({ productionGateApproved: false }, 'k', mixLose(17, 5), T1));
+    refreshBrainPolicy({ eventsPath, memoryPath, generatedAt: R1 });
+    appendLines(eventsPath, dimEventsAt({ productionGateApproved: false }, 'p', winners(3), T2));
+    const r2 = refreshBrainPolicy({ eventsPath, memoryPath, generatedAt: R2 });
+    const text = renderBrainRefreshReport(r2);
+    expect(text).toContain('STICKY KILL / RECOVERY');
+    expect(text).toContain('killed');            // kill age line
+    expect(text).toContain('recovery');
+    expect(text).toContain('READY_FOR_REAL_TRADING=false');
+    expect(text).toContain('DO_NOT_ENABLE_REAL_TRADING');
+    expect(text).toContain('UNKNOWN stays UNKNOWN');
   });
 });

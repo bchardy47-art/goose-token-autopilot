@@ -1,7 +1,13 @@
-// TOKEN GRAB BRAIN v1.1 — adaptive paper-only policy memory (exact + GLOBAL policy groups)
+// TOKEN GRAB BRAIN v1.2 — adaptive paper-only policy memory (exact + GLOBAL groups + KILL hysteresis)
 //
 // DO_NOT_ENABLE_REAL_TRADING  RESEARCH_ONLY=true  REAL_TRADING=false
 // READY_FOR_REAL_TRADING=false  NO_WALLET=true  NO_SWAP=true  NO_SIGNING=true
+//
+// v1.2 adds KILL HYSTERESIS: once a profile or global group becomes KILL, it STAYS KILL (sticky).
+// It records killedAt / killReason / priorStatus and only recovers after proving itself on trades
+// that closed AFTER the kill (>= 20 post-kill valued closed, median > 0, cappedAvg > 0, redLoss
+// <= 45%). Improving all-time rolling stats do NOT un-kill it; PROMOTE never overrides a sticky KILL.
+// While killed (state KILLED or RECOVERING) no normal research opens are allowed.
 //
 // The brain reads the append-only RESEARCH_WOULD_BUY / RESEARCH_WOULD_SELL stream and REMEMBERS,
 // per candidate profile, whether that profile has been winning or losing on real valuation-based
@@ -72,6 +78,28 @@ export const GLOBAL_THRESHOLDS = {
 export const GLOBAL_DIMENSIONS = ['gate', 'age', 'lane', 'vlr', 'liq', 'm5'] as const;
 export type GlobalDimension = (typeof GLOBAL_DIMENSIONS)[number];
 
+/** KILL-hysteresis recovery thresholds (v1.2). Measured over trades that closed AFTER killedAt. */
+export const KILL_HYSTERESIS = {
+  recoveryMinValued: 20,
+  recoveryMaxRedLossRate: 0.45,
+} as const;
+
+/** Recovery state carried on a sticky-killed profile/group. Null when not (or no longer) killed. */
+export type RecoveryState = 'KILLED' | 'RECOVERING' | null;
+
+/** Kill-hysteresis metadata persisted on a profile / global group. */
+export interface KillHysteresisMeta {
+  killedAt?: string | null;                 // when this first became KILL (sticky anchor)
+  killReason?: string | null;
+  priorStatus?: string | null;              // status just before it was killed
+  recoveryState?: RecoveryState;            // KILLED (no post-kill data) | RECOVERING | null
+  postKillValuedClosed?: number;            // valued closed trades observed AFTER killedAt
+  postKillMedianPnlPct?: number | null;
+  postKillCappedAveragePnlPct?: number | null;
+  postKillRedLossRate?: number | null;
+  recoveryProgress?: number;                // postKillValuedClosed / recoveryMinValued, capped at 1
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────────────────
 
 export interface PolicyProfileParts {
@@ -91,7 +119,7 @@ export interface BrainTradeRef {
   pnlPct: number;
 }
 
-export interface PolicyProfile extends PolicyProfileParts {
+export interface PolicyProfile extends PolicyProfileParts, KillHysteresisMeta {
   key: string;
   sampleSize: number;            // research buys observed for this profile
   valuedClosed: number;          // closed trades with real valuation-based P/L
@@ -106,11 +134,11 @@ export interface PolicyProfile extends PolicyProfileParts {
   worstTrade: BrainTradeRef | null;
   lastUpdated: string;
   confidenceTier: ConfidenceTier;
-  policyStatus: PolicyStatus;
+  policyStatus: PolicyStatus;    // sticky: KILL persists until recovery (v1.2)
 }
 
 /** A v1.1 GLOBAL policy group — one single-dimension slice (e.g. gate=false, launchAge=TOO_EARLY). */
-export interface GlobalPolicyGroup {
+export interface GlobalPolicyGroup extends KillHysteresisMeta {
   key: string;                   // e.g. 'gate:false'
   dimension: GlobalDimension;    // 'gate' | 'age' | 'lane' | 'vlr' | 'liq' | 'm5'
   value: string;                 // e.g. 'false', 'TOO_EARLY', 'NO_BM_BEST_VLR'
@@ -127,7 +155,7 @@ export interface GlobalPolicyGroup {
   worstTrade: BrainTradeRef | null;
   lastUpdated: string;
   confidenceTier: ConfidenceTier;
-  policyStatus: GlobalPolicyStatus;
+  policyStatus: GlobalPolicyStatus;   // sticky: KILL persists until recovery (v1.2)
 }
 
 export interface BrainPolicyMemory {
@@ -267,6 +295,98 @@ export function globalGroupsForParts(parts: PolicyProfileParts): Array<{ key: st
   ];
 }
 
+// ── KILL hysteresis (v1.2) ─────────────────────────────────────────────────────────────────────
+
+export interface PostKillStats {
+  valuedClosed: number;
+  medianPnlPct: number | null;
+  cappedAveragePnlPct: number | null;
+  redLossRate: number;
+}
+
+/** Recovery requires strong POST-kill evidence (>= 20 valued, median>0, cappedAvg>0, redLoss<=45%). */
+export function isRecovered(pk: PostKillStats): boolean {
+  return pk.valuedClosed >= KILL_HYSTERESIS.recoveryMinValued
+    && (pk.medianPnlPct ?? 0) > 0
+    && (pk.cappedAveragePnlPct ?? 0) > 0
+    && pk.redLossRate <= KILL_HYSTERESIS.recoveryMaxRedLossRate;
+}
+
+export interface ApplyKillHysteresisArgs {
+  freshStatus: string;                 // status computed from all-time stats this refresh
+  freshIsKill: boolean;                // whether the all-time computation says KILL
+  freshKillReason: string | null;
+  prevStatus: string | null | undefined;
+  prevKilledAt: string | null | undefined;
+  prevKillReason: string | null | undefined;
+  prevPriorStatus: string | null | undefined;
+  postKill: PostKillStats;             // stats over trades that closed AFTER prevKilledAt
+  generatedAt: string;
+}
+
+export interface ApplyKillHysteresisResult {
+  policyStatus: string;                // possibly forced to 'KILL' (sticky)
+  meta: KillHysteresisMeta;
+  recovered: boolean;
+}
+
+/**
+ * Apply KILL hysteresis. A previously-killed profile/group stays KILL until it RECOVERS on post-kill
+ * evidence — improving all-time stats (even PROMOTE-looking) do NOT un-kill it. A newly-killed one
+ * records killedAt/killReason/priorStatus. Never-killed passes through unchanged.
+ */
+export function applyKillHysteresis(a: ApplyKillHysteresisArgs): ApplyKillHysteresisResult {
+  const wasSticky = a.prevStatus === 'KILL' && a.prevKilledAt != null;
+
+  if (wasSticky) {
+    const progress = Math.min(1, a.postKill.valuedClosed / KILL_HYSTERESIS.recoveryMinValued);
+    if (isRecovered(a.postKill)) {
+      // Recovered — release the kill. Guard against an instant re-kill from stale all-time stats.
+      const released = a.freshStatus === 'KILL' ? 'WATCH' : a.freshStatus;
+      return {
+        policyStatus: released, recovered: true,
+        meta: {
+          killedAt: null, killReason: null, priorStatus: null, recoveryState: null,
+          postKillValuedClosed: a.postKill.valuedClosed, postKillMedianPnlPct: a.postKill.medianPnlPct,
+          postKillCappedAveragePnlPct: a.postKill.cappedAveragePnlPct, postKillRedLossRate: a.postKill.redLossRate,
+          recoveryProgress: 1,
+        },
+      };
+    }
+    // Stay killed (sticky) regardless of improved all-time stats. No normal opens while killed.
+    return {
+      policyStatus: 'KILL', recovered: false,
+      meta: {
+        killedAt: a.prevKilledAt!, killReason: a.prevKillReason ?? null, priorStatus: a.prevPriorStatus ?? null,
+        recoveryState: a.postKill.valuedClosed > 0 ? 'RECOVERING' : 'KILLED',
+        postKillValuedClosed: a.postKill.valuedClosed, postKillMedianPnlPct: a.postKill.medianPnlPct,
+        postKillCappedAveragePnlPct: a.postKill.cappedAveragePnlPct, postKillRedLossRate: a.postKill.redLossRate,
+        recoveryProgress: progress,
+      },
+    };
+  }
+
+  if (a.freshIsKill) {
+    // Newly killed — anchor the kill NOW so the recovery clock starts from post-kill trades only.
+    return {
+      policyStatus: 'KILL', recovered: false,
+      meta: {
+        killedAt: a.generatedAt, killReason: a.freshKillReason, priorStatus: a.prevStatus ?? 'WATCH',
+        recoveryState: 'KILLED', postKillValuedClosed: 0, postKillMedianPnlPct: null,
+        postKillCappedAveragePnlPct: null, postKillRedLossRate: 0, recoveryProgress: 0,
+      },
+    };
+  }
+
+  // Never killed → pass through.
+  return { policyStatus: a.freshStatus, recovered: false, meta: { killedAt: null, killReason: null, priorStatus: null, recoveryState: null } };
+}
+
+function reasonPct(v: number | null): string { return v == null ? 'n/a' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%'; }
+function buildKillReason(scope: 'EXACT' | 'GLOBAL', s: PostKillStats): string {
+  return `${scope} KILL: redLoss ${Math.round(s.redLossRate * 100)}% over ${s.valuedClosed} valued (median ${reasonPct(s.medianPnlPct)}, cappedAvg ${reasonPct(s.cappedAveragePnlPct)})`;
+}
+
 // ── I/O ───────────────────────────────────────────────────────────────────────────────────────
 
 export function readResearchEvents(eventsPath: string): ResearchShadowEvent[] {
@@ -373,6 +493,7 @@ interface ProfileAccumulator {
   parts: PolicyProfileParts;
   sampleSize: number;
   valuedPnlPct: number[];
+  valuedTs: string[];            // ts of each valued sell (parallel) — for post-kill hysteresis
   valuedRefs: BrainTradeRef[];
   wins: number;
   losses: number;
@@ -386,11 +507,31 @@ interface GlobalAccumulator {
   value: string;
   buys: number;
   valuedPnlPct: number[];
+  valuedTs: string[];            // ts of each valued sell (parallel) — for post-kill hysteresis
   valuedRefs: BrainTradeRef[];
   wins: number;
   losses: number;
   flats: number;
   unvaluedClosed: number;
+}
+
+/** Stats over ONLY the valued trades that closed at/after killedAt (post-kill recovery evidence). */
+function postKillStats(valuedPnlPct: number[], valuedTs: string[], killedAt: string): PostKillStats {
+  const pn: number[] = [];
+  let losses = 0;
+  for (let i = 0; i < valuedPnlPct.length; i++) {
+    if ((valuedTs[i] ?? '') >= killedAt) {          // ISO-8601 strings sort lexicographically
+      const v = valuedPnlPct[i];
+      pn.push(v);
+      if (v < 0) losses++;
+    }
+  }
+  return {
+    valuedClosed: pn.length,
+    medianPnlPct: brainMedian(pn),
+    cappedAveragePnlPct: brainCappedAverage(pn, BRAIN_PNL_CAP_PCT),
+    redLossRate: pn.length ? losses / pn.length : 0,
+  };
 }
 
 /** Finalize valued-trade stats shared by exact profiles and global groups. */
@@ -420,6 +561,8 @@ function isValuedSell(e: ResearchWouldSellEvent): boolean {
 export interface BuildPolicyMemoryOptions {
   eventsPath?: string;
   generatedAt: string;
+  /** Previous memory — required for KILL hysteresis (killedAt / recovery). Null on first build. */
+  previous?: BrainPolicyMemory | null;
 }
 
 export function buildPolicyMemory(events: ResearchShadowEvent[], opts: BuildPolicyMemoryOptions): BrainPolicyMemory {
@@ -435,7 +578,7 @@ export function buildPolicyMemory(events: ResearchShadowEvent[], opts: BuildPoli
   const ensure = (parts: PolicyProfileParts): ProfileAccumulator => {
     const key = policyProfileKey(parts);
     let a = acc.get(key);
-    if (!a) { a = { parts, sampleSize: 0, valuedPnlPct: [], valuedRefs: [], wins: 0, losses: 0, flats: 0, unvaluedClosed: 0 }; acc.set(key, a); }
+    if (!a) { a = { parts, sampleSize: 0, valuedPnlPct: [], valuedTs: [], valuedRefs: [], wins: 0, losses: 0, flats: 0, unvaluedClosed: 0 }; acc.set(key, a); }
     return a;
   };
 
@@ -443,7 +586,7 @@ export function buildPolicyMemory(events: ResearchShadowEvent[], opts: BuildPoli
   const gacc = new Map<string, GlobalAccumulator>();
   const ensureGlobal = (dimension: GlobalDimension, value: string, key: string): GlobalAccumulator => {
     let a = gacc.get(key);
-    if (!a) { a = { key, dimension, value, buys: 0, valuedPnlPct: [], valuedRefs: [], wins: 0, losses: 0, flats: 0, unvaluedClosed: 0 }; gacc.set(key, a); }
+    if (!a) { a = { key, dimension, value, buys: 0, valuedPnlPct: [], valuedTs: [], valuedRefs: [], wins: 0, losses: 0, flats: 0, unvaluedClosed: 0 }; gacc.set(key, a); }
     return a;
   };
 
@@ -466,17 +609,31 @@ export function buildPolicyMemory(events: ResearchShadowEvent[], opts: BuildPoli
     }
     const pnlPct = s.pnlPct as number;
     const ref: BrainTradeRef = { contract: s.contract, symbol: s.symbol, pnlUsd: s.pnlUsd ?? 0, pnlPct };
-    a.valuedPnlPct.push(pnlPct); a.valuedRefs.push(ref);
+    a.valuedPnlPct.push(pnlPct); a.valuedTs.push(s.ts); a.valuedRefs.push(ref);
     if (pnlPct > 0) a.wins += 1; else if (pnlPct < 0) a.losses += 1; else a.flats += 1;
     for (const ga of gAccs) {
-      ga.valuedPnlPct.push(pnlPct); ga.valuedRefs.push(ref);
+      ga.valuedPnlPct.push(pnlPct); ga.valuedTs.push(s.ts); ga.valuedRefs.push(ref);
       if (pnlPct > 0) ga.wins += 1; else if (pnlPct < 0) ga.losses += 1; else ga.flats += 1;
     }
   }
 
+  const prevProfilesMem = opts.previous?.profiles ?? {};
+  const prevGlobalsMem  = opts.previous?.globalGroups ?? {};
+
   const profiles: Record<string, PolicyProfile> = {};
   for (const [key, a] of acc) {
     const stats = finalizeStats(a.valuedPnlPct, a.valuedRefs, a.losses);
+    const allTimeStats = { valuedClosed: stats.valuedClosed, medianPnlPct: stats.medianPnlPct, cappedAveragePnlPct: stats.cappedAveragePnlPct, redLossRate: stats.redLossRate };
+    const fresh = policyStatus(allTimeStats);
+    const prev = prevProfilesMem[key];
+    const killedAt = (prev?.policyStatus === 'KILL' && prev?.killedAt) ? prev.killedAt : null;
+    const pk = killedAt ? postKillStats(a.valuedPnlPct, a.valuedTs, killedAt)
+      : { valuedClosed: 0, medianPnlPct: null, cappedAveragePnlPct: null, redLossRate: 0 };
+    const hy = applyKillHysteresis({
+      freshStatus: fresh, freshIsKill: fresh === 'KILL', freshKillReason: fresh === 'KILL' ? buildKillReason('EXACT', allTimeStats) : null,
+      prevStatus: prev?.policyStatus, prevKilledAt: prev?.killedAt, prevKillReason: prev?.killReason, prevPriorStatus: prev?.priorStatus,
+      postKill: pk, generatedAt: opts.generatedAt,
+    });
     profiles[key] = {
       ...a.parts, key,
       sampleSize: a.sampleSize,
@@ -487,13 +644,25 @@ export function buildPolicyMemory(events: ResearchShadowEvent[], opts: BuildPoli
       bestTrade: stats.bestTrade, worstTrade: stats.worstTrade,
       lastUpdated: opts.generatedAt,
       confidenceTier: confidenceTier(stats.valuedClosed),
-      policyStatus: policyStatus({ valuedClosed: stats.valuedClosed, medianPnlPct: stats.medianPnlPct, cappedAveragePnlPct: stats.cappedAveragePnlPct, redLossRate: stats.redLossRate }),
+      policyStatus: hy.policyStatus as PolicyStatus,
+      ...hy.meta,
     };
   }
 
   const globalGroups: Record<string, GlobalPolicyGroup> = {};
   for (const [key, a] of gacc) {
     const stats = finalizeStats(a.valuedPnlPct, a.valuedRefs, a.losses);
+    const allTimeStats = { valuedClosed: stats.valuedClosed, medianPnlPct: stats.medianPnlPct, cappedAveragePnlPct: stats.cappedAveragePnlPct, redLossRate: stats.redLossRate };
+    const fresh = globalPolicyStatus(allTimeStats);
+    const prev = prevGlobalsMem[key];
+    const killedAt = (prev?.policyStatus === 'KILL' && prev?.killedAt) ? prev.killedAt : null;
+    const pk = killedAt ? postKillStats(a.valuedPnlPct, a.valuedTs, killedAt)
+      : { valuedClosed: 0, medianPnlPct: null, cappedAveragePnlPct: null, redLossRate: 0 };
+    const hy = applyKillHysteresis({
+      freshStatus: fresh, freshIsKill: fresh === 'KILL', freshKillReason: fresh === 'KILL' ? buildKillReason('GLOBAL', allTimeStats) : null,
+      prevStatus: prev?.policyStatus, prevKilledAt: prev?.killedAt, prevKillReason: prev?.killReason, prevPriorStatus: prev?.priorStatus,
+      postKill: pk, generatedAt: opts.generatedAt,
+    });
     globalGroups[key] = {
       key: a.key, dimension: a.dimension, value: a.value,
       buys: a.buys,
@@ -504,12 +673,13 @@ export function buildPolicyMemory(events: ResearchShadowEvent[], opts: BuildPoli
       bestTrade: stats.bestTrade, worstTrade: stats.worstTrade,
       lastUpdated: opts.generatedAt,
       confidenceTier: confidenceTier(stats.valuedClosed),
-      policyStatus: globalPolicyStatus({ valuedClosed: stats.valuedClosed, medianPnlPct: stats.medianPnlPct, cappedAveragePnlPct: stats.cappedAveragePnlPct, redLossRate: stats.redLossRate }),
+      policyStatus: hy.policyStatus as GlobalPolicyStatus,
+      ...hy.meta,
     };
   }
 
   return {
-    version: 1.1, generatedAt: opts.generatedAt, eventsPath: opts.eventsPath ?? DEFAULT_BRAIN_RESEARCH_EVENTS_PATH,
+    version: 1.2, generatedAt: opts.generatedAt, eventsPath: opts.eventsPath ?? DEFAULT_BRAIN_RESEARCH_EVENTS_PATH,
     totalProfiles: Object.keys(profiles).length, profiles,
     totalGlobalGroups: Object.keys(globalGroups).length, globalGroups,
     realTrading: false, readyForRealTrading: false, noWallet: true, noSwap: true, noSigning: true,
@@ -544,6 +714,11 @@ export interface BrainRefreshResult {
   globalKilled: GlobalPolicyGroup[];
   globalDemoted: GlobalPolicyGroup[];
   globalWatch: GlobalPolicyGroup[];
+  // v1.2 KILL hysteresis.
+  stickyKilled: GlobalPolicyGroup[];     // global groups currently sticky-killed (has killedAt)
+  recovering: GlobalPolicyGroup[];       // sticky-killed with post-kill evidence accumulating
+  newlyKilled: string[];                 // keys that became KILL this refresh
+  recovered: string[];                   // keys that were KILL and recovered this refresh
   readyForRealTrading: false;
 }
 
@@ -561,7 +736,7 @@ export function refreshBrainPolicy(opts: RefreshBrainPolicyOptions): BrainRefres
 
   const previous = loadBrainPolicyMemory(memoryPath);
   const events = readResearchEvents(eventsPath);
-  const memory = buildPolicyMemory(events, { eventsPath, generatedAt: opts.generatedAt });
+  const memory = buildPolicyMemory(events, { eventsPath, generatedAt: opts.generatedAt, previous });
 
   // Diff vs previous memory — exact profiles + global groups.
   const changes: BrainRefreshChange[] = [];
@@ -605,6 +780,16 @@ export function refreshBrainPolicy(opts: RefreshBrainPolicyOptions): BrainRefres
     globalKilled:   gAll.filter(g => g.policyStatus === 'KILL').sort(gByRedLoss),
     globalDemoted:  gAll.filter(g => g.policyStatus === 'DEMOTE').sort(gByRedLoss),
     globalWatch:    gAll.filter(g => g.policyStatus === 'WATCH' && g.confidenceTier !== 'TOO_SMALL'),
+    stickyKilled:   gAll.filter(g => g.policyStatus === 'KILL' && g.killedAt != null).sort((a, b) => (a.killedAt ?? '').localeCompare(b.killedAt ?? '')),
+    recovering:     gAll.filter(g => g.recoveryState === 'RECOVERING').sort((a, b) => (b.recoveryProgress ?? 0) - (a.recoveryProgress ?? 0)),
+    newlyKilled: [
+      ...Object.values(memory.profiles).filter(p => p.policyStatus === 'KILL' && p.killedAt === opts.generatedAt).map(p => p.key),
+      ...gAll.filter(g => g.policyStatus === 'KILL' && g.killedAt === opts.generatedAt).map(g => g.key),
+    ],
+    recovered: [
+      ...Object.entries(memory.profiles).filter(([k, p]) => prevProfiles[k]?.policyStatus === 'KILL' && p.policyStatus !== 'KILL').map(([k]) => k),
+      ...Object.entries(memory.globalGroups).filter(([k, g]) => prevGlobals[k]?.policyStatus === 'KILL' && g.policyStatus !== 'KILL').map(([k]) => k),
+    ],
     readyForRealTrading: false,
   };
 
@@ -616,6 +801,25 @@ export function refreshBrainPolicy(opts: RefreshBrainPolicyOptions): BrainRefres
 
 function pnlS(v: number | null): string { return v == null ? 'n/a' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%'; }
 function pctS(v: number): string { return (v * 100).toFixed(0) + '%'; }
+
+/** Human-readable age between two ISO timestamps (parsing only — no Date.now()). */
+export function killAge(killedAt: string, nowIso: string): string {
+  const a = Date.parse(killedAt), b = Date.parse(nowIso);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return 'unknown';
+  const mins = Math.max(0, (b - a) / 60000);
+  if (mins < 60) return `${Math.round(mins)}m`;
+  if (mins < 60 * 24) return `${(mins / 60).toFixed(1)}h`;
+  return `${(mins / (60 * 24)).toFixed(1)}d`;
+}
+
+function stickyKillLine(g: GlobalPolicyGroup, nowIso: string): string {
+  const age = g.killedAt ? killAge(g.killedAt, nowIso) : '?';
+  const prog = `${g.postKillValuedClosed ?? 0}/${KILL_HYSTERESIS.recoveryMinValued}`;
+  return `    ${g.key.padEnd(28)} [${(g.recoveryState ?? 'KILLED')}]  killed ${age} ago  (prior ${g.priorStatus ?? '?'})\n` +
+    `        recovery ${prog} valued  post-kill median ${pnlS(g.postKillMedianPnlPct ?? null)}  ` +
+    `cappedAvg ${pnlS(g.postKillCappedAveragePnlPct ?? null)}  redLoss ${g.postKillValuedClosed ? pctS(g.postKillRedLossRate ?? 0) : 'n/a'}  ` +
+    `(need >=${KILL_HYSTERESIS.recoveryMinValued}, median>0, cappedAvg>0, redLoss<=${pctS(KILL_HYSTERESIS.recoveryMaxRedLossRate)})`;
+}
 
 function profileLine(p: PolicyProfile): string {
   return `    [${p.policyStatus.padEnd(7)} ${p.confidenceTier.padEnd(9)}] ` +
@@ -636,8 +840,8 @@ export function renderBrainRefreshReport(r: BrainRefreshResult): string {
   const L: string[] = [];
 
   L.push(WIDE);
-  L.push('  TOKEN GRAB BRAIN v1.1 — ADAPTIVE PAPER-ONLY POLICY MEMORY');
-  L.push('  EXACT PROFILES + GLOBAL POLICY GROUPS');
+  L.push('  TOKEN GRAB BRAIN v1.2 — ADAPTIVE PAPER-ONLY POLICY MEMORY');
+  L.push('  EXACT PROFILES + GLOBAL POLICY GROUPS + STICKY KILL HYSTERESIS');
   L.push('  RESEARCH_ONLY_NOT_EXECUTABLE — NOT_A_BUY_SIGNAL — SIMULATED');
   L.push('  These are PAPER-ONLY research policies — never live trading, never a buy signal.');
   L.push('  [READ ONLY — DO_NOT_ENABLE_REAL_TRADING]');
@@ -682,6 +886,20 @@ export function renderBrainRefreshReport(r: BrainRefreshResult): string {
   gSection('GLOBAL KILLED', r.globalKilled);
   gSection('GLOBAL DEMOTED', r.globalDemoted);
   gSection('GLOBAL WATCH (enough data, neutral)', r.globalWatch);
+
+  L.push('  ══ STICKY KILL / RECOVERY (v1.2 — KILL persists until post-kill recovery) ══');
+  L.push('');
+  L.push(THIN);
+  L.push(`  STICKY-KILLED GLOBAL GROUPS (${r.stickyKilled.length})   [recovering ${r.recovering.length}  newly-killed ${r.newlyKilled.length}  recovered-this-refresh ${r.recovered.length}]`);
+  L.push(THIN);
+  if (r.stickyKilled.length === 0) {
+    L.push('    (none)');
+  } else {
+    for (const g of r.stickyKilled.slice(0, 20)) L.push(stickyKillLine(g, r.memory.generatedAt));
+    if (r.stickyKilled.length > 20) L.push(`    … ${r.stickyKilled.length - 20} more`);
+  }
+  if (r.recovered.length > 0) L.push(`    RECOVERED this refresh: ${r.recovered.join(', ')}`);
+  L.push('');
 
   L.push(THIN);
   L.push(`  WHAT CHANGED SINCE LAST REFRESH (${r.previousExisted ? 'diff vs prior memory' : 'first refresh — all NEW'})`);

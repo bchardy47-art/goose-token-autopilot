@@ -66,6 +66,12 @@ export interface KilledLaneSuppression {
   skipsPost: number;
   suppressionRate: number;     // skips / (skips + post-brain buys)
   stoppedOpening: boolean;     // no post-brain buys at all
+  // v1.2 sticky-KILL view: measured against the sticky killedAt (not just brain activation).
+  killedAt: string | null;
+  recoveryState: string | null;
+  buysAfterKill: number;       // research buys in this lane with ts >= killedAt
+  skipsAfterKill: number;      // skips in this lane with ts >= killedAt
+  trulyStoppedAfterKill: boolean;  // sticky KILL held: zero buys opened after killedAt
 }
 
 export interface PostBrainReportResult {
@@ -181,10 +187,18 @@ export function buildPostBrainReport(events: AnyEvent[], memory: BrainPolicyMemo
   const watchAnnotations   = buys.filter(b => b.brainAction === 'WATCH').length;
 
   // Killed/suppressed lanes — ground truth from skip events, plus lane-scoped global KILL/DEMOTE.
+  // Also capture the sticky killedAt anchor (v1.2) so we can measure "did it stop opening after
+  // the kill became sticky", not just after brain activation.
   const suppressedLanes = new Set<string>(skips.map(s => s.lane));
+  const laneKilledAt = new Map<string, string | null>();
+  const laneRecoveryState = new Map<string, string | null>();
   if (memory) {
     for (const g of Object.values(memory.globalGroups ?? {})) {
-      if (g.dimension === 'lane' && (g.policyStatus === 'KILL' || g.policyStatus === 'DEMOTE')) suppressedLanes.add(g.value);
+      if (g.dimension === 'lane' && (g.policyStatus === 'KILL' || g.policyStatus === 'DEMOTE')) {
+        suppressedLanes.add(g.value);
+        laneKilledAt.set(g.value, g.killedAt ?? null);
+        laneRecoveryState.set(g.value, g.recoveryState ?? null);
+      }
     }
   }
   const killedLaneSuppression: KilledLaneSuppression[] = [...suppressedLanes].sort().map(lane => {
@@ -192,7 +206,18 @@ export function buildPostBrainReport(events: AnyEvent[], memory: BrainPolicyMemo
     const buysPost = buys.filter(b => b.lane === lane && buyEra(b) === 'post').length;
     const skipsPost = skips.filter(s => s.lane === lane).length;
     const denom = buysPost + skipsPost;
-    return { lane, buysPre, buysPost, skipsPost, suppressionRate: denom ? skipsPost / denom : 0, stoppedOpening: buysPost === 0 };
+    const killedAt = laneKilledAt.get(lane) ?? null;
+    const buysAfterKill  = killedAt ? buys.filter(b => b.lane === lane && b.ts >= killedAt).length : buysPost;
+    const skipsAfterKill = killedAt ? skips.filter(s => s.lane === lane && s.ts >= killedAt).length : skipsPost;
+    return {
+      lane, buysPre, buysPost, skipsPost,
+      suppressionRate: denom ? skipsPost / denom : 0,
+      stoppedOpening: buysPost === 0,
+      killedAt,
+      recoveryState: laneRecoveryState.get(lane) ?? null,
+      buysAfterKill, skipsAfterKill,
+      trulyStoppedAfterKill: killedAt != null && buysAfterKill === 0,
+    };
   });
 
   return {
@@ -302,15 +327,22 @@ export function renderPostBrainReport(r: PostBrainReportResult): string {
   L.push('');
 
   L.push(THIN);
-  L.push('  KILLED / SUPPRESSED LANE — DID IT STOP OPENING AFTER BRAIN?');
+  L.push('  KILLED / SUPPRESSED LANE — DID IT STOP OPENING? (sticky KILL uses killedAt anchor)');
   L.push(THIN);
   if (r.killedLaneSuppression.length === 0) {
     L.push('    (no lanes killed/demoted yet)');
   } else {
     for (const k of r.killedLaneSuppression) {
       L.push(`    ${k.lane}`);
-      L.push(`        buys pre ${k.buysPre}   buys post ${k.buysPost}   skipped post ${k.skipsPost}   ` +
+      L.push(`        [brain-activation] buys pre ${k.buysPre}   buys post ${k.buysPost}   skipped post ${k.skipsPost}   ` +
         `suppression ${pctS(k.suppressionRate)}   stoppedOpening=${k.stoppedOpening}`);
+      if (k.killedAt) {
+        L.push(`        [sticky killedAt ${k.killedAt} state=${k.recoveryState ?? 'KILLED'}] ` +
+          `buys after kill ${k.buysAfterKill}   skips after kill ${k.skipsAfterKill}   ` +
+          `trulyStoppedAfterKill=${k.trulyStoppedAfterKill}`);
+      } else {
+        L.push('        [sticky] not currently a sticky KILL in memory (no killedAt)');
+      }
     }
   }
   L.push('');
