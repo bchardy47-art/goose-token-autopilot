@@ -7,6 +7,9 @@ import {
   buildPolicyMemory,
   policyProfileKey,
   policyStatus,
+  globalPolicyStatus,
+  globalGroupsForParts,
+  resolveBrainDecision,
   confidenceTier,
   resolvePolicyStatus,
   renderBrainRefreshReport,
@@ -195,7 +198,7 @@ describe('refreshBrainPolicy — creates and populates policy-memory.json', () =
     const p2 = writeEvents(profileEvents(BASE_PROFILE, 'chg', [...losers(11), 30]));
     const res2 = refreshBrainPolicy({ eventsPath: p2, memoryPath, generatedAt: ISO });
     expect(res2.previousExisted).toBe(true);
-    const change = res2.changes.find(c => c.kind === 'STATUS_CHANGE');
+    const change = res2.changes.find(c => c.scope === 'EXACT' && c.kind === 'STATUS_CHANGE');
     expect(change).toBeTruthy();
     expect(change!.from).toBe('PROMOTE');
     expect(change!.to).toBe('KILL');
@@ -238,13 +241,46 @@ function partsOf(c: ShadowCandidate): PolicyProfileParts {
 
 function memoryWith(parts: PolicyProfileParts, status: PolicyStatus): BrainPolicyMemory {
   return {
-    version: 1, generatedAt: ISO, eventsPath: 'x', totalProfiles: 1,
+    version: 1.1, generatedAt: ISO, eventsPath: 'x', totalProfiles: 1,
     profiles: {
       [policyProfileKey(parts)]: {
         ...parts, key: policyProfileKey(parts), sampleSize: 30, valuedClosed: 25, unvaluedClosed: 0,
         wins: status === 'PROMOTE' ? 20 : 5, losses: status === 'PROMOTE' ? 5 : 20, flats: 0,
         medianPnlPct: status === 'PROMOTE' ? 8 : -8, cappedAveragePnlPct: status === 'PROMOTE' ? 18 : -18,
         redLossRate: status === 'PROMOTE' ? 0.2 : 0.8, bestTrade: null, worstTrade: null,
+        lastUpdated: ISO, confidenceTier: 'STRONG', policyStatus: status,
+      },
+    },
+    totalGlobalGroups: 0, globalGroups: {},
+    realTrading: false, readyForRealTrading: false, noWallet: true, noSwap: true, noSigning: true,
+    paperOnly: true, researchOnly: true, unknownStaysUnknown: true, tradingExecuted: 0,
+  };
+}
+
+/** Build a memory whose GLOBAL group for one dimension slice has the given status (exact profiles empty). */
+function memoryWithGlobal(parts: PolicyProfileParts, dimensionKey: string, status: import('../src/token-grab/brainPolicy').GlobalPolicyStatus, exactStatus?: PolicyStatus): BrainPolicyMemory {
+  const winning = status === 'PROMOTE' || status === 'PROMOTE_LIGHT';
+  const profiles: BrainPolicyMemory['profiles'] = {};
+  if (exactStatus) {
+    profiles[policyProfileKey(parts)] = {
+      ...parts, key: policyProfileKey(parts), sampleSize: 30, valuedClosed: 25, unvaluedClosed: 0,
+      wins: exactStatus === 'PROMOTE' ? 20 : 5, losses: exactStatus === 'PROMOTE' ? 5 : 20, flats: 0,
+      medianPnlPct: exactStatus === 'PROMOTE' ? 8 : -8, cappedAveragePnlPct: exactStatus === 'PROMOTE' ? 18 : -18,
+      redLossRate: exactStatus === 'PROMOTE' ? 0.2 : 0.8, bestTrade: null, worstTrade: null,
+      lastUpdated: ISO, confidenceTier: 'STRONG', policyStatus: exactStatus,
+    };
+  }
+  return {
+    version: 1.1, generatedAt: ISO, eventsPath: 'x', totalProfiles: Object.keys(profiles).length,
+    profiles,
+    totalGlobalGroups: 1,
+    globalGroups: {
+      [dimensionKey]: {
+        key: dimensionKey, dimension: dimensionKey.split(':')[0] as any, value: dimensionKey.split(':')[1],
+        buys: 30, valuedClosed: 22, unvaluedClosed: 0,
+        wins: winning ? 16 : 5, losses: winning ? 5 : 17, flats: 0,
+        medianPnlPct: winning ? 6 : -8, cappedAveragePnlPct: winning ? 12 : -10,
+        redLossRate: winning ? 0.23 : 0.77, bestTrade: null, worstTrade: null,
         lastUpdated: ISO, confidenceTier: 'STRONG', policyStatus: status,
       },
     },
@@ -373,5 +409,200 @@ describe('brain safety', () => {
     expect(mem.readyForRealTrading).toBe(false);
     expect(mem.realTrading).toBe(false);
     expect(mem.noWallet).toBe(true);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// BRAIN v1.1 — GLOBAL POLICY GROUPS
+// ════════════════════════════════════════════════════════════════════════════════════════════
+
+// Rotating "other" dimensions so exact profiles stay small while a single fixed dimension's
+// GLOBAL group accumulates enough valued samples to act on.
+const SCORE_BANDS = ['SCORE_60_79', 'SCORE_80_89', 'SCORE_90_99', 'SCORE_100'];
+const M5S  = ['-20 to -5', '-5 to +5'];
+const VLRS = ['VLR_LT_0_5', 'VLR_0_5_TO_2', 'VLR_GTE_2'];
+const LIQS = ['LIQ_10K_30K', 'LIQ_30K_100K'];
+
+/** Emit events that all share `fixed` on the target dimension but vary the others. */
+function globalDimEvents(fixed: Partial<PolicyProfileParts>, tag: string, valuedPnls: number[], unvalued = 0): any[] {
+  const out: any[] = [];
+  let i = 0;
+  const mk = (pnl: number | null, usable: boolean) => {
+    const parts: PolicyProfileParts = {
+      lane: fixed.lane ?? 'NO_BM_INTERNAL_BROAD',
+      productionGateApproved: fixed.productionGateApproved ?? false,
+      launchAgeBucket: fixed.launchAgeBucket ?? 'PRIME_WINDOW',
+      m5Band: fixed.m5Band ?? M5S[i % M5S.length],
+      liquidityBucket: fixed.liquidityBucket ?? LIQS[i % LIQS.length],
+      vlrBucket: fixed.vlrBucket ?? VLRS[i % VLRS.length],
+      ripperScoreBand: fixed.ripperScoreBand ?? SCORE_BANDS[i % SCORE_BANDS.length],
+    };
+    const contract = `${tag}${i}${'z'.repeat(43)}`.slice(0, 43);
+    const cyc = `cycle-${tag}-${i}`;
+    out.push(buyEvent(parts, contract, cyc), sellEvent(parts, contract, cyc, usable, pnl));
+    i++;
+  };
+  for (const pnl of valuedPnls) mk(pnl, true);
+  for (let u = 0; u < unvalued; u++) mk(null, false);
+  return out;
+}
+
+const mixLose = (losers: number, wins: number) => [...Array.from({ length: losers }, () => -20), ...Array.from({ length: wins }, () => 10)];
+const mixWin  = (wins: number, losers: number) => [...Array.from({ length: wins }, () => 30), ...Array.from({ length: losers }, () => -10)];
+
+describe('globalPolicyStatus rules (separate from exact)', () => {
+  it('valued < 10 → WATCH (TOO_SMALL, not severe)', () => {
+    expect(globalPolicyStatus({ valuedClosed: 8, medianPnlPct: -20, cappedAveragePnlPct: -20, redLossRate: 1 })).toBe('WATCH');
+  });
+  it('valued >= 10, redLoss >= 65%, losing both → DEMOTE', () => {
+    expect(globalPolicyStatus({ valuedClosed: 14, medianPnlPct: -5, cappedAveragePnlPct: -9, redLossRate: 0.7 })).toBe('DEMOTE');
+  });
+  it('valued >= 20, redLoss >= 65%, losing both → KILL', () => {
+    expect(globalPolicyStatus({ valuedClosed: 22, medianPnlPct: -5, cappedAveragePnlPct: -9, redLossRate: 0.7 })).toBe('KILL');
+  });
+  it('valued >= 10, winning both, redLoss <= 50% → PROMOTE_LIGHT', () => {
+    expect(globalPolicyStatus({ valuedClosed: 12, medianPnlPct: 4, cappedAveragePnlPct: 8, redLossRate: 0.4 })).toBe('PROMOTE_LIGHT');
+  });
+  it('valued >= 20, winning both, redLoss <= 45% → PROMOTE', () => {
+    expect(globalPolicyStatus({ valuedClosed: 22, medianPnlPct: 4, cappedAveragePnlPct: 8, redLossRate: 0.3 })).toBe('PROMOTE');
+  });
+  it('globalGroupsForParts yields the six single-dimension slices', () => {
+    const keys = globalGroupsForParts(BASE_PROFILE).map(g => g.key);
+    expect(keys).toContain('gate:false');
+    expect(keys).toContain('age:PRIME_WINDOW');
+    expect(keys).toContain('lane:NO_BM_INTERNAL_BROAD');
+    expect(keys.length).toBe(6);
+  });
+});
+
+describe('brain-refresh builds global groups that act while exact profiles stay small', () => {
+  it('productionGateApproved=false with losing global stats becomes DEMOTE/KILL', () => {
+    // 17 losers + 5 winners = 22 valued, redLoss 77% → global KILL; exact profiles stay small.
+    const eventsPath = writeEvents(globalDimEvents({ productionGateApproved: false }, 'gf', mixLose(17, 5)));
+    const res = refreshBrainPolicy({ eventsPath, memoryPath: path.join(path.dirname(eventsPath), 'm.json'), generatedAt: ISO });
+    const g = res.memory.globalGroups['gate:false'];
+    expect(g).toBeTruthy();
+    expect(g.valuedClosed).toBe(22);
+    expect(['DEMOTE', 'KILL']).toContain(g.policyStatus);
+    // Exact profiles all still TOO_SMALL (rotating dims spread the 22 across many keys).
+    expect(Object.values(res.memory.profiles).every(p => p.confidenceTier === 'TOO_SMALL')).toBe(true);
+  });
+
+  it('launchAgeBucket=TOO_EARLY with losing global stats becomes DEMOTE/KILL', () => {
+    const eventsPath = writeEvents(globalDimEvents({ launchAgeBucket: 'TOO_EARLY' }, 'te', mixLose(16, 6)));
+    const res = refreshBrainPolicy({ eventsPath, memoryPath: path.join(path.dirname(eventsPath), 'm.json'), generatedAt: ISO });
+    const g = res.memory.globalGroups['age:TOO_EARLY'];
+    expect(g).toBeTruthy();
+    expect(['DEMOTE', 'KILL']).toContain(g.policyStatus);
+    expect(res.globalKilled.concat(res.globalDemoted).some(x => x.key === 'age:TOO_EARLY')).toBe(true);
+  });
+
+  it('productionGateApproved=true with winning global stats becomes PROMOTE_LIGHT/PROMOTE', () => {
+    const eventsPath = writeEvents(globalDimEvents({ productionGateApproved: true }, 'gt', mixWin(18, 4)));
+    const res = refreshBrainPolicy({ eventsPath, memoryPath: path.join(path.dirname(eventsPath), 'm.json'), generatedAt: ISO });
+    const g = res.memory.globalGroups['gate:true'];
+    expect(g).toBeTruthy();
+    expect(['PROMOTE', 'PROMOTE_LIGHT']).toContain(g.policyStatus);
+    expect(res.globalPromoted.some(x => x.key === 'gate:true')).toBe(true);
+  });
+
+  it('global groups exclude unavailable valuations (never counted as flat)', () => {
+    const eventsPath = writeEvents(globalDimEvents({ productionGateApproved: true }, 'gu', winners(12), 8));
+    const res = refreshBrainPolicy({ eventsPath, memoryPath: path.join(path.dirname(eventsPath), 'm.json'), generatedAt: ISO });
+    const g = res.memory.globalGroups['gate:true'];
+    expect(g.valuedClosed).toBe(12);
+    expect(g.unvaluedClosed).toBe(8);
+    expect(g.flats).toBe(0);   // unvalued NOT counted as flat
+  });
+});
+
+describe('resolveBrainDecision precedence (exact first, then global)', () => {
+  it('exact KILL overrides global PROMOTE', () => {
+    const memory = memoryWithGlobal(BASE_PROFILE, `lane:${BASE_PROFILE.lane}`, 'PROMOTE', 'KILL');
+    const d = resolveBrainDecision(memory, BASE_PROFILE);
+    expect(d.action).toBe('SKIP');
+    expect(d.status).toBe('KILL');
+    expect(d.source).toBe('EXACT');
+  });
+  it('global KILL skips when exact is WATCH', () => {
+    const memory = memoryWithGlobal(BASE_PROFILE, `lane:${BASE_PROFILE.lane}`, 'KILL');
+    const d = resolveBrainDecision(memory, BASE_PROFILE);
+    expect(d.action).toBe('SKIP');
+    expect(d.source).toBe('GLOBAL');
+  });
+  it('global PROMOTE_LIGHT annotates PROMOTE (opens)', () => {
+    const memory = memoryWithGlobal(BASE_PROFILE, `gate:${BASE_PROFILE.productionGateApproved}`, 'PROMOTE_LIGHT');
+    const d = resolveBrainDecision(memory, BASE_PROFILE);
+    expect(d.action).toBe('OPEN');
+    expect(d.status).toBe('PROMOTE');
+  });
+});
+
+describe('research-shadow honors GLOBAL brain policy', () => {
+  const GK = 'GlobKill11111111111111111111111111111111A1';
+  const GD = 'GlobDemo11111111111111111111111111111111A1';
+
+  it('skips based on a global KILL group (RESEARCH_SKIPPED_BY_BRAIN, source GLOBAL)', () => {
+    const dir = tmpDir();
+    const eventsPath = path.join(dir, 'events.jsonl');
+    const { candidates, sourceCycle } = resolveCycle([cycleRow(GK)], '2026-07-01-115500');
+    const parts = partsOf(candidates[0]);
+    const memory = memoryWithGlobal(parts, `lane:${parts.lane}`, 'KILL');   // exact WATCH, global KILL
+
+    const res = recordResearchShadow({ candidates, sourceCycle, nowMs: NOW_MS, statePath: path.join(dir, 'state.json'), eventsPath, policyMemory: memory });
+
+    expect(res.researchBuys).toBe(0);
+    expect(res.skippedByBrain).toBe(1);
+    const skip = readEvents(eventsPath).find(e => e.type === 'RESEARCH_SKIPPED_BY_BRAIN');
+    expect(skip.brainStatus).toBe('KILL');
+    expect(skip.reason).toContain('GLOBAL');
+    expect(skip.realTrading).toBe(false);
+  });
+
+  it('demotes based on a global DEMOTE group (skip by default, open in observation mode)', () => {
+    const { candidates, sourceCycle } = resolveCycle([cycleRow(GD)], '2026-07-01-115500');
+    const parts = partsOf(candidates[0]);
+    const memory = memoryWithGlobal(parts, `age:${parts.launchAgeBucket}`, 'DEMOTE');
+
+    const d1 = tmpDir();
+    const r1 = recordResearchShadow({ candidates, sourceCycle, nowMs: NOW_MS, statePath: path.join(d1, 's.json'), eventsPath: path.join(d1, 'e.jsonl'), policyMemory: memory });
+    expect(r1.researchBuys).toBe(0);
+    expect(r1.skippedByBrain).toBe(1);
+
+    const d2 = tmpDir();
+    const r2 = recordResearchShadow({ candidates, sourceCycle, nowMs: NOW_MS, statePath: path.join(d2, 's.json'), eventsPath: path.join(d2, 'e.jsonl'), policyMemory: memory, observationMode: true });
+    expect(r2.researchBuys).toBe(1);
+    const buy = readEvents(path.join(d2, 'e.jsonl')).find(e => e.type === 'RESEARCH_WOULD_BUY');
+    expect(buy.brainAction).toBe('DEMOTE_OBSERVATION');
+  });
+
+  it('exact KILL overrides a global PROMOTE for the same candidate (skips)', () => {
+    const dir = tmpDir();
+    const eventsPath = path.join(dir, 'events.jsonl');
+    const { candidates, sourceCycle } = resolveCycle([cycleRow(GK)], '2026-07-01-115500');
+    const parts = partsOf(candidates[0]);
+    const memory = memoryWithGlobal(parts, `lane:${parts.lane}`, 'PROMOTE', 'KILL');
+
+    const res = recordResearchShadow({ candidates, sourceCycle, nowMs: NOW_MS, statePath: path.join(dir, 'state.json'), eventsPath, policyMemory: memory });
+    expect(res.researchBuys).toBe(0);
+    expect(res.skippedByBrain).toBe(1);
+    const skip = readEvents(eventsPath).find(e => e.type === 'RESEARCH_SKIPPED_BY_BRAIN');
+    expect(skip.reason).toContain('EXACT');
+  });
+});
+
+describe('brain v1.1 report + safety', () => {
+  it('report shows exact AND global statuses and paper-only research policy language', () => {
+    const eventsPath = writeEvents([
+      ...globalDimEvents({ productionGateApproved: false }, 'rf', mixLose(17, 5)),
+      ...globalDimEvents({ productionGateApproved: true }, 'rt', mixWin(18, 4)),
+    ]);
+    const text = renderBrainRefreshReport(refreshBrainPolicy({ eventsPath, memoryPath: path.join(path.dirname(eventsPath), 'm.json'), generatedAt: ISO }));
+    expect(text).toContain('EXACT PROFILE STATUSES');
+    expect(text).toContain('GLOBAL POLICY GROUP STATUSES');
+    expect(text).toContain('PAPER-ONLY research policies');
+    expect(text).toContain('READY_FOR_REAL_TRADING=false');
+    expect(text).toContain('UNKNOWN stays UNKNOWN');
+    expect(text).toContain('DO_NOT_ENABLE_REAL_TRADING');
   });
 });

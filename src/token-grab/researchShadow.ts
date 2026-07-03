@@ -33,7 +33,7 @@ import {
   type ShadowCandidate,
   type ShadowLane,
 } from './liveShadow';
-import { resolvePolicyStatus, type BrainPolicyMemory, type PolicyProfileParts } from './brainPolicy';
+import { resolveBrainDecision, type BrainPolicyMemory, type PolicyProfileParts } from './brainPolicy';
 
 // ── Paths (research stream lives beside the live-shadow stream) ──────────────────────────────
 
@@ -403,15 +403,15 @@ export function recordResearchShadow(options: RecordResearchShadowOptions): Reco
       continue;
     }
 
-    // ── Brain policy (adaptive learning) — decide whether to open, skip, or annotate ──
+    // ── Brain policy (adaptive learning v1.1) — exact profile FIRST, then global groups ──
     const profileParts: PolicyProfileParts = {
       lane, productionGateApproved: c.productionGateApproved, launchAgeBucket: c.launchAgeBucket,
       m5Band: c.m5Band, liquidityBucket: c.liquidityBucket, vlrBucket: c.vlrBucket, ripperScoreBand: c.ripperScoreBand,
     };
-    const brainStatus = resolvePolicyStatus(policyMemory, profileParts);
+    const decision = resolveBrainDecision(policyMemory, profileParts);
 
-    // KILL → never open a new research position. DEMOTE → only open in observation mode.
-    if (brainStatus === 'KILL' || (brainStatus === 'DEMOTE' && !observationMode)) {
+    // SKIP (KILL) → never open. OBSERVE_ONLY (DEMOTE) → only open in observation mode.
+    if (decision.action === 'SKIP' || (decision.action === 'OBSERVE_ONLY' && !observationMode)) {
       recordedKeys.add(key);
       state.recordedBuyKeys.push(key);
       skippedByBrain += 1;
@@ -420,16 +420,15 @@ export function recordResearchShadow(options: RecordResearchShadowOptions): Reco
         lane, sourceCycle, m5Band: c.m5Band, liquidityBucket: c.liquidityBucket, vlrBucket: c.vlrBucket,
         ripperScoreBand: c.ripperScoreBand, productionGateApproved: c.productionGateApproved,
         launchAgeBucket: c.launchAgeBucket, clusterRisk: c.clusterRisk,
-        brainStatus, reason: brainStatus === 'KILL'
-          ? 'brain policy KILL — profile red-loss rate too high'
-          : 'brain policy DEMOTE — profile losing; not opened outside observation mode',
+        brainStatus: decision.status === 'KILL' ? 'KILL' : 'DEMOTE',
+        reason: `${decision.source} ${decision.reason}`,
         notBuySignal: true, ...researchSafetyFlags(),
       });
       continue;
     }
 
-    const brainAction: BrainAction = brainStatus === 'PROMOTE' ? 'PROMOTE'
-      : brainStatus === 'DEMOTE' ? 'DEMOTE_OBSERVATION' : 'WATCH';
+    const brainAction: BrainAction = decision.status === 'PROMOTE' ? 'PROMOTE'
+      : decision.action === 'OBSERVE_ONLY' ? 'DEMOTE_OBSERVATION' : 'WATCH';
     if (brainAction === 'PROMOTE') promotedByBrain += 1;
 
     const bankrollBlockedReason = blocked.has(c.contract) ? BANKROLL_CAP_REACHED : undefined;
