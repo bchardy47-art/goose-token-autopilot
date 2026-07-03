@@ -49,6 +49,7 @@ import {
   RESEARCH_SHADOW_STATE_FILENAME,
   type RecordResearchShadowResult,
 } from './researchShadow';
+import { loadBrainPolicyMemory } from './brainPolicy';
 
 // ── Safety constants ──────────────────────────────────────────────────────────────────────
 
@@ -763,6 +764,9 @@ export interface LiveShadowOptions {
   recordResearch?: boolean;      // default true; set false to disable (e.g. isolated unit tests)
   researchEventsPath?: string;   // default: <dir of eventsPath>/research-shadow-events.jsonl
   researchStatePath?: string;    // default: <dir of statePath>/research-shadow-state.json
+  // ── Brain policy memory (adaptive learning) ──
+  brainPolicyPath?: string;      // when set, research-shadow consults this policy memory (KILL/DEMOTE/PROMOTE)
+  brainObservationMode?: boolean;// when true, DEMOTE profiles still open positions (labeled DEMOTE_OBSERVATION)
 }
 
 // ── Reject diagnostic (why each candidate is ignored / watched / blocked / ready) ───────────
@@ -1093,10 +1097,16 @@ export function runLiveShadowCycle(options: LiveShadowOptions): LiveShadowCycleR
       ?? path.join(path.dirname(options.eventsPath), RESEARCH_SHADOW_EVENTS_FILENAME);
     const researchStatePath = options.researchStatePath
       ?? path.join(path.dirname(options.statePath), RESEARCH_SHADOW_STATE_FILENAME);
+    // Brain policy memory is consulted ONLY when a brainPolicyPath is provided (opt-in). Without it,
+    // every profile is treated as WATCH (unchanged research behavior). This keeps the recorder
+    // deterministic for tests that do not exercise the brain.
+    const policyMemory = options.brainPolicyPath ? loadBrainPolicyMemory(options.brainPolicyPath) : null;
     research = recordResearchShadow({
       candidates, sourceCycle, nowMs,
       statePath: researchStatePath, eventsPath: researchEventsPath,
       bankrollBlockedContracts: new Set(refRiskSkipped.keys()),
+      policyMemory,
+      observationMode: options.brainObservationMode === true,
     });
   }
 
@@ -1332,9 +1342,11 @@ export function renderLiveShadowCycleSummary(r: LiveShadowCycleResult): string {
     L.push(THIN);
     L.push(`    Research would-buys this cycle  : ${r.research.researchBuys}`);
     L.push(`    Research would-sells this cycle : ${r.research.researchSells}`);
+    L.push(`    Skipped by brain (KILL/DEMOTE)  : ${r.research.skippedByBrain}`);
+    L.push(`    Promoted by brain (PROMOTE)     : ${r.research.promotedByBrain}`);
     L.push(`    Open research positions         : ${r.research.openPositions}`);
     L.push('    Records lane matches even when bankroll daily-buy caps are reached.');
-    L.push('    Report: npm run token:research-shadow-report');
+    L.push('    Report: npm run token:research-shadow-report   Brain: npm run token:brain-refresh');
     L.push('');
   }
 

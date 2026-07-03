@@ -101,6 +101,7 @@
     "token:live-shadow": "tsx src/cli.ts token:live-shadow",
     "token:live-shadow-report": "tsx src/cli.ts token:live-shadow-report",
     "token:research-shadow-report": "tsx src/cli.ts token:research-shadow-report",
+    "token:brain-refresh": "tsx src/cli.ts token:brain-refresh",
     "token:live-shadow-diagnostic": "tsx src/cli.ts token:live-shadow-diagnostic",
     "token:live-shadow-valuation-diagnostic": "tsx src/cli.ts token:live-shadow-valuation-diagnostic",
     "token:ripper-ears": "tsx src/cli.ts token:ripper-ears",

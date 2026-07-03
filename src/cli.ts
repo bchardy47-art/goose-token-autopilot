@@ -164,6 +164,7 @@ import { runLiveShadowDiagnostic, renderLiveShadowDiagnostic } from './token-gra
 import { runLiveShadowReport, renderLiveShadowReport, renderLiveShadowReportUsage } from './token-grab/liveShadowReport';
 import { runResearchShadowReport, renderResearchShadowReport, renderResearchShadowReportUsage } from './token-grab/researchShadowReport';
 import { DEFAULT_RESEARCH_SHADOW_EVENTS_PATH, DEFAULT_RESEARCH_SHADOW_STATE_PATH } from './token-grab/researchShadow';
+import { refreshBrainPolicy, renderBrainRefreshReport, renderBrainRefreshUsage, DEFAULT_BRAIN_POLICY_MEMORY_PATH, DEFAULT_BRAIN_RESEARCH_EVENTS_PATH } from './token-grab/brainPolicy';
 import { runLiveShadowValuationDiagnostic, renderLiveShadowValuationDiagnostic, renderLiveShadowValuationDiagnosticUsage } from './token-grab/liveShadowValuationDiagnostic';
 import { runRipperEarsReport, runRipperNearMiss, renderRipperEarsReport, renderRipperNearMissReport, renderRipperEarsUsage, renderRipperNearMissUsage, type EarsInputFormat } from './token-grab/ripperEarsReport';
 import { runLiveFixtureCapture, runLiveFixtureReport, runLiveFixtureAutopsy, renderCaptureResult, renderFixtureReport, renderAutopsyReport, renderLiveFixtureCaptureUsage, renderLiveFixtureReportUsage, renderLiveFixtureAutopsyUsage } from './token-grab/liveFixtureCapture';
@@ -2866,11 +2867,18 @@ async function main(): Promise<void> {
 
         if (lsReset && fs.existsSync(lsState)) fs.unlinkSync(lsState);
 
+        // Brain policy memory is consulted by default (opt-out via --no-brain). It only ever
+        // suppresses/annotates PAPER research decisions — it never creates a live buy signal.
+        const lsBrain = process.argv.includes('--no-brain')
+          ? undefined
+          : (getArgValue('--brain-policy') ?? DEFAULT_BRAIN_POLICY_MEMORY_PATH);
         const lsResult = runLiveShadowCycle({
           cyclesDir: lsCyclesDir,
           legacyFeedPath: lsLegacy ?? undefined,
           maxSourceAgeMinutes: lsMaxAge != null ? Number(lsMaxAge) : undefined,
           statePath: lsState, eventsPath: lsEvents, diagnosticsPath: lsDiag,
+          brainPolicyPath: lsBrain,
+          brainObservationMode: process.argv.includes('--brain-observation'),
         });
         if (process.argv.includes('--json')) console.log(JSON.stringify(lsResult.diagnosticRecord, null, 2));
         else console.log(renderLiveShadowCycleSummary(lsResult));
@@ -2939,6 +2947,27 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(rsrResult, null, 2));
         } else {
           console.log(renderResearchShadowReport(rsrResult));
+        }
+        break;
+      }
+
+      case 'token:brain-refresh': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderBrainRefreshUsage());
+          break;
+        }
+        const brEvents = getArgValue('--events') ?? DEFAULT_BRAIN_RESEARCH_EVENTS_PATH;
+        const brMemory = getArgValue('--memory') ?? DEFAULT_BRAIN_POLICY_MEMORY_PATH;
+        const brDryRun = process.argv.includes('--dry-run');
+
+        const brResult = refreshBrainPolicy({
+          eventsPath: brEvents, memoryPath: brMemory,
+          generatedAt: new Date().toISOString(), dryRun: brDryRun,
+        });
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(brResult.memory, null, 2));
+        } else {
+          console.log(renderBrainRefreshReport(brResult));
         }
         break;
       }

@@ -33,6 +33,7 @@ import {
   type ShadowCandidate,
   type ShadowLane,
 } from './liveShadow';
+import { resolvePolicyStatus, type BrainPolicyMemory, type PolicyProfileParts } from './brainPolicy';
 
 // ── Paths (research stream lives beside the live-shadow stream) ──────────────────────────────
 
@@ -80,6 +81,7 @@ export interface ResearchShadowPosition {
   clusterRisk: ClusterRisk;              // verbatim — UNKNOWN stays UNKNOWN
   productionGateApproved: boolean;       // reported, never blocking
   bankrollBlockedReason?: string;        // e.g. BANKROLL_CAP_REACHED when the bankroll tier was capped
+  brainAction?: BrainAction;             // brain policy annotation (PROMOTE / WATCH / DEMOTE_OBSERVATION)
   // Simulation bookkeeping (identical to live-shadow).
   entryMomentumPct?: number | null;
   entryPriceChangePct?: number;
@@ -126,6 +128,7 @@ export interface ResearchWouldBuyEvent extends ResearchSafetyFlags {
   entryVlr: number | null;
   launchAgeBucket: LaunchAgeBucket;
   bankrollBlockedReason?: string;        // present only when the bankroll tier was capped
+  brainAction?: BrainAction;             // brain policy annotation (PROMOTE / WATCH / DEMOTE_OBSERVATION)
   notBuySignal: true;
 }
 
@@ -149,10 +152,42 @@ export interface ResearchWouldSellEvent extends ResearchSafetyFlags {
   holdMinutes: number;
   productionGateApproved: boolean;
   launchAgeBucket: LaunchAgeBucket;
+  // Full entry-time profile descriptors (self-describing so the brain can key sells by profile).
+  m5Band: string;
+  liquidityBucket: string;
+  vlrBucket: string;
+  ripperScoreBand: string;
   notBuySignal: true;
 }
 
-export type ResearchShadowEvent = ResearchWouldBuyEvent | ResearchWouldSellEvent;
+/**
+ * Emitted when the brain policy memory (KILL / DEMOTE) suppresses opening a new research position.
+ * This is NOT a research buy and NOT a research sell — it records that the candidate was seen and
+ * intentionally skipped. It is never a buy signal and never executes anything.
+ */
+export interface ResearchSkippedByBrainEvent extends ResearchSafetyFlags {
+  type: 'RESEARCH_SKIPPED_BY_BRAIN';
+  ts: string;
+  contract: string;
+  symbol?: string;
+  lane: ShadowLane;
+  sourceCycle: string;
+  m5Band: string;
+  liquidityBucket: string;
+  vlrBucket: string;
+  ripperScoreBand: string;
+  productionGateApproved: boolean;
+  launchAgeBucket: LaunchAgeBucket;
+  clusterRisk: ClusterRisk;
+  brainStatus: 'KILL' | 'DEMOTE';
+  reason: string;
+  notBuySignal: true;
+}
+
+export type ResearchShadowEvent = ResearchWouldBuyEvent | ResearchWouldSellEvent | ResearchSkippedByBrainEvent;
+
+/** Brain policy annotation carried on an opened research position + its RESEARCH_WOULD_BUY event. */
+export type BrainAction = 'PROMOTE' | 'WATCH' | 'DEMOTE_OBSERVATION';
 
 // ── State ────────────────────────────────────────────────────────────────────────────────
 
@@ -237,6 +272,10 @@ export interface RecordResearchShadowOptions {
   bankrollBlockedContracts?: Set<string>;
   /** Research notional in USD (default RESEARCH_NOTIONAL_USD). */
   positionSizeUsd?: number;
+  /** Brain policy memory (adaptive learning). When absent, every profile is treated as WATCH. */
+  policyMemory?: BrainPolicyMemory | null;
+  /** When true, DEMOTE profiles still open a research position (labeled DEMOTE_OBSERVATION). */
+  observationMode?: boolean;
 }
 
 export interface RecordResearchShadowResult extends ResearchSafetyFlags {
@@ -244,6 +283,10 @@ export interface RecordResearchShadowResult extends ResearchSafetyFlags {
   sourceCycle: string;
   researchBuys: number;
   researchSells: number;
+  /** Lane matches suppressed by brain policy (KILL, or DEMOTE outside observation mode). */
+  skippedByBrain: number;
+  /** Lane matches opened and annotated PROMOTE by brain policy. */
+  promotedByBrain: number;
   openPositions: number;
   eventsWritten: ResearchShadowEvent[];
   state: ResearchShadowState;
@@ -323,6 +366,7 @@ export function recordResearchShadow(options: RecordResearchShadowOptions): Reco
         valuationStatus: pnl.status, valuationMissing: pnl.missing,
         pnlPct: pnl.pnlPct, pnlUsd: pnl.pnlUsd, holdMinutes,
         productionGateApproved: pos.productionGateApproved, launchAgeBucket: pos.launchAgeBucket,
+        m5Band: pos.m5Band, liquidityBucket: pos.liquidityBucket, vlrBucket: pos.vlrBucket, ripperScoreBand: pos.ripperScoreBand,
         notBuySignal: true, ...researchSafetyFlags(),
       });
     } else {
@@ -338,7 +382,11 @@ export function recordResearchShadow(options: RecordResearchShadowOptions): Reco
   // ── ENTRIES — every lane match recorded, independent of bankroll caps ──
   const recordedKeys = new Set(state.recordedBuyKeys);
   const openByContractLane = new Set(state.openPositions.map(p => `${p.contract}|${p.lane}`));
+  const policyMemory = options.policyMemory ?? null;
+  const observationMode = options.observationMode === true;
   let researchBuys = 0;
+  let skippedByBrain = 0;
+  let promotedByBrain = 0;
 
   for (const c of candidates) {
     const lane = primaryLane(c);
@@ -354,6 +402,35 @@ export function recordResearchShadow(options: RecordResearchShadowOptions): Reco
       state.recordedBuyKeys.push(key);
       continue;
     }
+
+    // ── Brain policy (adaptive learning) — decide whether to open, skip, or annotate ──
+    const profileParts: PolicyProfileParts = {
+      lane, productionGateApproved: c.productionGateApproved, launchAgeBucket: c.launchAgeBucket,
+      m5Band: c.m5Band, liquidityBucket: c.liquidityBucket, vlrBucket: c.vlrBucket, ripperScoreBand: c.ripperScoreBand,
+    };
+    const brainStatus = resolvePolicyStatus(policyMemory, profileParts);
+
+    // KILL → never open a new research position. DEMOTE → only open in observation mode.
+    if (brainStatus === 'KILL' || (brainStatus === 'DEMOTE' && !observationMode)) {
+      recordedKeys.add(key);
+      state.recordedBuyKeys.push(key);
+      skippedByBrain += 1;
+      events.push({
+        type: 'RESEARCH_SKIPPED_BY_BRAIN', ts: nowIso, contract: c.contract, symbol: c.symbol ?? undefined,
+        lane, sourceCycle, m5Band: c.m5Band, liquidityBucket: c.liquidityBucket, vlrBucket: c.vlrBucket,
+        ripperScoreBand: c.ripperScoreBand, productionGateApproved: c.productionGateApproved,
+        launchAgeBucket: c.launchAgeBucket, clusterRisk: c.clusterRisk,
+        brainStatus, reason: brainStatus === 'KILL'
+          ? 'brain policy KILL — profile red-loss rate too high'
+          : 'brain policy DEMOTE — profile losing; not opened outside observation mode',
+        notBuySignal: true, ...researchSafetyFlags(),
+      });
+      continue;
+    }
+
+    const brainAction: BrainAction = brainStatus === 'PROMOTE' ? 'PROMOTE'
+      : brainStatus === 'DEMOTE' ? 'DEMOTE_OBSERVATION' : 'WATCH';
+    if (brainAction === 'PROMOTE') promotedByBrain += 1;
 
     const bankrollBlockedReason = blocked.has(c.contract) ? BANKROLL_CAP_REACHED : undefined;
 
@@ -372,6 +449,7 @@ export function recordResearchShadow(options: RecordResearchShadowOptions): Reco
       clusterRisk: c.clusterRisk,                  // verbatim — UNKNOWN stays UNKNOWN
       productionGateApproved: c.productionGateApproved,
       bankrollBlockedReason,
+      brainAction,
       entryMomentumPct: c.entryMomentumPct,
       entryPriceChangePct: c.priceChangePct ?? undefined,
       entryLiquidityChangePct: c.liquidityChangePct ?? undefined,
@@ -398,7 +476,7 @@ export function recordResearchShadow(options: RecordResearchShadowOptions): Reco
       entryMomentumPct: c.entryMomentumPct ?? null,
       entryLiquidityChangePct: c.liquidityChangePct ?? null,
       entryVlr: c.volumeLiquidityRatio ?? null,
-      launchAgeBucket: c.launchAgeBucket, bankrollBlockedReason,
+      launchAgeBucket: c.launchAgeBucket, bankrollBlockedReason, brainAction,
       notBuySignal: true, ...researchSafetyFlags(),
     });
   }
@@ -409,7 +487,7 @@ export function recordResearchShadow(options: RecordResearchShadowOptions): Reco
   appendResearchShadowEvents(events, options.eventsPath);
 
   return {
-    ts: nowIso, sourceCycle, researchBuys, researchSells,
+    ts: nowIso, sourceCycle, researchBuys, researchSells, skippedByBrain, promotedByBrain,
     openPositions: state.openPositions.length, eventsWritten: events, state,
     readyForRealTrading: false, ...researchSafetyFlags(),
   };
