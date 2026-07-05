@@ -166,6 +166,7 @@ import { runResearchShadowReport, renderResearchShadowReport, renderResearchShad
 import { DEFAULT_RESEARCH_SHADOW_EVENTS_PATH, DEFAULT_RESEARCH_SHADOW_STATE_PATH } from './token-grab/researchShadow';
 import { refreshBrainPolicy, renderBrainRefreshReport, renderBrainRefreshUsage, DEFAULT_BRAIN_POLICY_MEMORY_PATH, DEFAULT_BRAIN_RESEARCH_EVENTS_PATH } from './token-grab/brainPolicy';
 import { runPostBrainReport, renderPostBrainReport, renderPostBrainReportUsage } from './token-grab/postBrainReport';
+import { runPrimeCandidateReport, renderPrimeCandidateReport, renderPrimeCandidateReportUsage } from './token-grab/primeCandidateReport';
 import { runLiveShadowValuationDiagnostic, renderLiveShadowValuationDiagnostic, renderLiveShadowValuationDiagnosticUsage } from './token-grab/liveShadowValuationDiagnostic';
 import { runRipperEarsReport, runRipperNearMiss, renderRipperEarsReport, renderRipperNearMissReport, renderRipperEarsUsage, renderRipperNearMissUsage, type EarsInputFormat } from './token-grab/ripperEarsReport';
 import { runLiveFixtureCapture, runLiveFixtureReport, runLiveFixtureAutopsy, renderCaptureResult, renderFixtureReport, renderAutopsyReport, renderLiveFixtureCaptureUsage, renderLiveFixtureReportUsage, renderLiveFixtureAutopsyUsage } from './token-grab/liveFixtureCapture';
@@ -2964,6 +2965,22 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(pbrResult, null, 2));
         } else {
           console.log(renderPostBrainReport(pbrResult));
+        }
+        break;
+      }
+
+      case 'token:prime-candidate-report': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderPrimeCandidateReportUsage());
+          break;
+        }
+        const pcrEvents = getArgValue('--events') ?? DEFAULT_BRAIN_RESEARCH_EVENTS_PATH;
+        const pcrMemory = getArgValue('--memory') ?? DEFAULT_BRAIN_POLICY_MEMORY_PATH;
+        const pcrResult = runPrimeCandidateReport({ eventsPath: pcrEvents, memoryPath: pcrMemory });
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(pcrResult, null, 2));
+        } else {
+          console.log(renderPrimeCandidateReport(pcrResult));
         }
         break;
       }
