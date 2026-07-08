@@ -104,6 +104,7 @@
     "token:brain-refresh": "tsx src/cli.ts token:brain-refresh",
     "token:post-brain-report": "tsx src/cli.ts token:post-brain-report",
     "token:prime-candidate-report": "tsx src/cli.ts token:prime-candidate-report",
+    "token:failure-autopsy-report": "tsx src/cli.ts token:failure-autopsy-report",
     "token:live-shadow-diagnostic": "tsx src/cli.ts token:live-shadow-diagnostic",
     "token:live-shadow-valuation-diagnostic": "tsx src/cli.ts token:live-shadow-valuation-diagnostic",
     "token:ripper-ears": "tsx src/cli.ts token:ripper-ears",

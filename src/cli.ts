@@ -167,6 +167,7 @@ import { DEFAULT_RESEARCH_SHADOW_EVENTS_PATH, DEFAULT_RESEARCH_SHADOW_STATE_PATH
 import { refreshBrainPolicy, renderBrainRefreshReport, renderBrainRefreshUsage, DEFAULT_BRAIN_POLICY_MEMORY_PATH, DEFAULT_BRAIN_RESEARCH_EVENTS_PATH } from './token-grab/brainPolicy';
 import { runPostBrainReport, renderPostBrainReport, renderPostBrainReportUsage } from './token-grab/postBrainReport';
 import { runPrimeCandidateReport, renderPrimeCandidateReport, renderPrimeCandidateReportUsage } from './token-grab/primeCandidateReport';
+import { runFailureAutopsyReport, renderFailureAutopsyReport, renderFailureAutopsyReportUsage } from './token-grab/failureAutopsyReport';
 import { runLiveShadowValuationDiagnostic, renderLiveShadowValuationDiagnostic, renderLiveShadowValuationDiagnosticUsage } from './token-grab/liveShadowValuationDiagnostic';
 import { runRipperEarsReport, runRipperNearMiss, renderRipperEarsReport, renderRipperNearMissReport, renderRipperEarsUsage, renderRipperNearMissUsage, type EarsInputFormat } from './token-grab/ripperEarsReport';
 import { runLiveFixtureCapture, runLiveFixtureReport, runLiveFixtureAutopsy, renderCaptureResult, renderFixtureReport, renderAutopsyReport, renderLiveFixtureCaptureUsage, renderLiveFixtureReportUsage, renderLiveFixtureAutopsyUsage } from './token-grab/liveFixtureCapture';
@@ -2981,6 +2982,22 @@ async function main(): Promise<void> {
           console.log(JSON.stringify(pcrResult, null, 2));
         } else {
           console.log(renderPrimeCandidateReport(pcrResult));
+        }
+        break;
+      }
+
+      case 'token:failure-autopsy-report': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderFailureAutopsyReportUsage());
+          break;
+        }
+        const farEvents = getArgValue('--events') ?? DEFAULT_BRAIN_RESEARCH_EVENTS_PATH;
+        const farMemory = getArgValue('--memory') ?? DEFAULT_BRAIN_POLICY_MEMORY_PATH;
+        const farResult = runFailureAutopsyReport({ eventsPath: farEvents, memoryPath: farMemory });
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(farResult, null, 2));
+        } else {
+          console.log(renderFailureAutopsyReport(farResult));
         }
         break;
       }
