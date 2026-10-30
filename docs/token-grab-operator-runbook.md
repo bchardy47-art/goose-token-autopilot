@@ -41,6 +41,7 @@ npm run <command> --silent -- --json   # machine-readable JSON
 | `token:ripper-shadow-policy-backtester` | Score candidate rules on execution-adjusted P/L |
 | `token:ripper-app-readiness-dashboard` | Aggregate verdict: what's safe/unsafe/missing/blocked |
 | `token:ripper-autopilot-status` | Current mode, decision, safety locks |
+| `token:ripper-ops-status` | Single operational status view: running state, latest cycle, open simulated positions, bankrolls, Brain, stale feeds, safety triggers |
 
 ### Useful flags
 
@@ -52,7 +53,8 @@ npm run <command> --silent -- --json   # machine-readable JSON
 ## 4. Recommended daily reading order
 
 ```bash
-npm run token:ripper-app-readiness-dashboard      # start here — the verdict + blockers
+npm run token:ripper-ops-status                   # single operational answer: is it running, fresh, safe, and what is open?
+npm run token:ripper-app-readiness-dashboard      # verdict + blockers
 npm run token:ripper-autopilot-status             # confirm locks intact
 npm run token:ripper-execution-realism-simulator  # is paper P/L real?
 npm run token:ripper-cluster-coverage-audit       # holder coverage health
@@ -114,7 +116,167 @@ execution-adjusted scrutiny *and* a separate manual review, trading real money w
 acting on an unverified, cost-blind edge. The locks are intentional. See
 [`token-grab-safety.md`](./token-grab-safety.md).
 
-## 9. Troubleshooting
+## 9. Live-market paper launch / unattended operation
+
+### Startup procedure
+
+```bash
+cd ~/goose-token-autopilot
+npm install
+npm run token:ripper-ops-status
+npm run token:ripper-app-readiness-dashboard
+```
+
+Recommended startup checks:
+- `token:ripper-ops-status` → confirms the system is fresh, paper-only, and whether any paper kill switch is active.
+- `token:ripper-autopilot-status` → confirms current paper decision mode and latest cycle time.
+- `token:ripper-app-readiness-dashboard` → confirms known blockers and safety locks.
+
+### Scheduled execution
+
+Current scheduling must remain separate from code changes. The existing wrappers are:
+
+```bash
+npm run token:ripper-learning-cron         # full paper-learning collection + memory refresh
+bash scripts/run-live-shadow.sh            # live-market paper valuation / bankroll simulation
+```
+
+Do **not** modify the user's active cron/launchd entries without explicit approval.
+Review only:
+- `scripts/com.bchardy.token-grab-learning.plist.example`
+- `scripts/run-token-grab-learning-cron.sh`
+- `scripts/run-live-shadow.sh`
+
+### Health checks
+
+```bash
+npm run token:ripper-ops-status
+npm run token:ripper-autopilot-status
+npm run token:ripper-app-readiness-dashboard
+npm run token:live-shadow-report
+npm run token:research-shadow-report
+```
+
+What to confirm from `token:ripper-ops-status`:
+- Is Token Grab running now?
+- When was the latest successful cycle?
+- How many latest-cycle tokens were discovered / approved / rejected?
+- Are there any open simulated positions?
+- What are today's simulated returns and cumulative realized paper P/L?
+- What did the Brain decide?
+- Which strategy lane is leading?
+- Are data feeds stale?
+- Are any safety triggers active?
+
+### Automatic recovery
+
+Already implemented in the current paper-only system:
+- Atomic lock directories prevent overlapping scheduled runs.
+- Learning cron timeout guard stops hung collection loops.
+- Live-shadow wrapper performs stale-source recovery by refreshing feed → capturing a fresh cycle → rerunning valuation.
+- Persistent JSON/JSONL state allows crash/restart recovery without inventing trades or fills.
+- Brain memory, paper intents, observations, and live-shadow state resume from disk.
+
+### Logging and monitoring
+
+Primary logs / state:
+- `logs/token-grab-learning/run-*.log`
+- `logs/token-grab-learning/launchd.out.log`
+- `logs/token-grab-learning/launchd.err.log`
+- `data/token-grab/ripper/cycles/`
+- `data/token-grab/ripper/paper-intents.jsonl`
+- `data/token-grab/ripper/paper-intent-observations.jsonl`
+- `data/token-grab/ripper/learning-memory.jsonl`
+- `data/token-grab/live-shadow/live-shadow-events.jsonl`
+- `data/token-grab/live-shadow/live-shadow-state.json`
+- `data/token-grab/brain/policy-memory.json`
+
+Quick monitoring commands:
+
+```bash
+npm run token:ripper-ops-status
+npm run token:live-shadow-report
+npm run token:research-shadow-report
+```
+
+### Simulated bankroll reset procedure
+
+This should be done only deliberately, with backups first.
+The paper bankroll state lives in:
+
+```bash
+data/token-grab/live-shadow/live-shadow-state.json
+data/token-grab/live-shadow/live-shadow-events.jsonl
+```
+
+Safe reset procedure:
+1. Stop scheduled runners externally.
+2. Back up both files.
+3. If you need a clean paper bankroll experiment, archive the current files and let the next live-shadow run recreate fresh state.
+4. Re-run `npm run token:ripper-ops-status` and `npm run token:live-shadow-report` to verify the reset state.
+
+### Emergency paper shutdown
+
+Paper-only emergency controls already exist:
+- Learning cron overlap lock: `/tmp/token-grab-learning-cron.lock`
+- Live-shadow overlap lock: `data/token-grab/live-shadow/.live-shadow.lock`
+- Live daemon stop-file controls exist for the separate live execution capability, but real trading remains disabled by default.
+
+For the current paper-learning system, emergency shutdown means:
+1. Stop the external scheduler.
+2. If a learning cron run is stuck:
+
+```bash
+kill $(cat /tmp/token-grab-learning-cron.lock/pid 2>/dev/null) 2>/dev/null || true
+rm -rf /tmp/token-grab-learning-cron.lock
+```
+
+3. If live-shadow is stuck, stop the wrapper process and remove its lock directory only after the process is confirmed dead.
+
+### Data backup procedure
+
+Back up these directories before resets or major experiments:
+
+```bash
+data/token-grab/ripper/
+data/token-grab/live-shadow/
+data/token-grab/brain/
+logs/token-grab-learning/
+```
+
+A simple timestamped archive approach:
+
+```bash
+mkdir -p backups
+TS=$(date +%Y%m%d-%H%M%S)
+tar -czf backups/token-grab-${TS}.tgz \
+  data/token-grab/ripper \
+  data/token-grab/live-shadow \
+  data/token-grab/brain \
+  logs/token-grab-learning
+```
+
+### Performance evaluation commands
+
+```bash
+npm run token:ripper-ops-status
+npm run token:live-shadow-report
+npm run token:research-shadow-report
+npm run token:post-brain-report
+npm run token:ripper-paper-trade-simulation-report
+npm run token:ripper-shadow-policy-backtester
+npm run token:ripper-app-readiness-dashboard
+```
+
+Use these to answer:
+- paper bankroll trajectory
+- realized paper P/L
+- Brain effect pre/post activation
+- execution-adjusted realism
+- current leading strategy lane
+- whether blockers remain before the next learning phase
+
+## 10. Troubleshooting
 
 ### Stale feed
 - **Symptom:** `token:ripper-autopilot-status` shows an old `latestFeedTime`/`latestCycleTime`;

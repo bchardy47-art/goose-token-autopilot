@@ -146,6 +146,7 @@
     "token:ripper-paper-exit-policy-report": "tsx src/cli.ts token:ripper-paper-exit-policy-report",
     "token:ripper-real-vs-fake-autopsy": "tsx src/cli.ts token:ripper-real-vs-fake-autopsy",
     "token:ripper-autopilot-status": "tsx src/cli.ts token:ripper-autopilot-status",
+    "token:ripper-ops-status": "tsx src/cli.ts token:ripper-ops-status",
     "token:ripper-paper-observation-diagnostic": "tsx src/cli.ts token:ripper-paper-observation-diagnostic",
     "token:ripper-flat-junk-reducer-report": "tsx src/cli.ts token:ripper-flat-junk-reducer-report",
     "token:ripper-shadow-reject-filter-report": "tsx src/cli.ts token:ripper-shadow-reject-filter-report",

@@ -225,6 +225,7 @@ import { runRipperPaperAutopilotCycle, renderRipperPaperAutopilotCycle } from '.
 import { runRipperPaperExitPolicyReport, renderRipperPaperExitPolicyReport } from './token-grab/ripperPaperExitPolicyReport';
 import { runRipperRealVsFakeAutopsy, renderRipperRealVsFakeAutopsy } from './token-grab/ripperRealVsFakeAutopsy';
 import { runRipperAutopilotStatus, renderRipperAutopilotStatus } from './token-grab/ripperAutopilotStatus';
+import { runRipperOpsStatus, renderRipperOpsStatus } from './token-grab/ripperOpsStatus';
 import { runRipperPaperObservationDiagnostic, renderRipperPaperObservationDiagnostic } from './token-grab/ripperPaperObservationDiagnostic';
 import { runFlatJunkReducerReport, renderFlatJunkReducerReport } from './token-grab/ripperFlatJunkReducerReport';
 import { runShadowRejectFilterReport, renderShadowRejectFilterReport } from './token-grab/ripperShadowRejectFilterReport';
@@ -3669,6 +3670,26 @@ async function main(): Promise<void> {
           realVsFakePath:   getArgValue('--real-vs-fake')      ?? 'data/token-grab/ripper/real-vs-fake-autopsy.jsonl',
         });
         console.log(renderRipperAutopilotStatus(rasResult));
+        break;
+      }
+
+      case 'token:ripper-ops-status': {
+        const rosResult = runRipperOpsStatus({
+          cyclesDir:           getArgValue('--cycles-dir')            ?? 'data/token-grab/ripper/cycles',
+          intentsPath:         getArgValue('--intents')               ?? 'data/token-grab/ripper/paper-intents.jsonl',
+          timingReportPath:    getArgValue('--timing-report')         ?? 'data/token-grab/ripper/approved-entry-timing-report.jsonl',
+          exitPolicyPath:      getArgValue('--exit-policy-report')    ?? 'data/token-grab/ripper/paper-exit-policy-report.jsonl',
+          realVsFakePath:      getArgValue('--real-vs-fake')          ?? 'data/token-grab/ripper/real-vs-fake-autopsy.jsonl',
+          liveShadowStatePath: getArgValue('--live-shadow-state')     ?? 'data/token-grab/live-shadow/live-shadow-state.json',
+          researchEventsPath:  getArgValue('--research-events')       ?? 'data/token-grab/live-shadow/research-shadow-events.jsonl',
+          researchStatePath:   getArgValue('--research-state')        ?? 'data/token-grab/live-shadow/research-shadow-state.json',
+          brainMemoryPath:     getArgValue('--brain-memory')          ?? 'data/token-grab/brain/policy-memory.json',
+          learningLockPath:    getArgValue('--learning-lock')         ?? '/tmp/token-grab-learning-cron.lock',
+          liveShadowLockPath:  getArgValue('--live-shadow-lock')      ?? 'data/token-grab/live-shadow/.live-shadow.lock',
+          freshnessMinutes:    getArgValue('--freshness-minutes') != null ? Number(getArgValue('--freshness-minutes')) : undefined,
+        });
+        if (process.argv.includes('--json')) console.log(JSON.stringify(rosResult, null, 2));
+        else console.log(renderRipperOpsStatus(rosResult));
         break;
       }
 
