@@ -66,12 +66,13 @@ beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'autopilot-tes
 afterEach(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
 
 function makeOptions(opts: {
-  cyclesDir?: string; observationsDir?: string;
+  cyclesDir?: string; observationsDir?: string; dexWatchDir?: string;
   intentsPath?: string; nowMs?: number; dryRun?: boolean; maxAgeMinutes?: number;
 } = {}) {
   return {
     cyclesDir:       opts.cyclesDir       ?? path.join(tmpDir, 'cycles'),
     observationsDir: opts.observationsDir ?? path.join(tmpDir, 'obs'),
+    dexWatchDir:     opts.dexWatchDir     ?? path.join(tmpDir, 'dex-watch-runs'),
     intentsPath:     opts.intentsPath     ?? path.join(tmpDir, 'paper-intents.jsonl'),
     nowMs:           opts.nowMs           ?? BASE_MS,
     dryRun:          opts.dryRun,

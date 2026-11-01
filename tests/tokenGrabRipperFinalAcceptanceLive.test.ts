@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { runFinalAcceptanceLive, renderFinalAcceptanceLive } from '../src/token-grab/ripperFinalAcceptanceLive';
+
+// These acceptance runs scan local live data (~2-5s each); the 5s default is too tight under parallel load.
+vi.setConfig({ testTimeout: 30_000 });
 
 describe('Final Live Acceptance v1', () => {
   it('passes all critical checks and reports FINISHED = YES', async () => {
