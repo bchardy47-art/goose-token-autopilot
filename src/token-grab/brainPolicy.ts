@@ -417,7 +417,9 @@ export function loadBrainPolicyMemory(memoryPath: string): BrainPolicyMemory | n
 
 export function saveBrainPolicyMemory(memory: BrainPolicyMemory, memoryPath: string): void {
   fs.mkdirSync(path.dirname(memoryPath), { recursive: true });
-  fs.writeFileSync(memoryPath, JSON.stringify(memory, null, 2), 'utf-8');
+  const tmpPath = `${memoryPath}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tmpPath, JSON.stringify(memory, null, 2), 'utf-8');
+  fs.renameSync(tmpPath, memoryPath);
 }
 
 // ── Lookup used by research-shadow integration ────────────────────────────────────────────────

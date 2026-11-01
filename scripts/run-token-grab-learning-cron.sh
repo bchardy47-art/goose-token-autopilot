@@ -28,7 +28,7 @@ echo "  Repo root : $REPO_ROOT"
 
 # ── Lock guard — prevent overlapping runs ─────────────────────────────────────
 # mkdir is atomic on POSIX; if it already exists another run is still active.
-LOCK_DIR="/tmp/token-grab-learning-cron.lock"
+LOCK_DIR="${TOKEN_GRAB_LEARNING_LOCK_DIR:-/tmp/token-grab-learning-cron.lock}"
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   EXISTING_PID="$(cat "$LOCK_DIR/pid" 2>/dev/null || echo "unknown")"
   echo ""
@@ -76,10 +76,10 @@ run_step() {
   local cmd="$2"
   STEP=$((STEP + 1))
   echo "  ──────────────────────────────────────────────────────────────"
-  echo "  [STEP ${STEP}/5] ${label}"
+  echo "  [STEP ${STEP}/6] ${label}"
   echo "  ──────────────────────────────────────────────────────────────"
   if ! eval "$cmd"; then
-    FAILED_STEP="[STEP ${STEP}/5] ${label}"
+    FAILED_STEP="[STEP ${STEP}/6] ${label}"
     return 1
   fi
 }
@@ -89,7 +89,7 @@ run_step() {
 # and touches a flag file so the parent can detect timeout across the boundary.
 STEP=$((STEP + 1))
 echo "  ──────────────────────────────────────────────────────────────"
-echo "  [STEP ${STEP}/5] Paper learning loop  (watcher → capture → shadow enroll → policy test → wait → closeout)"
+echo "  [STEP ${STEP}/6] Paper learning loop  (watcher → capture → shadow enroll → policy test → wait → closeout)"
 echo "  Timeout   : ${LEARN_LOOP_TIMEOUT_SECS}s (~25 min)"
 echo "  ──────────────────────────────────────────────────────────────"
 npm run token:ripper-paper-learning-loop &
@@ -97,6 +97,7 @@ LEARN_PID=$!
 ( sleep "$LEARN_LOOP_TIMEOUT_SECS" && touch "$TIMEOUT_FLAG" && kill "$LEARN_PID" 2>/dev/null ) &
 KILLER_PID=$!
 wait  "$LEARN_PID"   || true
+pkill -P "$KILLER_PID" 2>/dev/null || true   # reap the orphan-prone sleep child
 kill  "$KILLER_PID"  2>/dev/null || true
 wait  "$KILLER_PID"  2>/dev/null || true
 
@@ -110,6 +111,9 @@ fi
 # None of these execute trades, sign wallets, or alter policy.
 run_step "Learning memory (append evidence rows)" \
   "npm run token:ripper-learning-memory" || true
+
+run_step "Brain refresh (policy memory from completed research outcomes)" \
+  "npm run token:brain-refresh" || true
 
 run_step "Learning summary report" \
   "npm run token:ripper-learning-summary" || true

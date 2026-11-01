@@ -34,6 +34,10 @@ describe('required report/learning commands', () => {
     expect(script).toContain('token:ripper-learning-memory');
   });
 
+  it('contains token:brain-refresh', () => {
+    expect(script).toContain('token:brain-refresh');
+  });
+
   it('contains token:ripper-learning-summary', () => {
     expect(script).toContain('token:ripper-learning-summary');
   });
@@ -212,5 +216,17 @@ describe('package.json', () => {
 
   it('token:ripper-learning-cron calls the cron script', () => {
     expect(scripts['token:ripper-learning-cron']).toContain('run-token-grab-learning-cron.sh');
+  });
+});
+
+describe('brain refresh scheduling', () => {
+  it('runs brain-refresh after learning-memory in the scheduler path', () => {
+    expect(script.indexOf('token:ripper-learning-memory')).toBeLessThan(
+      script.indexOf('token:brain-refresh'),
+    );
+  });
+
+  it('uses a configurable lock dir without changing installed schedules', () => {
+    expect(script).toContain('TOKEN_GRAB_LEARNING_LOCK_DIR');
   });
 });

@@ -166,6 +166,8 @@ import { runResearchShadowReport, renderResearchShadowReport, renderResearchShad
 import { DEFAULT_RESEARCH_SHADOW_EVENTS_PATH, DEFAULT_RESEARCH_SHADOW_STATE_PATH } from './token-grab/researchShadow';
 import { refreshBrainPolicy, renderBrainRefreshReport, renderBrainRefreshUsage, DEFAULT_BRAIN_POLICY_MEMORY_PATH, DEFAULT_BRAIN_RESEARCH_EVENTS_PATH } from './token-grab/brainPolicy';
 import { runPostBrainReport, renderPostBrainReport, renderPostBrainReportUsage } from './token-grab/postBrainReport';
+import { runPrimeCandidateReport, renderPrimeCandidateReport, renderPrimeCandidateReportUsage } from './token-grab/primeCandidateReport';
+import { runFailureAutopsyReport, renderFailureAutopsyReport, renderFailureAutopsyReportUsage } from './token-grab/failureAutopsyReport';
 import { runLiveShadowValuationDiagnostic, renderLiveShadowValuationDiagnostic, renderLiveShadowValuationDiagnosticUsage } from './token-grab/liveShadowValuationDiagnostic';
 import { runRipperEarsReport, runRipperNearMiss, renderRipperEarsReport, renderRipperNearMissReport, renderRipperEarsUsage, renderRipperNearMissUsage, type EarsInputFormat } from './token-grab/ripperEarsReport';
 import { runLiveFixtureCapture, runLiveFixtureReport, runLiveFixtureAutopsy, renderCaptureResult, renderFixtureReport, renderAutopsyReport, renderLiveFixtureCaptureUsage, renderLiveFixtureReportUsage, renderLiveFixtureAutopsyUsage } from './token-grab/liveFixtureCapture';
@@ -223,6 +225,7 @@ import { runRipperPaperAutopilotCycle, renderRipperPaperAutopilotCycle } from '.
 import { runRipperPaperExitPolicyReport, renderRipperPaperExitPolicyReport } from './token-grab/ripperPaperExitPolicyReport';
 import { runRipperRealVsFakeAutopsy, renderRipperRealVsFakeAutopsy } from './token-grab/ripperRealVsFakeAutopsy';
 import { runRipperAutopilotStatus, renderRipperAutopilotStatus } from './token-grab/ripperAutopilotStatus';
+import { runRipperOpsStatus, renderRipperOpsStatus } from './token-grab/ripperOpsStatus';
 import { runRipperPaperObservationDiagnostic, renderRipperPaperObservationDiagnostic } from './token-grab/ripperPaperObservationDiagnostic';
 import { runFlatJunkReducerReport, renderFlatJunkReducerReport } from './token-grab/ripperFlatJunkReducerReport';
 import { runShadowRejectFilterReport, renderShadowRejectFilterReport } from './token-grab/ripperShadowRejectFilterReport';
@@ -2968,6 +2971,38 @@ async function main(): Promise<void> {
         break;
       }
 
+      case 'token:prime-candidate-report': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderPrimeCandidateReportUsage());
+          break;
+        }
+        const pcrEvents = getArgValue('--events') ?? DEFAULT_BRAIN_RESEARCH_EVENTS_PATH;
+        const pcrMemory = getArgValue('--memory') ?? DEFAULT_BRAIN_POLICY_MEMORY_PATH;
+        const pcrResult = runPrimeCandidateReport({ eventsPath: pcrEvents, memoryPath: pcrMemory });
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(pcrResult, null, 2));
+        } else {
+          console.log(renderPrimeCandidateReport(pcrResult));
+        }
+        break;
+      }
+
+      case 'token:failure-autopsy-report': {
+        if (process.argv.includes('--help') || process.argv.includes('-h')) {
+          console.log(renderFailureAutopsyReportUsage());
+          break;
+        }
+        const farEvents = getArgValue('--events') ?? DEFAULT_BRAIN_RESEARCH_EVENTS_PATH;
+        const farMemory = getArgValue('--memory') ?? DEFAULT_BRAIN_POLICY_MEMORY_PATH;
+        const farResult = runFailureAutopsyReport({ eventsPath: farEvents, memoryPath: farMemory });
+        if (process.argv.includes('--json')) {
+          console.log(JSON.stringify(farResult, null, 2));
+        } else {
+          console.log(renderFailureAutopsyReport(farResult));
+        }
+        break;
+      }
+
       case 'token:brain-refresh': {
         if (process.argv.includes('--help') || process.argv.includes('-h')) {
           console.log(renderBrainRefreshUsage());
@@ -3635,6 +3670,26 @@ async function main(): Promise<void> {
           realVsFakePath:   getArgValue('--real-vs-fake')      ?? 'data/token-grab/ripper/real-vs-fake-autopsy.jsonl',
         });
         console.log(renderRipperAutopilotStatus(rasResult));
+        break;
+      }
+
+      case 'token:ripper-ops-status': {
+        const rosResult = runRipperOpsStatus({
+          cyclesDir:           getArgValue('--cycles-dir')            ?? 'data/token-grab/ripper/cycles',
+          intentsPath:         getArgValue('--intents')               ?? 'data/token-grab/ripper/paper-intents.jsonl',
+          timingReportPath:    getArgValue('--timing-report')         ?? 'data/token-grab/ripper/approved-entry-timing-report.jsonl',
+          exitPolicyPath:      getArgValue('--exit-policy-report')    ?? 'data/token-grab/ripper/paper-exit-policy-report.jsonl',
+          realVsFakePath:      getArgValue('--real-vs-fake')          ?? 'data/token-grab/ripper/real-vs-fake-autopsy.jsonl',
+          liveShadowStatePath: getArgValue('--live-shadow-state')     ?? 'data/token-grab/live-shadow/live-shadow-state.json',
+          researchEventsPath:  getArgValue('--research-events')       ?? 'data/token-grab/live-shadow/research-shadow-events.jsonl',
+          researchStatePath:   getArgValue('--research-state')        ?? 'data/token-grab/live-shadow/research-shadow-state.json',
+          brainMemoryPath:     getArgValue('--brain-memory')          ?? 'data/token-grab/brain/policy-memory.json',
+          learningLockPath:    getArgValue('--learning-lock')         ?? '/tmp/token-grab-learning-cron.lock',
+          liveShadowLockPath:  getArgValue('--live-shadow-lock')      ?? 'data/token-grab/live-shadow/.live-shadow.lock',
+          freshnessMinutes:    getArgValue('--freshness-minutes') != null ? Number(getArgValue('--freshness-minutes')) : undefined,
+        });
+        if (process.argv.includes('--json')) console.log(JSON.stringify(rosResult, null, 2));
+        else console.log(renderRipperOpsStatus(rosResult));
         break;
       }
 
